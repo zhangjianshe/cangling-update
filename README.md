@@ -100,7 +100,13 @@ sudo ./cangling-update update       # 下载并替换文件
 sudo ./cangling-update restart      # 需要时再重启服务
 ```
 
-x86_64 下载 `cangling-update-linux-amd64`，ARM64 下载 `cangling-update-linux-arm64`。需要本机能访问 GitHub，并安装 `curl` 或 `wget`。
+x86_64 下载 `cangling-update-linux-amd64`，ARM64 下载 `cangling-update-linux-arm64`。需要本机能访问 GitHub，并安装 `curl` 或 `wget`。走代理时请带 `http://`：
+
+```bash
+https_proxy=http://10.1.1.2:7890 sudo -E ./cangling-update update
+# 或
+sudo ./cangling-update update --proxy http://10.1.1.2:7890
+```
 
 ## 首次使用
 

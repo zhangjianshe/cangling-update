@@ -20,7 +20,13 @@ struct Asset {
     browser_download_url: String,
 }
 
-pub fn run(check_only: bool, force: bool) -> Result<()> {
+pub fn run(check_only: bool, force: bool, proxy: Option<String>) -> Result<()> {
+    if let Some(p) = proxy {
+        apply_proxy_env(&normalize_proxy(&p));
+    } else if let Some(p) = detect_proxy() {
+        apply_proxy_env(&p);
+    }
+
     let current = env!("CARGO_PKG_VERSION");
     let exe = current_exe()?;
     let dest_dir = exe
@@ -33,6 +39,10 @@ pub fn run(check_only: bool, force: bool) -> Result<()> {
     eprintln!("当前版本  v{current}");
     eprintln!("仓库      https://github.com/{REPO}");
     eprintln!("架构资源  {asset_name}");
+    match detect_proxy() {
+        Some(p) => eprintln!("代理      {p}"),
+        None => eprintln!("代理      未设置（示例：https_proxy=http://10.1.1.2:7890）"),
+    }
 
     probe_github()?;
 
@@ -142,41 +152,101 @@ fn download(url: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+fn detect_proxy() -> Option<String> {
+    for key in [
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(normalize_proxy(v));
+            }
+        }
+    }
+    None
+}
+
+fn normalize_proxy(raw: &str) -> String {
+    let s = raw.trim();
+    if s.contains("://") {
+        s.to_string()
+    } else {
+        format!("http://{s}")
+    }
+}
+
+fn apply_proxy_env(proxy: &str) {
+    // Clash/V2Ray 的 7890 是 HTTP 代理。无 scheme 时 curl 常会连错。
+    std::env::set_var("http_proxy", proxy);
+    std::env::set_var("https_proxy", proxy);
+    std::env::set_var("HTTP_PROXY", proxy);
+    std::env::set_var("HTTPS_PROXY", proxy);
+    std::env::set_var("ALL_PROXY", proxy);
+    std::env::set_var("all_proxy", proxy);
+}
+
+fn apply_curl_proxy(cmd: &mut Command) {
+    if let Some(p) = detect_proxy() {
+        cmd.args(["-x", &p]);
+    }
+}
+
+fn apply_wget_proxy(cmd: &mut Command) {
+    if let Some(p) = detect_proxy() {
+        cmd.args(["-e", "use_proxy=yes"]);
+        cmd.args(["-e", &format!("http_proxy={p}")]);
+        cmd.args(["-e", &format!("https_proxy={p}")]);
+    }
+}
+
+fn connect_timeout() -> &'static str {
+    if detect_proxy().is_some() {
+        "20"
+    } else {
+        "10"
+    }
+}
+
 fn probe_github() -> Result<()> {
     eprintln!("检查      是否能访问 GitHub…");
     if have("curl") {
-        let output = Command::new("curl")
-            .args([
-                "-fsS",
-                "-o",
-                "/dev/null",
-                "--connect-timeout",
-                "8",
-                "--max-time",
-                "20",
-                "-A",
-                USER_AGENT,
-                "https://api.github.com",
-            ])
-            .output()
-            .context("执行 curl")?;
+        let mut cmd = Command::new("curl");
+        cmd.args([
+            "-fsS",
+            "-o",
+            "/dev/null",
+            "--connect-timeout",
+            connect_timeout(),
+            "--max-time",
+            "45",
+            "-A",
+            USER_AGENT,
+        ]);
+        apply_curl_proxy(&mut cmd);
+        cmd.arg("https://api.github.com");
+        let output = cmd.output().context("执行 curl")?;
         if !output.status.success() {
             bail!("{}", github_unreachable(output.status.code(), &output.stderr));
         }
         return Ok(());
     }
     if have("wget") {
-        let output = Command::new("wget")
-            .args([
-                "-q",
-                "--timeout=8",
-                "--tries=1",
-                "-O",
-                "/dev/null",
-                "https://api.github.com",
-            ])
-            .output()
-            .context("执行 wget")?;
+        let mut cmd = Command::new("wget");
+        cmd.args([
+            "-q",
+            &format!("--timeout={}", connect_timeout()),
+            "--tries=1",
+            "-O",
+            "/dev/null",
+        ]);
+        apply_wget_proxy(&mut cmd);
+        cmd.arg("https://api.github.com");
+        let output = cmd.output().context("执行 wget")?;
         if !output.status.success() {
             bail!("{}", github_unreachable(output.status.code(), &output.stderr));
         }
@@ -221,7 +291,7 @@ fn github_unreachable(code: Option<i32>, stderr: &[u8]) -> String {
         _ => "网络不可访问。",
     };
     format!(
-        "无法访问 GitHub（https://github.com/{REPO}）。{extra}\n请检查本机网络、DNS、防火墙或 HTTPS 代理后重试。"
+        "无法访问 GitHub（https://github.com/{REPO}）。{extra}\n请检查本机网络、DNS、防火墙或代理。代理请写成：https_proxy=http://主机:端口"
     )
 }
 
@@ -259,22 +329,22 @@ fn http_get_string(url: &str) -> Result<String> {
 
 fn http_get_file(url: &str, dest: &Path) -> Result<()> {
     if have("curl") {
-        let status = Command::new("curl")
-            .args([
-                "-fL",
-                "--retry",
-                "3",
-                "--connect-timeout",
-                "15",
-                "--progress-bar",
-                "-A",
-                USER_AGENT,
-                "-o",
-            ])
-            .arg(dest)
-            .arg(url)
-            .status()
-            .context("执行 curl")?;
+        let mut cmd = Command::new("curl");
+        cmd.args([
+            "-fL",
+            "--retry",
+            "3",
+            "--connect-timeout",
+            connect_timeout(),
+            "--progress-bar",
+            "-A",
+            USER_AGENT,
+            "-o",
+        ]);
+        cmd.arg(dest);
+        apply_curl_proxy(&mut cmd);
+        cmd.arg(url);
+        let status = cmd.status().context("执行 curl")?;
         if !status.success() {
             let _ = fs::remove_file(dest);
             bail!("{}", github_unreachable(status.code(), b"curl download failed"));
@@ -282,12 +352,12 @@ fn http_get_file(url: &str, dest: &Path) -> Result<()> {
         return Ok(());
     }
     if have("wget") {
-        let status = Command::new("wget")
-            .args(["--show-progress", "-O"])
-            .arg(dest)
-            .arg(url)
-            .status()
-            .context("执行 wget")?;
+        let mut cmd = Command::new("wget");
+        cmd.args(["--show-progress", "-O"]);
+        cmd.arg(dest);
+        apply_wget_proxy(&mut cmd);
+        cmd.arg(url);
+        let status = cmd.status().context("执行 wget")?;
         if !status.success() {
             let _ = fs::remove_file(dest);
             bail!("{}", github_unreachable(status.code(), b"wget download failed"));
@@ -299,23 +369,23 @@ fn http_get_file(url: &str, dest: &Path) -> Result<()> {
 
 fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
     if have("curl") {
-        let output = Command::new("curl")
-            .args([
-                "-fsSL",
-                "--retry",
-                "3",
-                "--connect-timeout",
-                "10",
-                "--max-time",
-                "30",
-                "-A",
-                USER_AGENT,
-                "-H",
-                "Accept: application/vnd.github+json",
-                url,
-            ])
-            .output()
-            .context("执行 curl")?;
+        let mut cmd = Command::new("curl");
+        cmd.args([
+            "-fsSL",
+            "--retry",
+            "3",
+            "--connect-timeout",
+            connect_timeout(),
+            "--max-time",
+            "60",
+            "-A",
+            USER_AGENT,
+            "-H",
+            "Accept: application/vnd.github+json",
+        ]);
+        apply_curl_proxy(&mut cmd);
+        cmd.arg(url);
+        let output = cmd.output().context("执行 curl")?;
         if !output.status.success() {
             bail!(
                 "{}",
@@ -325,10 +395,17 @@ fn http_get_bytes(url: &str) -> Result<Vec<u8>> {
         return Ok(output.stdout);
     }
     if have("wget") {
-        let output = Command::new("wget")
-            .args(["-q", "--timeout=10", "--tries=1", "-O", "-", url])
-            .output()
-            .context("执行 wget")?;
+        let mut cmd = Command::new("wget");
+        cmd.args([
+            "-q",
+            &format!("--timeout={}", connect_timeout()),
+            "--tries=1",
+            "-O",
+            "-",
+        ]);
+        apply_wget_proxy(&mut cmd);
+        cmd.arg(url);
+        let output = cmd.output().context("执行 wget")?;
         if !output.status.success() {
             bail!(
                 "{}",
@@ -360,5 +437,18 @@ mod tests {
         assert!(!is_newer("0.1.0", "0.1.0"));
         assert!(!is_newer("0.1.0", "0.1.1"));
         assert!(is_newer("1.0.0", "0.9.9"));
+    }
+
+    #[test]
+    fn proxy_gets_http_scheme() {
+        assert_eq!(normalize_proxy("10.1.1.2:7890"), "http://10.1.1.2:7890");
+        assert_eq!(
+            normalize_proxy("http://10.1.1.2:7890"),
+            "http://10.1.1.2:7890"
+        );
+        assert_eq!(
+            normalize_proxy("socks5://127.0.0.1:1080"),
+            "socks5://127.0.0.1:1080"
+        );
     }
 }

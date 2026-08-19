@@ -70,6 +70,9 @@ enum Command {
         /// 即使版本相同或更旧也强制下载替换
         #[arg(long)]
         force: bool,
+        /// HTTP/HTTPS/SOCKS 代理，例如 http://10.1.1.2:7890（也可设 https_proxy）
+        #[arg(long, env = "HTTPS_PROXY")]
+        proxy: Option<String>,
     },
 }
 
@@ -101,8 +104,8 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Restart) => {
             return service::restart();
         }
-        Some(Command::Update { check, force }) => {
-            return update::run(check, force);
+        Some(Command::Update { check, force, proxy }) => {
+            return update::run(check, force, proxy);
         }
         None => {}
     }
