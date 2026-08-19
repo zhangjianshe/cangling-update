@@ -200,6 +200,21 @@
       padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
     }
     .card h3 { margin: 0 0 12px; color: var(--muted); font-size: 16px; font-weight: 600; }
+    .tabs {
+      display: flex; flex-wrap: wrap; gap: 0;
+      border-bottom: 1px solid var(--line); margin: 0 0 16px; padding: 0;
+    }
+    .tab {
+      border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+      background: transparent; color: var(--muted);
+      padding: 10px 16px; margin-bottom: -1px; font-weight: 600;
+    }
+    .tab:hover { color: var(--text); background: var(--bg-3); }
+    .tab.active {
+      color: var(--text); border-bottom-color: var(--accent-emphasis);
+    }
+    .tab:focus-visible { outline: 2px solid var(--accent-emphasis); outline-offset: -2px; }
+    .tab-panel[hidden] { display: none !important; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     label { display: block; color: var(--muted); margin: 0 0 6px; }
     input[type=text], input[type=password], textarea {
@@ -508,7 +523,12 @@
     </div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers" };
+    const PROJECT_TABS = [
+      { id: "import", label: "导入数据" },
+      { id: "containers", label: "应用容器" },
+      { id: "versions", label: "版本" },
+    ];
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, confirmClose: null };
     const composePoll = { timer: null, inflight: false };
     const metaPoll = { timer: null, inflight: false };
@@ -1206,8 +1226,10 @@
           <div class="progress" id="op-prog-bar"><span></span></div>
           <div class="progress-sub" id="op-prog-sub"></div>
         </div>
-        <div class="card">
-          <h3>导入镜像 / JAR / 发布新版本</h3>
+        <div class="tabs" role="tablist" aria-label="项目面板">
+          ${PROJECT_TABS.map(t => `<button type="button" class="tab" role="tab" id="tab-${t.id}" data-tab="${t.id}" aria-controls="panel-${t.id}">${t.label}</button>`).join("")}
+        </div>
+        <div class="card tab-panel" id="panel-import" data-panel="import" role="tabpanel" aria-labelledby="tab-import">
           <p class="hint">可上传 <code>docker save</code> 镜像包，或直接上传 <code>.jar</code>（文件名需与 compose 挂载一致，例如 <code>cis-server-1.0.0.jar</code>）。发布前会<b>全量备份</b>目录（含数据库数据），请先停止应用。</p>
           <div class="drop" id="drop">将 .tar.gz / .tgz / .tar / .jar 拖到此处，或点击选择
             <input id="file" type="file" accept=".tar,.tar.gz,.tgz,.jar,application/gzip,application/java-archive" multiple hidden />
@@ -1226,8 +1248,7 @@
             <button class="btn" id="btn-snap" ${state.busy ? "disabled" : ""}>仅备份当前目录</button>
           </div>
         </div>
-        <div class="card">
-          <h3>Compose</h3>
+        <div class="card tab-panel" id="panel-containers" data-panel="containers" role="tabpanel" aria-labelledby="tab-containers">
           <div class="row" style="margin-bottom:12px">
             <button class="btn" id="btn-up" ${state.busy ? "disabled" : ""} title="docker compose up -d --remove-orphans">启动</button>
             <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""} title="docker compose up -d --force-recreate --remove-orphans">重启</button>
@@ -1243,8 +1264,8 @@
             <tbody id="compose-svc-body">${services || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
         </div>
-        <div class="card">
-          <h3>版本${sizeHint ? `<span class="hint" style="margin-left:10px;font-weight:400">${esc(sizeHint)}</span>` : ""}</h3>
+        <div class="card tab-panel" id="panel-versions" data-panel="versions" role="tabpanel" aria-labelledby="tab-versions">
+          ${sizeHint ? `<p class="hint" style="margin-top:0">${esc(sizeHint)}</p>` : ""}
           <table>
             <thead><tr><th>版本</th><th>类型</th><th>备注</th><th>镜像</th><th>当前应用</th><th>备份目录</th><th>时间</th><th></th></tr></thead>
             <tbody>${versions || `<tr><td colspan="8" class="empty">暂无版本</td></tr>`}</tbody>
@@ -1263,6 +1284,11 @@
         if (!state.busy) addFiles(e.dataTransfer.files);
       };
       file.onchange = () => addFiles(file.files);
+      if (state.files.length) addFiles([]);
+      for (const btn of document.querySelectorAll("[data-tab]")) {
+        btn.onclick = () => applyProjectTab(btn.getAttribute("data-tab"));
+      }
+      applyProjectTab();
       $("#btn-update").onclick = () => runUpdate(false);
       $("#btn-snap").onclick = () => runUpdate(true);
       $("#btn-refresh").onclick = () => openProject(p.id);
@@ -1277,6 +1303,24 @@
       bindComposeServiceButtons();
       loadOrphans("orphan-box");
       startComposePoll();
+    }
+
+    function currentProjectTab() {
+      return PROJECT_TABS.some((t) => t.id === state.projectTab) ? state.projectTab : "containers";
+    }
+
+    function applyProjectTab(tab) {
+      if (tab) state.projectTab = tab;
+      const cur = currentProjectTab();
+      for (const btn of document.querySelectorAll("[data-tab]")) {
+        const on = btn.getAttribute("data-tab") === cur;
+        btn.classList.toggle("active", on);
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        btn.tabIndex = on ? 0 : -1;
+      }
+      for (const panel of document.querySelectorAll("[data-panel]")) {
+        panel.hidden = panel.getAttribute("data-panel") !== cur;
+      }
     }
 
     function addFiles(list) {
@@ -1373,6 +1417,7 @@
         });
         flash("ok", `已将 ${data.version.label} 发布为最新版。`);
         state.files = [];
+        state.projectTab = "versions";
         clearBusy();
         await openProject(state.current.id);
         flash("ok", `已将 ${data.version.label} 发布为最新版。`);
@@ -1419,6 +1464,7 @@
           }),
         });
         clearBusy();
+        state.projectTab = "versions";
         await openProject(state.current.id);
         flash("ok", "已恢复 " + data.version.label + "，并标记为当前最新版。");
       } catch (e) {
