@@ -1,0 +1,7 @@
+services:
+  web:
+    image: cangling-test:latest
+    container_name: cangling-test
+    ports:
+      - "8088:80"
+    restart: unless-stopped
