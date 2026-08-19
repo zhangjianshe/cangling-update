@@ -752,7 +752,7 @@
         <div class="card">
           <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="边缘网关" /></div>
           <div class="field"><label>说明</label><textarea id="f-desc" placeholder="选填"></textarea></div>
-          <div class="field"><label>主机目录（绝对路径）</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" /></div>
+          <div class="field"><label>主机目录（绝对路径）</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" autocomplete="off" /></div>
           <div class="hint" id="dir-hint">目录必须已存在于本机，并且包含 Compose 文件。</div>
           <p class="hint">创建时会全量备份该目录（含数据库数据）。正在运行的应用可能锁住文件，导致备份失败或不完整。</p>
           <label class="check"><input type="checkbox" id="f-stop" checked /> 备份前先执行 Compose Down（推荐）。备份结束后会再启动。</label>
@@ -769,22 +769,39 @@
         <div id="orphan-box"></div>`;
       $("#btn-check").onclick = checkDir;
       $("#btn-create").onclick = createProject;
+      $("#f-dir").addEventListener("blur", checkDir);
+      $("#f-dir").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          checkDir();
+        }
+      });
       loadOrphans("orphan-box");
     }
 
     async function checkDir() {
+      const input = $("#f-dir");
+      const hint = $("#dir-hint");
+      if (!input || !hint) return;
+      const directory = input.value.trim();
+      if (!directory) {
+        hint.textContent = "目录必须已存在于本机，并且包含 Compose 文件。";
+        return;
+      }
+      hint.textContent = "正在检查目录…";
       try {
-        const directory = $("#f-dir").value.trim();
         const r = await api("/api/validate-directory", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ directory }),
         });
-        $("#dir-hint").innerHTML = r.ok
+        if ($("#f-dir") && $("#f-dir").value.trim() !== directory) return;
+        hint.innerHTML = r.ok
           ? `已找到 <b>${esc(r.compose_file)}</b> · 镜像：${r.images.length ? r.images.map(esc).join(", ") : "（未声明）"} · JAR：${r.jar_mounts && r.jar_mounts.length ? r.jar_mounts.map(j => esc(j.basename)).join(", ") : "（无）"}`
           : `<span class="bad">${esc(r.warning || "不是 Compose 目录")}</span>`;
       } catch (e) {
-        $("#dir-hint").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        if ($("#f-dir") && $("#f-dir").value.trim() !== directory) return;
+        hint.innerHTML = `<span class="bad">${esc(e.message)}</span>`;
       }
     }
 
