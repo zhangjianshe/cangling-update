@@ -1,6 +1,7 @@
 use crate::auth;
 use crate::backup::{
-    remove_dir_if_exists, restore_directory, snapshot_directory, snapshot_directory_with_progress,
+    remove_dir_if_exists, restore_directory, restore_directory_with_progress, snapshot_directory,
+    snapshot_directory_with_progress,
 };
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
@@ -101,6 +102,20 @@ fn snapshot_blocking(
             jobs.set(&id, "snapshot", &format!("备份 {name}"), done, total);
         }),
         None => snapshot_directory(&src, &dst),
+    }
+}
+
+fn restore_blocking(
+    snapshot: PathBuf,
+    live: PathBuf,
+    jobs: crate::progress::JobHub,
+    job_id: Option<String>,
+) -> anyhow::Result<()> {
+    match job_id {
+        Some(id) => restore_directory_with_progress(&snapshot, &live, |done, total, name| {
+            jobs.set(&id, "restore", &format!("恢复 {name}"), done, total);
+        }),
+        None => restore_directory(&snapshot, &live),
     }
 }
 
@@ -791,11 +806,15 @@ async fn rollback(
 
     let snapshot = PathBuf::from(&target.backup_path);
     let live_restore = live.clone();
-    job_set(&state, body.job_id.as_deref(), "restore", "正在恢复目录…", 0, 0);
-    if let Err(err) = tokio::task::spawn_blocking(move || restore_directory(&snapshot, &live_restore))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-        .and_then(|r| r.map_err(AppError::from))
+    job_set(&state, body.job_id.as_deref(), "restore", "正在解压备份…", 0, 0);
+    let jobs = state.jobs.clone();
+    let job_for_restore = body.job_id.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || {
+        restore_blocking(snapshot, live_restore, jobs, job_for_restore)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))
+    .and_then(|r| r.map_err(AppError::from))
     {
         job_err(&state, body.job_id.as_deref(), &err.to_string());
         return Err(err);
