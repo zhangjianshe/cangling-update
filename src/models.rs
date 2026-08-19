@@ -26,6 +26,15 @@ pub struct Version {
     pub is_current: bool,
     pub created_at: String,
     pub kind: String,
+    /// Live compose directory size (same for every version in a listing).
+    #[serde(default)]
+    pub app_bytes: u64,
+    /// Disk used by this version's backup folder (gitref / tar / images / jars).
+    #[serde(default)]
+    pub backup_bytes: u64,
+    /// Shared project Git repo size (same for every version in a listing).
+    #[serde(default)]
+    pub repo_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

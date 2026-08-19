@@ -723,15 +723,21 @@
             ...(v.images || []).map(i => esc(i.file) + (i.latest_tags && i.latest_tags.length ? " → " + i.latest_tags.map(esc).join(", ") : "")),
             ...(v.jars || []).map(j => esc(j.file) + (j.services && j.services.length ? " → " + j.services.map(esc).join(", ") : " → " + esc(j.dest || "")))
           ].join("<br/>") || "—"}</td>
+          <td>${fmtBytes(v.app_bytes || 0)}</td>
+          <td>${fmtBytes(v.backup_bytes || 0)}</td>
           <td>${esc((v.created_at || "").replace("T", " ").slice(0, 19))}</td>
           <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}" ${state.busy ? "disabled" : ""}>${state.busy === "restore" ? "恢复中…" : "恢复"}</button>`}</td>
         </tr>`).join("");
+      const sizeHint = state.versions.length
+        ? `当前应用 ${fmtBytes(state.versions[0].app_bytes || 0)}` +
+          (state.versions[0].repo_bytes ? ` · 共享 Git 仓库 ${fmtBytes(state.versions[0].repo_bytes)}` : "")
+        : "";
 
       $("#main").innerHTML = `
         <div class="title-row">
           <div>
             <h2>${esc(p.name)} <span class="pill latest">${p.current_version_no ? "v" + p.current_version_no + " 当前" : "无版本"}</span></h2>
-            <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}</div>
+            <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}${sizeHint ? " · " + sizeHint : ""}</div>
           </div>
           <div class="row">
             <button class="btn" id="btn-refresh" ${state.busy ? "disabled" : ""}>刷新</button>
@@ -782,10 +788,10 @@
           <pre class="logs" id="logs" hidden></pre>
         </div>
         <div class="card">
-          <h3>版本</h3>
+          <h3>版本${sizeHint ? `<span class="hint" style="margin-left:10px;font-weight:400">${esc(sizeHint)}</span>` : ""}</h3>
           <table>
-            <thead><tr><th>版本</th><th>类型</th><th>备注</th><th>镜像</th><th>时间</th><th></th></tr></thead>
-            <tbody>${versions || `<tr><td colspan="6" class="empty">暂无版本</td></tr>`}</tbody>
+            <thead><tr><th>版本</th><th>类型</th><th>备注</th><th>镜像</th><th>当前应用</th><th>备份目录</th><th>时间</th><th></th></tr></thead>
+            <tbody>${versions || `<tr><td colspan="8" class="empty">暂无版本</td></tr>`}</tbody>
           </table>
         </div>
         <div id="orphan-box"></div>`;

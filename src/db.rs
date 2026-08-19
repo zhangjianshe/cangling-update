@@ -209,6 +209,9 @@ fn map_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<Version> {
         is_current: is_current != 0,
         kind: row.get(8)?,
         created_at: row.get(9)?,
+        app_bytes: 0,
+        backup_bytes: 0,
+        repo_bytes: 0,
     })
 }
 

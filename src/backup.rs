@@ -874,9 +874,31 @@ pub fn remove_dir_if_exists(path: &Path) -> Result<()> {
 }
 
 pub fn dir_size(path: &Path) -> u64 {
+    dir_size_inner(path, false)
+}
+
+/// Size of a live project tree, skipping the same entries as a backup.
+pub fn project_dir_size(path: &Path) -> u64 {
+    dir_size_inner(path, true)
+}
+
+fn dir_size_inner(path: &Path, skip_noise: bool) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
     WalkDir::new(path)
         .follow_links(false)
         .into_iter()
+        .filter_entry(|e| {
+            if !skip_noise {
+                return true;
+            }
+            match e.path().strip_prefix(path) {
+                Ok(rel) if rel.as_os_str().is_empty() => true,
+                Ok(rel) => !should_skip(rel),
+                Err(_) => true,
+            }
+        })
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
@@ -895,6 +917,23 @@ mod tests {
         assert!(should_skip(Path::new("lost+found")));
         assert!(!should_skip(Path::new("core/postgis/base/20992/498954")));
         assert!(!should_skip(Path::new("jars/cis-server-1.0.0.jar")));
+    }
+
+    #[test]
+    fn project_dir_size_skips_git() {
+        let root = std::env::temp_dir().join(format!(
+            "cangling-size-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git").join("HEAD"), b"0123456789").unwrap();
+        fs::write(root.join("app.jar"), b"hello").unwrap();
+        assert_eq!(project_dir_size(&root), 5);
+        assert!(dir_size(&root) > 5);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

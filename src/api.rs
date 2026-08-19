@@ -1,7 +1,7 @@
 use crate::auth;
 use crate::backup::{
-    dir_size, remove_dir_if_exists, restore_directory, restore_directory_with_progress,
-    snapshot_directory, snapshot_directory_with_progress,
+    dir_size, project_dir_size, remove_dir_if_exists, restore_directory,
+    restore_directory_with_progress, snapshot_directory, snapshot_directory_with_progress,
 };
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
@@ -319,6 +319,9 @@ async fn create_project(
                 is_current: true,
                 kind: "baseline".into(),
                 created_at: now,
+                app_bytes: 0,
+                backup_bytes: 0,
+                repo_bytes: 0,
             };
             if let Err(err) = db::insert_version(&conn, &version) {
                 let _ = db::delete_project(&conn, &id);
@@ -553,11 +556,37 @@ async fn list_versions(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Version>>, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-    if db::get_project(&conn, &id)?.is_none() {
-        return Err(AppError::not_found("项目不存在"));
+    let (project, mut versions) = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        let project = db::get_project(&conn, &id)?
+            .ok_or_else(|| AppError::not_found("项目不存在"))?;
+        let versions = db::list_versions(&conn, &id)?;
+        (project, versions)
+    };
+    let live = PathBuf::from(project.directory);
+    let backups = state.paths.project_backup_root(&id);
+    let version_dirs: Vec<(String, PathBuf)> = versions
+        .iter()
+        .map(|v| (v.id.clone(), state.paths.version_dir(&id, &v.id)))
+        .collect();
+    let sized = tokio::task::spawn_blocking(move || {
+        let app_bytes = project_dir_size(&live);
+        let repo_bytes = dir_size(&backups.join("repo.git"));
+        let backup_bytes: std::collections::HashMap<String, u64> = version_dirs
+            .into_iter()
+            .map(|(vid, path)| (vid, dir_size(&path)))
+            .collect();
+        (app_bytes, repo_bytes, backup_bytes)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?;
+    let (app_bytes, repo_bytes, backup_bytes) = sized;
+    for v in &mut versions {
+        v.app_bytes = app_bytes;
+        v.repo_bytes = repo_bytes;
+        v.backup_bytes = backup_bytes.get(&v.id).copied().unwrap_or(0);
     }
-    Ok(Json(db::list_versions(&conn, &id)?))
+    Ok(Json(versions))
 }
 
 async fn create_update(
@@ -815,6 +844,9 @@ async fn apply_update(
         is_current: true,
         kind: kind.to_string(),
         created_at: now,
+        app_bytes: 0,
+        backup_bytes: 0,
+        repo_bytes: 0,
     };
 
     let db_err = {
@@ -1096,6 +1128,9 @@ async fn rollback(
                 is_current: false,
                 kind: "pre-rollback".into(),
                 created_at: db::now_rfc3339(),
+                app_bytes: 0,
+                backup_bytes: 0,
+                repo_bytes: 0,
             },
         )?;
     }
