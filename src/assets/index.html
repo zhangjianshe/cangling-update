@@ -149,7 +149,7 @@
     .pitem:hover { background: var(--bg-3); }
     .pitem.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
     .pitem .n { font-weight: 600; display: block; }
-    .pitem .d { color: var(--muted); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem .d { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     main { min-width: 0; overflow: auto; padding: 22px 26px 40px; }
     .btn {
       border: 1px solid var(--line); background: var(--bg-3); color: var(--text);
@@ -516,7 +516,7 @@
       for (const p of state.projects) {
         const b = document.createElement("button");
         b.className = "pitem" + (state.current && state.current.id === p.id ? " active" : "");
-        b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="d">${esc(p.directory)}</span>`;
+        b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="d">${esc((p.description || "").trim() || "（无说明）")}</span>`;
         b.onclick = () => { location.hash = "#/p/" + p.id; };
         root.appendChild(b);
       }
@@ -880,8 +880,13 @@
           <td>${esc(s.image)}</td>
           <td>${esc(s.state)}</td>
           <td>${esc(s.status)}</td>
-          <td><button class="btn" data-svc-logs="${esc(s.name)}">日志</button></td>
-          <td><button class="btn" data-term="${esc(s.name)}" ${running ? "" : "disabled"} title="${running ? "进入容器" : "容器未运行"}">终端</button></td>
+          <td>
+            <div class="row">
+              <button class="btn" data-svc-logs="${esc(s.name)}">日志</button>
+              <button class="btn" data-term="${esc(s.name)}" ${running ? "" : "disabled"} title="${running ? "进入容器" : "容器未运行"}">终端</button>
+              <button class="btn" data-svc-restart="${esc(s.name)}">重启</button>
+            </div>
+          </td>
         </tr>`;
       }).join("");
     }
@@ -893,6 +898,9 @@
       for (const b of document.querySelectorAll("[data-term]")) {
         b.onclick = () => openTerm(b.getAttribute("data-term"));
       }
+      for (const b of document.querySelectorAll("[data-svc-restart]")) {
+        b.onclick = () => restartService(b.getAttribute("data-svc-restart"));
+      }
     }
 
     function applyComposeStatus(compose) {
@@ -900,7 +908,7 @@
       const body = $("#compose-svc-body");
       if (!body) return;
       const rows = composeServiceRows(compose.services);
-      body.innerHTML = rows || `<tr><td colspan="6" class="empty">未报告运行中的服务</td></tr>`;
+      body.innerHTML = rows || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`;
       bindComposeServiceButtons();
       const err = $("#compose-err");
       if (err) {
@@ -1017,8 +1025,8 @@
           <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
           <div class="hint" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
           <table>
-            <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>日志</th><th></th></tr></thead>
-            <tbody id="compose-svc-body">${services || `<tr><td colspan="6" class="empty">未报告运行中的服务</td></tr>`}</tbody>
+            <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>操作</th></tr></thead>
+            <tbody id="compose-svc-body">${services || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
           <pre class="logs" id="logs" hidden></pre>
         </div>
@@ -1219,6 +1227,34 @@
         await openProject(state.current.id);
       } catch (e) {
         flash("err", e.message);
+      }
+    }
+
+    async function restartService(name) {
+      if (!state.current || !name) return;
+      if (state.busy) {
+        flash("err", "正在处理中，请稍后再重启该服务");
+        return;
+      }
+      if (!confirm("确定重启服务 " + name + "？其它容器不受影响。")) return;
+      const btn = document.querySelector('[data-svc-restart="' + name + '"]');
+      if (btn) btn.disabled = true;
+      try {
+        const data = await api(
+          "/api/projects/" + state.current.id + "/compose/restart/" + encodeURIComponent(name),
+          { method: "POST" }
+        );
+        const logs = $("#logs");
+        if (logs) {
+          logs.hidden = false;
+          setLogs(logs, data.logs);
+        }
+        flash("ok", "已重启 " + name);
+        await refreshComposeStatus();
+      } catch (e) {
+        flash("err", e.message);
+      } finally {
+        if (btn) btn.disabled = false;
       }
     }
 

@@ -123,6 +123,11 @@ impl Docker {
         self.compose_run(dir, &["restart"]).await
     }
 
+    pub async fn compose_restart_service(&self, dir: &Path, service: &str) -> Result<String> {
+        validate_service_name(service)?;
+        self.compose_run(dir, &["restart", "--", service]).await
+    }
+
     pub async fn compose_ps_raw(&self, dir: &Path) -> Result<String> {
         match self.compose_run(dir, &["ps", "--format", "json"]).await {
             Ok(s) => Ok(s),

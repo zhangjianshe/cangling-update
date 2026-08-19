@@ -51,6 +51,10 @@ pub fn router(state: AppState) -> Router {
             "/api/projects/{id}/compose/restart",
             post(compose_restart),
         )
+        .route(
+            "/api/projects/{id}/compose/restart/{service}",
+            post(compose_restart_service),
+        )
         .route("/api/projects/{id}/compose/logs", get(compose_logs))
         .route(
             "/api/projects/{id}/compose/exec/{service}",
@@ -1323,6 +1327,17 @@ async fn compose_restart(
     Path(id): Path<String>,
 ) -> Result<Json<LogsResult>, AppError> {
     compose_action(state, id, |d, dir| async move { d.compose_restart(&dir).await }).await
+}
+
+async fn compose_restart_service(
+    State(state): State<AppState>,
+    Path((id, service)): Path<(String, String)>,
+) -> Result<Json<LogsResult>, AppError> {
+    crate::term::require_service_name(&service)?;
+    compose_action(state, id, move |d, dir| async move {
+        d.compose_restart_service(&dir, &service).await
+    })
+    .await
 }
 
 async fn compose_action<F, Fut>(
