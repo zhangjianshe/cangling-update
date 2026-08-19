@@ -177,7 +177,11 @@
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
     .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
-    .title-row h2 { margin: 0 0 4px; font-size: 26px; font-weight: 650; }
+    .title-row h2 {
+      margin: 0 0 4px; font-size: 26px; font-weight: 650;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    }
+    .title-row h2 .pill { font-size: 16px; }
     .path { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); }
     .pill {
       display: inline-flex; align-items: center; gap: 6px;
@@ -677,11 +681,10 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div>
-            <h2>${esc(p.name)}</h2>
+            <h2>${esc(p.name)} <span class="pill latest">${p.current_version_no ? "v" + p.current_version_no + " 当前" : "无版本"}</span></h2>
             <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}</div>
           </div>
           <div class="row">
-            <span class="pill latest">${p.current_version_no ? "v" + p.current_version_no + " 当前" : "无版本"}</span>
             <button class="btn" id="btn-refresh" ${state.busy ? "disabled" : ""}>刷新</button>
             <button class="btn danger" id="btn-del" ${state.busy ? "disabled" : ""}>删除项目</button>
           </div>
