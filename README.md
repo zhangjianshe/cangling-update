@@ -217,6 +217,7 @@ docker compose up -d       # http://<主机>:8088 应显示 1.0.0
 cangling-update [选项] [命令]
 
 命令：
+  version              显示当前程序版本
   reset-password       重置登录密码
   install-service      安装 systemd 服务
   uninstall-service    卸载 systemd 服务

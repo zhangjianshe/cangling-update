@@ -58,6 +58,8 @@ enum Command {
     InstallService,
     /// 从 systemd 卸载本服务
     UninstallService,
+    /// 显示当前程序版本
+    Version,
     /// 重启本服务
     Restart,
     /// 检查 GitHub Release 并按当前架构下载新版本（不重启服务）
@@ -91,6 +93,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::UninstallService) => {
             return service::uninstall();
+        }
+        Some(Command::Version) => {
+            println!("v{}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
         }
         Some(Command::Restart) => {
             return service::restart();

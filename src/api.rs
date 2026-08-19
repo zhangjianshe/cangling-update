@@ -120,9 +120,13 @@ fn restore_blocking(
 }
 
 async fn index() -> impl IntoResponse {
+    let html = include_str!("assets/index.html").replace(
+        "__APP_VERSION__",
+        env!("CARGO_PKG_VERSION"),
+    );
     (
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        include_str!("assets/index.html"),
+        html,
     )
 }
 

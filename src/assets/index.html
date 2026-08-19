@@ -113,6 +113,11 @@
     }
     .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; font-weight: 650; }
     .brand small { display: block; color: var(--muted); margin-top: 1px; }
+    .app-ver {
+      display: inline-block; margin-left: 8px; padding: 1px 8px;
+      border: 1px solid var(--line); background: var(--bg-3); color: var(--muted);
+      font-size: 16px; font-weight: 500; vertical-align: middle;
+    }
     .header-right { display: flex; align-items: center; gap: 14px; min-width: 0; }
     .meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
     .meta b { color: var(--text); font-weight: 600; }
@@ -212,7 +217,7 @@
 <body>
   <div class="gate" id="gate">
     <div class="card">
-      <h3 id="gate-title">登录</h3>
+      <h3 id="gate-title">登录 <span class="app-ver">v__APP_VERSION__</span></h3>
       <p class="hint" id="gate-hint">2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。</p>
       <div id="gate-flash" hidden></div>
       <div class="field"><label>用户名</label><input id="gate-user" type="text" autocomplete="username" /></div>
@@ -231,7 +236,7 @@
       <div class="brand">
         <div class="mark"></div>
         <div>
-          <h1>系统更新</h1>
+          <h1>系统更新 <span class="app-ver">v__APP_VERSION__</span></h1>
           <small>主机 Docker Compose 升级台</small>
         </div>
       </div>
@@ -314,7 +319,8 @@
 
     function renderGate() {
       const setup = state.needsSetup;
-      $("#gate-title").textContent = setup ? "初始化管理员" : "登录";
+      $("#gate-title").innerHTML = (setup ? "初始化管理员" : "登录") +
+        ' <span class="app-ver">v__APP_VERSION__</span>';
       $("#gate-hint").innerHTML = setup
         ? "首次使用请设置管理员账号。之后 2 小时无操作将自动退出。"
         : "2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。";
@@ -335,6 +341,7 @@
         const m = state.meta;
         const dockerOk = m.docker.available;
         $("#meta").innerHTML =
+          `<span>程序 <b>v${esc(m.version)}</b></span>` +
           `<span>${esc(m.os)} / <b>${esc(m.arch)}</b></span>` +
           `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerOk ? esc(m.docker.version || "正常") : "未检测到"}</b> · compose ${esc(COMPOSE[m.docker.compose] || m.docker.compose)}</span>` +
           `<span>数据库 <b>${esc(m.db_path)}</b></span>`;
