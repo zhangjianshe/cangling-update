@@ -1,4 +1,5 @@
 mod api;
+mod auth;
 mod backup;
 mod db;
 mod docker;

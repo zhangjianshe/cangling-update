@@ -12,6 +12,8 @@ pub enum AppError {
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
+    Unauthorized(String),
+    #[error("{0}")]
     Internal(String),
 }
 
@@ -22,6 +24,10 @@ impl AppError {
 
     pub fn not_found(msg: impl Into<String>) -> Self {
         Self::NotFound(msg.into())
+    }
+
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::Unauthorized(msg.into())
     }
 
     pub fn internal(msg: impl Into<String>) -> Self {
@@ -60,6 +66,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(ErrorBody {

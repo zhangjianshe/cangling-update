@@ -29,6 +29,21 @@ CREATE TABLE IF NOT EXISTS versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_versions_project ON versions(project_id, version_no);
+
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -192,3 +207,81 @@ fn map_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<Version> {
 pub fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
+
+#[derive(Debug, Clone)]
+pub struct UserRow {
+    pub id: String,
+    pub username: String,
+    pub password_hash: String,
+}
+
+pub fn user_count(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))
+        .map_err(Into::into)
+}
+
+pub fn insert_user(conn: &Connection, id: &str, username: &str, password_hash: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO users (id, username, password_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![id, username, password_hash, now_rfc3339()],
+    )?;
+    Ok(())
+}
+
+pub fn get_user_by_name(conn: &Connection, username: &str) -> Result<Option<UserRow>> {
+    let mut stmt =
+        conn.prepare("SELECT id, username, password_hash FROM users WHERE username = ?1")?;
+    stmt.query_row(params![username], |r| {
+        Ok(UserRow {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            password_hash: r.get(2)?,
+        })
+    })
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn get_user_by_id(conn: &Connection, id: &str) -> Result<Option<UserRow>> {
+    let mut stmt = conn.prepare("SELECT id, username, password_hash FROM users WHERE id = ?1")?;
+    stmt.query_row(params![id], |r| {
+        Ok(UserRow {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            password_hash: r.get(2)?,
+        })
+    })
+    .optional()
+    .map_err(Into::into)
+}
+
+pub fn create_session(conn: &Connection, token: &str, user_id: &str) -> Result<()> {
+    let now = now_rfc3339();
+    conn.execute(
+        "INSERT INTO sessions (token, user_id, last_seen, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![token, user_id, now, now],
+    )?;
+    Ok(())
+}
+
+pub fn session_user_id(conn: &Connection, token: &str) -> Result<Option<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT user_id, last_seen FROM sessions WHERE token = ?1")?;
+    stmt.query_row(params![token], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn touch_session(conn: &Connection, token: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET last_seen = ?1 WHERE token = ?2",
+        params![now_rfc3339(), token],
+    )?;
+    Ok(())
+}
+
+pub fn delete_session(conn: &Connection, token: &str) -> Result<()> {
+    conn.execute("DELETE FROM sessions WHERE token = ?1", params![token])?;
+    Ok(())
+}
+
+

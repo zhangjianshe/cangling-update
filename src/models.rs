@@ -117,3 +117,22 @@ pub struct UpdateResult {
 pub struct LogsResult {
     pub logs: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthUser {
+    pub id: String,
+    pub username: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthStatus {
+    pub needs_setup: bool,
+    pub user: Option<AuthUser>,
+    pub idle_timeout_secs: u64,
+}

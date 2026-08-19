@@ -153,11 +153,11 @@
     .card h3 { margin: 0 0 12px; color: var(--muted); font-size: 16px; font-weight: 600; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     label { display: block; color: var(--muted); margin: 0 0 6px; }
-    input[type=text], textarea {
+    input[type=text], input[type=password], textarea {
       width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
       padding: 9px 11px; outline: none;
     }
-    input[type=text]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
+    input[type=text]:focus, input[type=password]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
     .title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
@@ -191,6 +191,12 @@
       border: 1px solid var(--line);
     }
     .hint { color: var(--muted); line-height: 1.5; }
+    .gate {
+      min-height: 100%; display: grid; place-items: center; padding: 24px;
+    }
+    .gate .card { width: min(420px, 100%); }
+    .gate[hidden], .app[hidden] { display: none !important; }
+    #who { color: var(--text); }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
@@ -198,7 +204,23 @@
   </style>
 </head>
 <body>
-  <div class="app">
+  <div class="gate" id="gate">
+    <div class="card">
+      <h3 id="gate-title">登录</h3>
+      <p class="hint" id="gate-hint">2 小时无操作将自动退出。</p>
+      <div id="gate-flash" hidden></div>
+      <div class="field"><label>用户名</label><input id="gate-user" type="text" autocomplete="username" /></div>
+      <div class="field"><label>密码</label><input id="gate-pass" type="password" autocomplete="current-password" /></div>
+      <div class="field" id="gate-pass2-wrap" hidden>
+        <label>确认密码</label><input id="gate-pass2" type="password" autocomplete="new-password" />
+      </div>
+      <div class="row">
+        <button class="btn primary" id="gate-submit" type="button">登录</button>
+        <button type="button" class="btn" id="gate-theme">浅色</button>
+      </div>
+    </div>
+  </div>
+  <div class="app" id="app" hidden>
     <header>
       <div class="brand">
         <div class="mark"></div>
@@ -209,6 +231,8 @@
       </div>
       <div class="header-right">
         <div class="meta" id="meta">加载中…</div>
+        <span id="who"></span>
+        <button type="button" class="btn" id="btn-logout">退出</button>
         <button type="button" class="btn" id="theme-toggle" aria-label="切换深色或浅色主题">浅色</button>
       </div>
     </header>
@@ -224,20 +248,37 @@
     </div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
+    const IDLE_MS = 2 * 60 * 60 * 1000;
+    let lastActivity = Date.now();
 
     const $ = (sel, el = document) => el.querySelector(sel);
     const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content; };
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+    function touchActivity() { lastActivity = Date.now(); }
+    ["click", "keydown", "mousemove", "scroll"].forEach((ev) => {
+      window.addEventListener(ev, touchActivity, { passive: true });
+    });
+    setInterval(() => {
+      if (state.user && Date.now() - lastActivity >= IDLE_MS) {
+        logout("已超过 2 小时无操作，请重新登录");
+      }
+    }, 15000);
+
     async function api(path, opts = {}) {
-      const res = await fetch(path, opts);
+      const res = await fetch(path, { credentials: "same-origin", ...opts });
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+      if (res.status === 401) {
+        showGate((data && data.error) || "请先登录或登录已过期");
+        throw new Error((data && data.error) || "请先登录或登录已过期");
+      }
       if (!res.ok) throw new Error((data && data.error) || res.statusText);
+      touchActivity();
       return data;
     }
 
@@ -249,7 +290,40 @@
       box.hidden = false;
     }
 
-    async function boot() {
+    function gateFlash(kind, msg) {
+      const box = $("#gate-flash");
+      box.className = "flash " + kind;
+      box.textContent = msg;
+      box.hidden = !msg;
+    }
+
+    function showGate(message) {
+      state.user = null;
+      $("#app").hidden = true;
+      $("#gate").hidden = false;
+      $("#who").textContent = "";
+      renderGate();
+      if (message) gateFlash("err", message);
+    }
+
+    function renderGate() {
+      const setup = state.needsSetup;
+      $("#gate-title").textContent = setup ? "初始化管理员" : "登录";
+      $("#gate-hint").textContent = setup
+        ? "首次使用请设置管理员账号。之后 2 小时无操作将自动退出。"
+        : "2 小时无操作将自动退出。";
+      $("#gate-pass2-wrap").hidden = !setup;
+      $("#gate-submit").textContent = setup ? "创建并进入" : "登录";
+      $("#gate-pass").autocomplete = setup ? "new-password" : "current-password";
+    }
+
+    async function enterApp(user) {
+      state.user = user;
+      state.needsSetup = false;
+      $("#gate").hidden = true;
+      $("#app").hidden = false;
+      $("#who").textContent = user.username;
+      touchActivity();
       try {
         state.meta = await api("/api/meta");
         const m = state.meta;
@@ -263,6 +337,52 @@
       }
       await refreshProjects();
       route();
+    }
+
+    async function submitGate() {
+      const username = $("#gate-user").value.trim();
+      const password = $("#gate-pass").value;
+      try {
+        if (state.needsSetup) {
+          const again = $("#gate-pass2").value;
+          if (password !== again) throw new Error("两次输入的密码不一致");
+          const user = await api("/api/auth/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          await enterApp(user);
+        } else {
+          const user = await api("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          await enterApp(user);
+        }
+      } catch (e) {
+        gateFlash("err", e.message);
+      }
+    }
+
+    async function logout(message) {
+      try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
+      state.user = null;
+      state.projects = [];
+      state.current = null;
+      showGate(message || "已退出");
+    }
+
+    async function boot() {
+      try {
+        const st = await fetch("/api/auth/status", { credentials: "same-origin" }).then((r) => r.json());
+        state.needsSetup = !!st.needs_setup;
+        if (st.user) {
+          await enterApp(st.user);
+          return;
+        }
+      } catch {}
+      showGate();
     }
 
     async function refreshProjects() {
@@ -616,22 +736,33 @@
     }
 
     const THEME_KEY = "cangling-update-theme";
-    const themeBtn = $("#theme-toggle");
     function currentTheme() {
       return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
     }
     function renderTheme() {
-      themeBtn.textContent = currentTheme() === "dark" ? "浅色" : "深色";
+      const label = currentTheme() === "dark" ? "浅色" : "深色";
+      const a = $("#theme-toggle");
+      const b = $("#gate-theme");
+      if (a) a.textContent = label;
+      if (b) b.textContent = label;
     }
-    themeBtn.onclick = () => {
+    function toggleTheme() {
       const next = currentTheme() === "dark" ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", next);
       localStorage.setItem(THEME_KEY, next);
       renderTheme();
-    };
+    }
+    $("#theme-toggle").onclick = toggleTheme;
+    $("#gate-theme").onclick = toggleTheme;
     renderTheme();
 
     $("#btn-new").onclick = () => location.hash = "#/new";
+    $("#btn-logout").onclick = () => logout();
+    $("#gate-submit").onclick = submitGate;
+    ["gate-user", "gate-pass", "gate-pass2"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") submitGate(); });
+    });
     window.addEventListener("hashchange", route);
     boot();
   </script>

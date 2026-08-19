@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::backup::{remove_dir_if_exists, restore_directory, snapshot_directory};
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
@@ -10,6 +11,7 @@ use crate::paths::{
 use crate::state::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::header;
+use axum::middleware;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -20,6 +22,10 @@ use uuid::Uuid;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/api/auth/status", get(auth::status))
+        .route("/api/auth/setup", post(auth::setup))
+        .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/logout", post(auth::logout))
         .route("/api/meta", get(meta))
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -38,6 +44,10 @@ pub fn router(state: AppState) -> Router {
             post(compose_restart),
         )
         .route("/api/projects/{id}/compose/logs", get(compose_logs))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ))
         .with_state(state)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024 * 1024))
 }
