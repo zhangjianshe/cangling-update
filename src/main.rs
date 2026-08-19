@@ -7,6 +7,7 @@ mod error;
 mod models;
 mod paths;
 mod progress;
+mod service;
 mod state;
 
 use anyhow::{bail, Context};
@@ -52,6 +53,12 @@ enum Command {
         #[arg(short, long)]
         password: Option<String>,
     },
+    /// 将当前程序安装为 systemd 服务（工作目录为程序所在目录）
+    InstallService,
+    /// 从 systemd 卸载本服务
+    UninstallService,
+    /// 重启本服务
+    Restart,
 }
 
 #[tokio::main]
@@ -63,11 +70,25 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let paths = AppPaths::resolve(cli.data_dir)?;
 
-    if let Some(Command::ResetPassword { username, password }) = cli.command {
-        return reset_password(&paths, username, password);
+    match cli.command {
+        Some(Command::ResetPassword { username, password }) => {
+            let paths = AppPaths::resolve(cli.data_dir)?;
+            return reset_password(&paths, username, password);
+        }
+        Some(Command::InstallService) => {
+            return service::install(&cli.bind, cli.port, cli.data_dir.as_deref());
+        }
+        Some(Command::UninstallService) => {
+            return service::uninstall();
+        }
+        Some(Command::Restart) => {
+            return service::restart();
+        }
+        None => {}
     }
+
+    let paths = AppPaths::resolve(cli.data_dir)?;
 
     let conn = db::open(&paths.db_path)?;
     let docker = Docker::detect().await;
