@@ -788,9 +788,14 @@
       if (pct) pct.textContent = unknown && !job.done ? "…" : (job.percent || 0) + "%";
       if (fill && !unknown) fill.style.width = (job.percent || 0) + "%";
       if (sub) {
-        sub.textContent = job.total
-          ? fmtBytes(job.current) + " / " + fmtBytes(job.total)
-          : "";
+        const msg = job.message || "";
+        if (/索引|提交 Git/.test(msg)) {
+          sub.textContent = job.total ? (job.current + " / " + job.total + " 个文件") : "";
+        } else {
+          sub.textContent = job.total
+            ? fmtBytes(job.current) + " / " + fmtBytes(job.total)
+            : "";
+        }
       }
     }
 

@@ -199,7 +199,7 @@ fn snapshot_git(
         }
     }
 
-    let mut index_info = String::new();
+    let mut index_lines = Vec::new();
     let mut done = 0u64;
     let mut current_paths = HashSet::new();
     for (rel, abs, len, mode) in &file_entries {
@@ -207,20 +207,35 @@ fn snapshot_git(
         let sha = git_hash_object_file(&repo, abs, rel, done, total, on_progress)
             .with_context(|| format!("读取 {rel} 失败，请先停止应用后再全量备份"))?;
         let git_mode = if mode & 0o111 != 0 { "100755" } else { "100644" };
-        index_info.push_str(&format!("{git_mode} blob {sha}\t{rel}\n"));
+        index_lines.push(format!("{git_mode} blob {sha}\t{rel}"));
         done = done.saturating_add(*len);
         on_progress(done, total, rel);
     }
     for (rel, target) in &symlink_entries {
         current_paths.insert(rel.clone());
         let sha = git_hash_object_bytes(&repo, target.as_bytes())?;
-        index_info.push_str(&format!("120000 blob {sha}\t{rel}\n"));
+        index_lines.push(format!("120000 blob {sha}\t{rel}"));
     }
 
-    on_progress(done, total, "正在更新 Git 索引…");
-    git_update_index(&repo, &index_info)?;
-    prune_index(&repo, &current_paths)?;
+    let n_index = index_lines.len() as u64;
+    if n_index == 0 {
+        on_progress(0, 1, "索引为空，跳过 update-index");
+    } else {
+        const BATCH: usize = 4000;
+        let mut written = 0usize;
+        for chunk in index_lines.chunks(BATCH) {
+            git_update_index(&repo, &(chunk.join("\n") + "\n"))?;
+            written = (written + chunk.len()).min(index_lines.len());
+            on_progress(
+                written as u64,
+                n_index,
+                &format!("正在更新 Git 索引 {written}/{n_index}"),
+            );
+        }
+    }
+    prune_index(&repo, &current_paths, on_progress)?;
 
+    on_progress(0, 0, "正在提交 Git 快照…");
     git_run(
         &repo,
         Some(src),
@@ -325,17 +340,34 @@ fn git_update_index(repo: &Path, info: &str) -> Result<()> {
     Ok(())
 }
 
-fn prune_index(repo: &Path, keep: &HashSet<String>) -> Result<()> {
+fn prune_index(
+    repo: &Path,
+    keep: &HashSet<String>,
+    on_progress: &mut impl FnMut(u64, u64, &str),
+) -> Result<()> {
     let listed = match git_run(repo, None, &["ls-files"]) {
         Ok(s) => s,
         Err(_) => return Ok(()),
     };
-    for line in listed.lines() {
-        let path = line.trim();
-        if path.is_empty() || keep.contains(path) {
-            continue;
-        }
+    let extras: Vec<&str> = listed
+        .lines()
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && !keep.contains(*p))
+        .collect();
+    let n = extras.len() as u64;
+    if n == 0 {
+        return Ok(());
+    }
+    on_progress(0, n, &format!("正在清理过期索引 0/{n}"));
+    for (i, path) in extras.iter().enumerate() {
         let _ = git_run(repo, None, &["rm", "--cached", "-f", "--", path]);
+        if i % 200 == 0 || i + 1 == extras.len() {
+            on_progress(
+                i as u64 + 1,
+                n,
+                &format!("正在清理过期索引 {}/{n}", i + 1),
+            );
+        }
     }
     Ok(())
 }
