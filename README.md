@@ -144,11 +144,14 @@ cis-server:
   command: ["java", "-jar", "/app/app.jar"]
 ```
 
-上传的文件名必须与挂载文件名一致（如 `cis-server-1.0.0.jar`）。系统会覆盖该路径，并对用到这些 JAR 的服务执行：
+上传的文件名必须与挂载文件名一致（如 `cis-server-1.0.0.jar`）。系统会覆盖该路径，然后：
 
 ```bash
-docker compose up -d --force-recreate <服务名>
+docker compose up -d --force-recreate <用到该 JAR 的服务>
+docker compose up -d
 ```
+
+先强制重建 JAR 服务，再把整个 Compose 栈拉起来。备份前若执行了 Compose Down，PostGIS、broker 等其它容器也会一并启动。
 
 镜像包和 JAR 可以同一次上传。对不上挂载名时，文件会落到项目下的 `jars/`（若存在），但不会自动重建服务。
 
@@ -177,7 +180,7 @@ Git 对象在项目级的 `repo.git` 里跨版本去重，体积单独标在标�
 
 项目页的 Compose 服务表里：
 
-- **日志**：打开该服务最近约 500 行日志（`docker compose logs`），可刷新
+- **日志**：打开该服务最近约 500 行日志（`docker compose logs`），可刷新。支持 ANSI 颜色、粗体、斜体、暗色（如 tracing / mqtt 日志）
 - **终端**：仅运行中的服务可点。弹出 xterm.js 窗口，通过 WebSocket 进入容器（默认 `/bin/sh`）。可在里面执行命令；关闭窗口即断开。没有 shell 的镜像会失败。
 
 顶部「日志」按钮仍查看整个 Compose 项目的日志。

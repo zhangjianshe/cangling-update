@@ -139,7 +139,6 @@ impl Docker {
         let tail = tail.to_string();
         let mut args = vec![
             "logs".to_string(),
-            "--no-color".to_string(),
             "--tail".to_string(),
             tail,
         ];

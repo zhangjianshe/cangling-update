@@ -876,7 +876,7 @@ async fn apply_update(
 
     if restart {
         job_set(&state, job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
-        if let Err(err) = restart_after_update(&state, &live, &deployed_jars, !archives.is_empty()).await
+        if let Err(err) = restart_after_update(&state, &live, &deployed_jars).await
         {
             tracing::warn!("compose up after update failed: {err:#}");
             let msg = format!(
@@ -973,7 +973,6 @@ async fn restart_after_update(
     state: &AppState,
     live: &std::path::Path,
     jars: &[DeployedJar],
-    loaded_images: bool,
 ) -> anyhow::Result<String> {
     let mut services: Vec<String> = jars
         .iter()
@@ -981,15 +980,18 @@ async fn restart_after_update(
         .collect();
     services.sort();
     services.dedup();
+    let mut out = String::new();
     if !services.is_empty() {
-        let out = state.docker.compose_up_recreate(live, &services).await?;
-        if loaded_images {
-            let more = state.docker.compose_up(live).await?;
-            return Ok(format!("{out}\n{more}"));
-        }
-        return Ok(out);
+        out = state.docker.compose_up_recreate(live, &services).await?;
     }
-    state.docker.compose_up(live).await
+    // Backup may have run `compose down`. Recreating only JAR services
+    // would leave PostGIS / broker / etc. stopped.
+    let more = state.docker.compose_up(live).await?;
+    if out.is_empty() {
+        Ok(more)
+    } else {
+        Ok(format!("{out}\n{more}"))
+    }
 }
 
 async fn load_and_retag(
@@ -1222,11 +1224,19 @@ async fn rollback(
         let mut services: Vec<String> = mounts.into_iter().map(|m| m.service).collect();
         services.sort();
         services.dedup();
-        let result = if !services.is_empty() {
-            state.docker.compose_up_recreate(&live, &services).await
-        } else {
-            state.docker.compose_up(&live).await
-        };
+        let result: anyhow::Result<String> = async {
+            let mut out = String::new();
+            if !services.is_empty() {
+                out = state.docker.compose_up_recreate(&live, &services).await?;
+            }
+            let more = state.docker.compose_up(&live).await?;
+            if out.is_empty() {
+                Ok(more)
+            } else {
+                Ok(format!("{out}\n{more}"))
+            }
+        }
+        .await;
         if let Err(err) = result {
             job_err(&state, body.job_id.as_deref(), &err.to_string());
             return Err(AppError::internal(err.to_string()));

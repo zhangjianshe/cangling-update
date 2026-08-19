@@ -216,6 +216,30 @@
       padding: 12px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; color: var(--log-text);
       border: 1px solid var(--line);
     }
+    :root[data-theme="dark"] {
+      --ansi-0:#484f58; --ansi-1:#ff7b72; --ansi-2:#3fb950; --ansi-3:#d29922;
+      --ansi-4:#58a6ff; --ansi-5:#bc8cff; --ansi-6:#39c5cf; --ansi-7:#f0f6fc;
+      --ansi-8:#6e7681; --ansi-9:#ffa198; --ansi-10:#56d364; --ansi-11:#e3b341;
+      --ansi-12:#79c0ff; --ansi-13:#d2a8ff; --ansi-14:#56d4dd; --ansi-15:#ffffff;
+    }
+    :root[data-theme="light"] {
+      --ansi-0:#1f2328; --ansi-1:#cf222e; --ansi-2:#1a7f37; --ansi-3:#9a6700;
+      --ansi-4:#0969da; --ansi-5:#8250df; --ansi-6:#1b7c83; --ansi-7:#6e7781;
+      --ansi-8:#656d76; --ansi-9:#a40e26; --ansi-10:#116329; --ansi-11:#7d4e00;
+      --ansi-12:#0550ae; --ansi-13:#6639ba; --ansi-14:#1b7c83; --ansi-15:#1f2328;
+    }
+    .ansi-b { font-weight: 700; }
+    .ansi-d { opacity: 0.62; }
+    .ansi-i { font-style: italic; }
+    .ansi-u { text-decoration: underline; }
+    .ansi-fg-0{color:var(--ansi-0)} .ansi-fg-1{color:var(--ansi-1)} .ansi-fg-2{color:var(--ansi-2)} .ansi-fg-3{color:var(--ansi-3)}
+    .ansi-fg-4{color:var(--ansi-4)} .ansi-fg-5{color:var(--ansi-5)} .ansi-fg-6{color:var(--ansi-6)} .ansi-fg-7{color:var(--ansi-7)}
+    .ansi-fg-8{color:var(--ansi-8)} .ansi-fg-9{color:var(--ansi-9)} .ansi-fg-10{color:var(--ansi-10)} .ansi-fg-11{color:var(--ansi-11)}
+    .ansi-fg-12{color:var(--ansi-12)} .ansi-fg-13{color:var(--ansi-13)} .ansi-fg-14{color:var(--ansi-14)} .ansi-fg-15{color:var(--ansi-15)}
+    .ansi-bg-0{background:var(--ansi-0)} .ansi-bg-1{background:var(--ansi-1)} .ansi-bg-2{background:var(--ansi-2)} .ansi-bg-3{background:var(--ansi-3)}
+    .ansi-bg-4{background:var(--ansi-4)} .ansi-bg-5{background:var(--ansi-5)} .ansi-bg-6{background:var(--ansi-6)} .ansi-bg-7{background:var(--ansi-7)}
+    .ansi-bg-8{background:var(--ansi-8)} .ansi-bg-9{background:var(--ansi-9)} .ansi-bg-10{background:var(--ansi-10)} .ansi-bg-11{background:var(--ansi-11)}
+    .ansi-bg-12{background:var(--ansi-12)} .ansi-bg-13{background:var(--ansi-13)} .ansi-bg-14{background:var(--ansi-14)} .ansi-bg-15{background:var(--ansi-15)}
     .hint { color: var(--muted); line-height: 1.5; }
     label.check {
       display: flex; align-items: flex-start; gap: 8px;
@@ -564,6 +588,134 @@
       return (n / 1073741824).toFixed(2) + " GB";
     }
 
+    function xterm256(n) {
+      n = n & 255;
+      if (n < 16) return n;
+      if (n < 232) {
+        n -= 16;
+        const v = [0, 95, 135, 175, 215, 255];
+        return "rgb(" + v[Math.floor(n / 36)] + "," + v[Math.floor((n % 36) / 6)] + "," + v[n % 6] + ")";
+      }
+      const g = 8 + (n - 232) * 10;
+      return "rgb(" + g + "," + g + "," + g + ")";
+    }
+
+    function applySgr(st, raw) {
+      const parts = raw.length ? raw.split(";") : ["0"];
+      for (let p = 0; p < parts.length; p++) {
+        const n = parseInt(parts[p], 10);
+        const code = isNaN(n) ? 0 : n;
+        if (code === 0) { st.b = st.d = st.i = st.u = st.inv = 0; st.fg = st.bg = null; }
+        else if (code === 1) { st.b = 1; st.d = 0; }
+        else if (code === 2) st.d = 1;
+        else if (code === 3) st.i = 1;
+        else if (code === 4) st.u = 1;
+        else if (code === 7) st.inv = 1;
+        else if (code === 21 || code === 22) { st.b = 0; st.d = 0; }
+        else if (code === 23) st.i = 0;
+        else if (code === 24) st.u = 0;
+        else if (code === 27) st.inv = 0;
+        else if (code === 39) st.fg = null;
+        else if (code === 49) st.bg = null;
+        else if (code >= 30 && code <= 37) st.fg = code - 30;
+        else if (code >= 90 && code <= 97) st.fg = code - 90 + 8;
+        else if (code >= 40 && code <= 47) st.bg = code - 40;
+        else if (code >= 100 && code <= 107) st.bg = code - 100 + 8;
+        else if (code === 38 || code === 48) {
+          const kind = parseInt(parts[++p], 10);
+          let color = null;
+          if (kind === 5) color = xterm256(parseInt(parts[++p], 10) || 0);
+          else if (kind === 2) {
+            const r = parseInt(parts[++p], 10) || 0;
+            const g = parseInt(parts[++p], 10) || 0;
+            const b = parseInt(parts[++p], 10) || 0;
+            color = "rgb(" + r + "," + g + "," + b + ")";
+          }
+          if (code === 38) st.fg = color;
+          else st.bg = color;
+        }
+      }
+    }
+
+    function ansiToHtml(raw) {
+      raw = String(raw ?? "");
+      const st = { b: 0, d: 0, i: 0, u: 0, inv: 0, fg: null, bg: null };
+      let out = "";
+      const paint = (s) => {
+        if (!s) return;
+        const cls = [];
+        if (st.b) cls.push("ansi-b");
+        if (st.d) cls.push("ansi-d");
+        if (st.i) cls.push("ansi-i");
+        if (st.u) cls.push("ansi-u");
+        let fg = st.inv ? (st.bg == null ? "var(--log-bg)" : st.bg) : st.fg;
+        let bg = st.inv ? (st.fg == null ? "var(--log-text)" : st.fg) : st.bg;
+        let style = "";
+        if (typeof fg === "number") cls.push("ansi-fg-" + fg);
+        else if (fg) style += "color:" + fg + ";";
+        if (typeof bg === "number") cls.push("ansi-bg-" + bg);
+        else if (bg) style += "background:" + bg + ";";
+        const body = esc(s);
+        if (!cls.length && !style) { out += body; return; }
+        out += "<span" + (cls.length ? " class=\"" + cls.join(" ") + "\"" : "") +
+          (style ? " style=\"" + style + "\"" : "") + ">" + body + "</span>";
+      };
+      let i = 0, buf = "";
+      const flush = () => { paint(buf); buf = ""; };
+      while (i < raw.length) {
+        const code = raw.charCodeAt(i);
+        if (code === 0x1b && i + 1 < raw.length) {
+          const n = raw[i + 1];
+          if (n === "[") {
+            let j = i + 2;
+            while (j < raw.length) {
+              const cc = raw.charCodeAt(j);
+              j++;
+              if (cc >= 0x40 && cc <= 0x7e) break;
+            }
+            flush();
+            if (raw[j - 1] === "m") applySgr(st, raw.slice(i + 2, j - 1).replace(/^[?-]/, ""));
+            i = j;
+            continue;
+          }
+          if (n === "]") {
+            let j = i + 2;
+            while (j < raw.length) {
+              if (raw.charCodeAt(j) === 0x07) { j++; break; }
+              if (raw.charCodeAt(j) === 0x1b && raw[j + 1] === "\\") { j += 2; break; }
+              j++;
+            }
+            flush();
+            i = j;
+            continue;
+          }
+          flush();
+          i += 2;
+          continue;
+        }
+        if (code === 0x9b) {
+          let j = i + 1;
+          while (j < raw.length) {
+            const cc = raw.charCodeAt(j);
+            j++;
+            if (cc >= 0x40 && cc <= 0x7e) break;
+          }
+          flush();
+          if (raw[j - 1] === "m") applySgr(st, raw.slice(i + 1, j - 1));
+          i = j;
+          continue;
+        }
+        buf += raw[i++];
+      }
+      flush();
+      return out;
+    }
+
+    function setLogs(el, text) {
+      if (!el) return;
+      el.innerHTML = ansiToHtml(text || "（无输出）");
+    }
+
     function showProgress(prefix, on) {
       const wrap = document.getElementById(prefix);
       if (wrap) wrap.hidden = !on;
@@ -759,7 +911,7 @@
           <ul class="filelist" id="filelist"></ul>
           <div class="field" style="margin-top:12px"><label>备注</label><input id="note" type="text" placeholder="本次升级改了什么" /></div>
           <label class="check"><input type="checkbox" id="f-stop" checked /> 备份前先执行 Compose Down（推荐）</label>
-          <label class="check"><input type="checkbox" id="restart" checked /> 完成后启动 Compose（JAR 会强制重建对应服务）</label>
+          <label class="check"><input type="checkbox" id="restart" checked /> 完成后启动整个 Compose（JAR 服务会强制重建，其它容器也会启动）</label>
           <div class="progress-wrap" id="prog" hidden>
             <div class="progress-meta"><span id="prog-msg">准备中</span><span id="prog-pct">0%</span></div>
             <div class="progress" id="prog-bar"><span></span></div>
@@ -984,7 +1136,7 @@
         const data = await api("/api/projects/" + state.current.id + "/compose/" + action, { method: "POST" });
         const logs = $("#logs");
         logs.hidden = false;
-        logs.textContent = data.logs || "（无输出）";
+        setLogs(logs, data.logs);
         await openProject(state.current.id);
       } catch (e) {
         flash("err", e.message);
@@ -1000,7 +1152,7 @@
         const data = await api("/api/projects/" + state.current.id + "/compose/logs?tail=200");
         const logs = $("#logs");
         logs.hidden = false;
-        logs.textContent = data.logs || "（无输出）";
+        setLogs(logs, data.logs);
       } catch (e) {
         flash("err", e.message);
       }
@@ -1080,10 +1232,10 @@
           const data = await api(
             "/api/projects/" + state.current.id + "/compose/logs?tail=500&service=" + encodeURIComponent(name)
           );
-          el.textContent = data.logs || "（无输出）";
+          setLogs(el, data.logs);
           el.scrollTop = el.scrollHeight;
         } catch (e) {
-          el.textContent = e.message;
+          setLogs(el, e.message);
         }
       };
       extra.onclick = load;
