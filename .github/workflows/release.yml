@@ -1,8 +1,6 @@
 name: Build and release
 
 on:
-  # Only tags (from ./release.sh) and manual runs publish binaries.
-  # A release.sh push also updates main; do not build again on that branch push.
   push:
     tags: ["v*"]
   pull_request:
@@ -37,8 +35,10 @@ jobs:
       - name: Install cross linker
         if: matrix.extra_apt != ''
         run: |
+          # 替换为标准主源，解决 azure 镜像源偶尔限速/卡顿的问题
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.extra_apt }}
+          sudo apt-get install -y --no-install-recommends ${{ matrix.extra_apt }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -48,9 +48,6 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          # Share registry + target/ across branches, tags, and version bumps.
-          # Default keys include the branch and Cargo.lock hash, so a
-          # release.sh tag (only the crate version changes) would miss.
           shared-key: linux-${{ matrix.target }}
           cache-on-failure: true
 
@@ -67,7 +64,10 @@ jobs:
           dst="dist/${{ matrix.asset }}"
           cp "$src" "$dst"
           chmod +x "$dst"
+          
+          # 修复 sha256sum 输出格式，使其只包含文件名，避免路径污染
           (cd dist && sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
+          
           file "$dst"
           ls -lh dist
 
@@ -108,5 +108,3 @@ jobs:
             dist/cangling-update-linux-arm64
             dist/cangling-update-linux-arm64.sha256
           fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
