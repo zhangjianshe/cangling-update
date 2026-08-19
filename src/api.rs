@@ -59,6 +59,11 @@ pub fn router(state: AppState) -> Router {
         .route("/vendor/xterm.css", get(vendor_xterm_css))
         .route("/vendor/xterm.js", get(vendor_xterm_js))
         .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
+        .route(
+            "/vendor/iosevka-term-regular.woff2",
+            get(vendor_iosevka_regular),
+        )
+        .route("/vendor/iosevka-term-bold.woff2", get(vendor_iosevka_bold))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -1422,6 +1427,24 @@ async fn vendor_xterm_fit() -> impl IntoResponse {
         ],
         include_str!("assets/vendor/xterm-addon-fit.js"),
     )
+}
+
+fn vendor_font(bytes: &'static [u8]) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "font/woff2"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    )
+}
+
+async fn vendor_iosevka_regular() -> impl IntoResponse {
+    vendor_font(include_bytes!("assets/vendor/iosevka-term-regular.woff2"))
+}
+
+async fn vendor_iosevka_bold() -> impl IntoResponse {
+    vendor_font(include_bytes!("assets/vendor/iosevka-term-bold.woff2"))
 }
 
 #[cfg(test)]

@@ -270,6 +270,23 @@
     }
     .modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
     .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    @font-face {
+      font-family: "Iosevka Term";
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: local("Iosevka Term"), local("Iosevka Term Regular"),
+           local("IosevkaTermNerdFontMono"), local("IosevkaTerm Nerd Font Mono"),
+           url("/vendor/iosevka-term-regular.woff2") format("woff2");
+    }
+    @font-face {
+      font-family: "Iosevka Term";
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+      src: local("Iosevka Term Bold"), local("IosevkaTermNerdFontMono Bold"),
+           url("/vendor/iosevka-term-bold.woff2") format("woff2");
+    }
     .modal-body .term {
       flex: 1; min-height: 0; padding: 8px; background: var(--log-bg);
     }
@@ -1247,6 +1264,10 @@
       closeDialog();
       try {
         await loadXterm();
+        if (document.fonts && document.fonts.load) {
+          await document.fonts.load('15px "Iosevka Term"');
+          await document.fonts.load('bold 15px "Iosevka Term"');
+        }
       } catch (e) {
         flash("err", e.message);
         return;
@@ -1258,7 +1279,7 @@
       const term = new window.Terminal({
         cursorBlink: true,
         fontSize: 15,
-        fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+        fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
         theme: termTheme(),
       });
       const Fit = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
