@@ -95,10 +95,6 @@ if [[ -f Cargo.lock ]]; then
   mv "$tmp" Cargo.lock
 fi
 
-if command -v cargo >/dev/null 2>&1; then
-  cargo metadata --offline --format-version 1 >/dev/null
-fi
-
 git add Cargo.toml
 if [[ -f Cargo.lock ]]; then
   git add Cargo.lock
