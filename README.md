@@ -180,8 +180,10 @@ Git 对象在项目级的 `repo.git` 里跨版本去重，体积单独标在标�
 
 项目页的 Compose 服务表里：
 
-- **日志**：打开该服务最近约 500 行日志（`docker compose logs`），可刷新。支持 ANSI 颜色、粗体、斜体、暗色（如 tracing / mqtt 日志）
+- **日志**：打开该服务最近约 500 行日志（`docker compose logs`），可刷新。支持 ANSI 颜色、粗体、斜体、暗色（如 tracing / mqtt 日志）。日志字体与终端相同，为 **Iosevka Term**。
 - **终端**：仅运行中的服务可点。弹出 xterm.js 窗口，通过 WebSocket 进入容器（默认 `/bin/sh`）。可在里面执行命令；关闭窗口即断开。没有 shell 的镜像会失败。终端字体为 **Iosevka Term**（已内置 Regular/Bold；本机若已安装同名字体则优先用本机的）。
+
+Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打断正在编辑的升级表单或已打开的终端。
 
 顶部「日志」按钮仍查看整个 Compose 项目的日志。
 

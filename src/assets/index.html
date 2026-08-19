@@ -213,7 +213,7 @@
     .flash.ok { background: var(--flash-ok-bg); color: var(--flash-ok-text); border: 1px solid var(--flash-ok-line); }
     pre.logs {
       margin: 0; max-height: 280px; overflow: auto; background: var(--log-bg);
-      padding: 12px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; color: var(--log-text);
+      padding: 12px; font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace; white-space: pre-wrap; color: var(--log-text);
       border: 1px solid var(--line);
     }
     :root[data-theme="dark"] {
@@ -360,6 +360,7 @@
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false };
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null };
+    const composePoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
     const IDLE_MS = 2 * 60 * 60 * 1000;
@@ -479,6 +480,7 @@
     }
 
     async function logout(message) {
+      stopComposePoll();
       closeDialog();
       try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
       state.user = null;
@@ -521,6 +523,7 @@
     }
 
     function route() {
+      stopComposePoll();
       closeDialog();
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
@@ -869,10 +872,8 @@
       }
     }
 
-    function renderProject() {
-      const p = state.current;
-      const c = state.compose || {};
-      const services = (c.services || []).map(s => {
+    function composeServiceRows(services) {
+      return (services || []).map(s => {
         const running = /run/i.test(s.state || "");
         return `<tr>
           <td>${esc(s.name)}</td>
@@ -883,6 +884,71 @@
           <td><button class="btn" data-term="${esc(s.name)}" ${running ? "" : "disabled"} title="${running ? "进入容器" : "容器未运行"}">终端</button></td>
         </tr>`;
       }).join("");
+    }
+
+    function bindComposeServiceButtons() {
+      for (const b of document.querySelectorAll("[data-svc-logs]")) {
+        b.onclick = () => openServiceLogs(b.getAttribute("data-svc-logs"));
+      }
+      for (const b of document.querySelectorAll("[data-term]")) {
+        b.onclick = () => openTerm(b.getAttribute("data-term"));
+      }
+    }
+
+    function applyComposeStatus(compose) {
+      state.compose = compose;
+      const body = $("#compose-svc-body");
+      if (!body) return;
+      const rows = composeServiceRows(compose.services);
+      body.innerHTML = rows || `<tr><td colspan="6" class="empty">未报告运行中的服务</td></tr>`;
+      bindComposeServiceButtons();
+      const err = $("#compose-err");
+      if (err) {
+        if (compose.error) {
+          err.hidden = false;
+          err.textContent = compose.error;
+        } else {
+          err.hidden = true;
+          err.textContent = "";
+        }
+      }
+    }
+
+    function stopComposePoll() {
+      if (composePoll.timer) {
+        clearInterval(composePoll.timer);
+        composePoll.timer = null;
+      }
+    }
+
+    function startComposePoll() {
+      stopComposePoll();
+      if (!state.current) return;
+      composePoll.timer = setInterval(refreshComposeStatus, 2000);
+    }
+
+    async function refreshComposeStatus() {
+      if (!state.current || state.busy || composePoll.inflight) return;
+      composePoll.inflight = true;
+      try {
+        const compose = await api("/api/projects/" + state.current.id + "/compose");
+        const prev = JSON.stringify({
+          services: (state.compose && state.compose.services) || [],
+          error: (state.compose && state.compose.error) || "",
+        });
+        const next = JSON.stringify({
+          services: compose.services || [],
+          error: compose.error || "",
+        });
+        if (prev !== next) applyComposeStatus(compose);
+      } catch {}
+      composePoll.inflight = false;
+    }
+
+    function renderProject() {
+      const p = state.current;
+      const c = state.compose || {};
+      const services = composeServiceRows(c.services);
       const versions = state.versions.map(v => `
         <tr>
           <td><span class="pill ${v.is_current ? "latest" : ""}">${esc(v.label)}${v.is_current ? " 当前" : ""}</span></td>
@@ -947,12 +1013,12 @@
             <button class="btn" id="btn-down" ${state.busy ? "disabled" : ""}>停止</button>
             <button class="btn" id="btn-logs" ${state.busy ? "disabled" : ""}>日志</button>
           </div>
-          ${c.error ? `<div class="flash err">${esc(c.error)}</div>` : ""}
+          <div class="flash err" id="compose-err" ${c.error ? "" : "hidden"}>${esc(c.error || "")}</div>
           <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
           <div class="hint" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
           <table>
             <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>日志</th><th></th></tr></thead>
-            <tbody>${services || `<tr><td colspan="6" class="empty">未报告运行中的服务</td></tr>`}</tbody>
+            <tbody id="compose-svc-body">${services || `<tr><td colspan="6" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
           <pre class="logs" id="logs" hidden></pre>
         </div>
@@ -987,13 +1053,9 @@
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
-      for (const b of document.querySelectorAll("[data-svc-logs]")) {
-        b.onclick = () => openServiceLogs(b.getAttribute("data-svc-logs"));
-      }
-      for (const b of document.querySelectorAll("[data-term]")) {
-        b.onclick = () => openTerm(b.getAttribute("data-term"));
-      }
+      bindComposeServiceButtons();
       loadOrphans("orphan-box");
+      startComposePoll();
     }
 
     function addFiles(list) {
