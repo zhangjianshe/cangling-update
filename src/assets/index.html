@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>系统更新</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23238636'/%3E%3Cpath fill='%23fff' d='M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z'/%3E%3Crect x='8' y='21.4' width='16' height='2.5' rx='1.2' fill='%23fff'/%3E%3Crect x='10.4' y='24.8' width='11.2' height='2.2' rx='1.1' fill='%23fff' opacity='.72'/%3E%3C/svg%3E" />
   <script>
     (function () {
       var key = "cangling-update-theme";
@@ -108,9 +109,13 @@
     }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .mark {
-      width: 28px; height: 28px; flex: 0 0 auto;
-      background: var(--success-emphasis);
+      width: 32px; height: 32px; flex: 0 0 auto;
+      color: var(--success-emphasis);
     }
+    .mark svg { width: 100%; height: 100%; display: block; }
+    .mark-lg { width: 40px; height: 40px; }
+    .gate-brand { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; }
+    .gate-brand h3 { margin: 0; }
     .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; font-weight: 650; }
     .brand small { display: block; color: var(--muted); margin-top: 1px; }
     .app-ver {
@@ -206,7 +211,9 @@
     @keyframes prog-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-weight: 500; }
+    th { color: var(--muted); font-weight: 700; }
+    th:last-child, td:last-child:not(.empty) { text-align: right; }
+    td:last-child .row { justify-content: flex-end; }
     .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
     .flash { margin: 0 0 14px; padding: 10px 12px; }
     .flash.err { background: var(--flash-err-bg); color: var(--flash-err-text); border: 1px solid var(--flash-err-line); }
@@ -305,7 +312,17 @@
 <body>
   <div class="gate" id="gate">
     <div class="card">
-      <h3 id="gate-title">登录 <span class="app-ver">v__APP_VERSION__</span></h3>
+      <div class="gate-brand">
+        <span class="mark mark-lg" aria-hidden="true">
+          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <rect width="32" height="32" rx="6" fill="currentColor"/>
+            <path fill="#fff" d="M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z"/>
+            <rect x="8" y="21.4" width="16" height="2.5" rx="1.2" fill="#fff"/>
+            <rect x="10.4" y="24.8" width="11.2" height="2.2" rx="1.1" fill="#fff" opacity=".72"/>
+          </svg>
+        </span>
+        <h3 id="gate-title">登录 <span class="app-ver">v__APP_VERSION__</span></h3>
+      </div>
       <p class="hint" id="gate-hint">2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。</p>
       <div id="gate-flash" hidden></div>
       <div class="field"><label>用户名</label><input id="gate-user" type="text" autocomplete="username" /></div>
@@ -322,7 +339,14 @@
   <div class="app" id="app" hidden>
     <header>
       <div class="brand">
-        <div class="mark"></div>
+        <span class="mark" title="系统更新" aria-hidden="true">
+          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <rect width="32" height="32" rx="6" fill="currentColor"/>
+            <path fill="#fff" d="M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z"/>
+            <rect x="8" y="21.4" width="16" height="2.5" rx="1.2" fill="#fff"/>
+            <rect x="10.4" y="24.8" width="11.2" height="2.2" rx="1.1" fill="#fff" opacity=".72"/>
+          </svg>
+        </span>
         <div>
           <h1>系统更新 <span class="app-ver">v__APP_VERSION__</span></h1>
           <small>主机 Docker Compose 升级台</small>
@@ -1024,7 +1048,7 @@
           </div>
           <div class="flash err" id="compose-err" ${c.error ? "" : "hidden"}>${esc(c.error || "")}</div>
           <div class="hint hint-soft" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
-          <div class="hint" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
+          <div class="hint hint-soft" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
           <table>
             <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>操作</th></tr></thead>
             <tbody id="compose-svc-body">${services || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`}</tbody>
