@@ -35,8 +35,18 @@ jobs:
       - name: Install cross linker
         if: matrix.extra_apt != ''
         run: |
-          # 替换为标准主源，解决 azure 镜像源偶尔限速/卡顿的问题
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          # 1. 彻底清空并重写 sources.list，使用官方高性能主源
+          sudo tee /etc/apt/sources.list << 'EOF'
+          deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+          EOF
+          
+          # 2. 清理掉 /etc/apt/sources.list.d/ 下可能残留的第三方 azure 源配置文件
+          sudo rm -f /etc/apt/sources.list.d/*azure*.list
+          
+          # 3. 更新并安装
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ${{ matrix.extra_apt }}
 
