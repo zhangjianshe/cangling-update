@@ -3,117 +3,194 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>苍岭更新</title>
+  <title>系统更新</title>
+  <script>
+    (function () {
+      var key = "cangling-update-theme";
+      var saved = localStorage.getItem(key);
+      var theme = saved === "light" || saved === "dark"
+        ? saved
+        : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
   <style>
-    :root {
-      --bg: #111318;
-      --bg-2: #181b22;
-      --bg-3: #1f2430;
-      --line: #2c3240;
-      --text: #ece7dc;
-      --muted: #8d93a5;
-      --amber: #e2a03a;
-      --amber-dim: #8a6118;
-      --green: #5dbe8a;
-      --red: #e06c75;
-      --blue: #7eb6ff;
-      --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
-      --sans: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
-      --mono: "IBM Plex Mono", "ui-monospace", "SFMono-Regular", Menlo, Consolas, monospace;
+    /* Primer / GitHub color system */
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #0d1117;
+      --bg-header: #010409;
+      --bg-2: #161b22;
+      --bg-3: #212830;
+      --bg-input: #0d1117;
+      --bg-drop: #151b23;
+      --bg-drop-over: #388bfd1a;
+      --bg-active: #388bfd1a;
+      --line: #3d444d;
+      --line-muted: #212830;
+      --line-hover: #656c76;
+      --text: #f0f6fc;
+      --muted: #9198a1;
+      --subtle: #656c76;
+      --on-emphasis: #ffffff;
+      --accent: #4493f8;
+      --accent-emphasis: #1f6feb;
+      --success: #3fb950;
+      --success-emphasis: #238636;
+      --success-hover: #2ea043;
+      --danger: #f85149;
+      --danger-emphasis: #da3633;
+      --flash-err-bg: #f851491a;
+      --flash-err-text: #f85149;
+      --flash-err-line: #f8514966;
+      --flash-ok-bg: #2ea04326;
+      --flash-ok-text: #3fb950;
+      --flash-ok-line: #2ea04366;
+      --danger-bg: #f851491a;
+      --danger-text: #f85149;
+      --danger-line: #f8514966;
+      --log-bg: #010409;
+      --log-text: #f0f6fc;
+      --progress-bg: #212830;
+      --shadow: 0 0 0 1px #3d444d;
     }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-header: #f6f8fa;
+      --bg-2: #ffffff;
+      --bg-3: #f6f8fa;
+      --bg-input: #ffffff;
+      --bg-drop: #f6f8fa;
+      --bg-drop-over: #ddf4ff;
+      --bg-active: #ddf4ff;
+      --line: #d1d9e0;
+      --line-muted: #d8dee4;
+      --line-hover: #8c959f;
+      --text: #1f2328;
+      --muted: #59636e;
+      --subtle: #818b98;
+      --on-emphasis: #ffffff;
+      --accent: #0969da;
+      --accent-emphasis: #0969da;
+      --success: #1a7f37;
+      --success-emphasis: #1f883d;
+      --success-hover: #1c8139;
+      --danger: #d1242f;
+      --danger-emphasis: #cf222e;
+      --flash-err-bg: #ffebe9;
+      --flash-err-text: #d1242f;
+      --flash-err-line: #ff818266;
+      --flash-ok-bg: #dafbe1;
+      --flash-ok-text: #1a7f37;
+      --flash-ok-line: #4ac26b66;
+      --danger-bg: #ffebe9;
+      --danger-text: #d1242f;
+      --danger-line: #ff818266;
+      --log-bg: #f6f8fa;
+      --log-text: #1f2328;
+      --progress-bg: #d1d9e0;
+      --shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
+    }
+    * { box-sizing: border-box; border-radius: 0; }
+    html { font-size: 16px; }
+    html, body {
+      margin: 0; height: 100%; background: var(--bg); color: var(--text); font-size: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Noto Sans CJK SC", Helvetica, Arial, sans-serif;
+    }
     button, input, textarea { font: inherit; }
     button { cursor: pointer; }
-    a { color: var(--amber); }
+    a { color: var(--accent); }
     .app { display: grid; grid-template-rows: 64px 1fr; height: 100%; }
     header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 0 22px; border-bottom: 1px solid var(--line); background: #0e1015;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
     }
-    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .mark {
-      width: 28px; height: 28px; border-radius: 7px;
-      background: linear-gradient(145deg, #f0b95a, #b56a12);
-      box-shadow: 0 0 0 1px #0008, inset 0 1px 0 #fff4;
+      width: 28px; height: 28px; flex: 0 0 auto;
+      background: var(--success-emphasis);
     }
-    .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.08em; font-weight: 650; }
-    .brand small { display: block; color: var(--muted); letter-spacing: 0.02em; font-size: 12px; margin-top: 1px; }
-    .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
-    .meta b { color: var(--text); font-weight: 500; }
-    .ok { color: var(--green); }
-    .bad { color: var(--red); }
+    .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; font-weight: 650; }
+    .brand small { display: block; color: var(--muted); margin-top: 1px; }
+    .header-right { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+    .meta b { color: var(--text); font-weight: 600; }
+    .ok { color: var(--success); }
+    .bad { color: var(--danger); }
     .shell { display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
     aside {
       border-right: 1px solid var(--line); background: var(--bg-2);
       display: flex; flex-direction: column; min-height: 0;
     }
     .aside-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 10px; }
-    .aside-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.08em; color: var(--muted); }
+    .aside-head h2 { margin: 0; color: var(--muted); font-size: 16px; font-weight: 600; }
     .plist { overflow: auto; padding: 6px 10px 18px; }
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
-      color: var(--text); border-radius: 10px; padding: 10px 12px; margin-bottom: 6px;
+      color: var(--text); padding: 10px 12px; margin-bottom: 6px;
     }
     .pitem:hover { background: var(--bg-3); }
-    .pitem.active { background: #262113; border-color: var(--amber-dim); }
+    .pitem.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
     .pitem .n { font-weight: 600; display: block; }
-    .pitem .d { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem .d { color: var(--muted); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     main { min-width: 0; overflow: auto; padding: 22px 26px 40px; }
     .btn {
       border: 1px solid var(--line); background: var(--bg-3); color: var(--text);
-      border-radius: 8px; padding: 7px 12px; font-size: 13px;
+      padding: 7px 12px;
     }
-    .btn:hover { border-color: #4a5164; }
-    .btn.primary { background: var(--amber); color: #1a1204; border-color: #c48a22; font-weight: 650; }
-    .btn.primary:hover { filter: brightness(1.05); }
-    .btn.danger { color: #ffd4d7; border-color: #6a3036; background: #3a1d21; }
+    .btn:hover { background: var(--bg-2); border-color: var(--line-hover); }
+    .btn.primary { background: var(--success-emphasis); color: var(--on-emphasis); border-color: var(--success-emphasis); font-weight: 600; }
+    .btn.primary:hover { background: var(--success-hover); border-color: var(--success-hover); }
+    .btn.danger { color: var(--danger-text); border-color: var(--danger-line); background: var(--danger-bg); }
+    .btn.danger:hover { background: var(--danger-emphasis); color: var(--on-emphasis); border-color: var(--danger-emphasis); }
     .btn.ghost { background: transparent; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .card {
-      background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
+      background: var(--bg-2); border: 1px solid var(--line);
       padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
     }
-    .card h3 { margin: 0 0 12px; font-size: 13px; letter-spacing: 0.08em; color: var(--muted); }
+    .card h3 { margin: 0 0 12px; color: var(--muted); font-size: 16px; font-weight: 600; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+    label { display: block; color: var(--muted); margin: 0 0 6px; }
     input[type=text], textarea {
-      width: 100%; background: #12151c; color: var(--text); border: 1px solid var(--line);
-      border-radius: 8px; padding: 9px 11px; outline: none;
+      width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
+      padding: 9px 11px; outline: none;
     }
-    input[type=text]:focus, textarea:focus { border-color: var(--amber-dim); }
+    input[type=text]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
     .title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
     .title-row h2 { margin: 0 0 4px; font-size: 26px; font-weight: 650; }
-    .path { font-family: var(--mono); color: var(--muted); font-size: 13px; }
+    .path { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); }
     .pill {
       display: inline-flex; align-items: center; gap: 6px;
-      border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px;
-      font-size: 12px; color: var(--muted); background: #12151c;
+      border: 1px solid var(--line); padding: 3px 9px;
+      color: var(--muted); background: var(--bg-3);
     }
-    .pill.latest { color: #1a1204; background: var(--amber); border-color: #c48a22; font-weight: 650; }
+    .pill.latest { color: var(--on-emphasis); background: var(--success-emphasis); border-color: var(--success-emphasis); font-weight: 600; }
     .drop {
-      border: 1.5px dashed #3b4254; border-radius: 12px; padding: 28px 16px; text-align: center;
-      color: var(--muted); background: #141821;
+      border: 1px dashed var(--line); padding: 28px 16px; text-align: center;
+      color: var(--muted); background: var(--bg-drop);
     }
-    .drop.over { border-color: var(--amber); color: var(--text); background: #231c10; }
-    .filelist { margin: 12px 0 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 12px; }
+    .drop.over { border-color: var(--accent-emphasis); color: var(--text); background: var(--bg-drop-over); }
+    .filelist { margin: 12px 0 0; padding: 0; list-style: none; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
     .filelist li { padding: 4px 0; color: var(--text); }
-    .progress { height: 6px; background: #0d0f14; border-radius: 99px; overflow: hidden; margin-top: 12px; display: none; }
-    .progress > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #b56a12, var(--amber)); }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .progress { height: 6px; background: var(--progress-bg); overflow: hidden; margin-top: 12px; display: none; }
+    .progress > span { display: block; height: 100%; width: 0; background: var(--success-emphasis); }
+    table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-weight: 500; font-size: 12px; letter-spacing: 0.04em; }
+    th { color: var(--muted); font-weight: 500; }
     .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
-    .flash { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
-    .flash.err { background: #3a1d21; color: #ffd4d7; border: 1px solid #6a3036; }
-    .flash.ok { background: #163024; color: #c8f0da; border: 1px solid #2d6a4a; }
+    .flash { margin: 0 0 14px; padding: 10px 12px; }
+    .flash.err { background: var(--flash-err-bg); color: var(--flash-err-text); border: 1px solid var(--flash-err-line); }
+    .flash.ok { background: var(--flash-ok-bg); color: var(--flash-ok-text); border: 1px solid var(--flash-ok-line); }
     pre.logs {
-      margin: 0; max-height: 280px; overflow: auto; background: #0c0e13; border-radius: 8px;
-      padding: 12px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; color: #d7d3c8;
+      margin: 0; max-height: 280px; overflow: auto; background: var(--log-bg);
+      padding: 12px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; color: var(--log-text);
+      border: 1px solid var(--line);
     }
-    .hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .hint { color: var(--muted); line-height: 1.5; }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
@@ -126,11 +203,14 @@
       <div class="brand">
         <div class="mark"></div>
         <div>
-          <h1>苍岭更新</h1>
+          <h1>系统更新</h1>
           <small>主机 Docker Compose 升级台</small>
         </div>
       </div>
-      <div class="meta" id="meta">加载中…</div>
+      <div class="header-right">
+        <div class="meta" id="meta">加载中…</div>
+        <button type="button" class="btn" id="theme-toggle" aria-label="切换深色或浅色主题">浅色</button>
+      </div>
     </header>
     <div class="shell">
       <aside>
@@ -144,7 +224,7 @@
     </div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [] };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
 
@@ -320,7 +400,7 @@
           <td>${esc(v.note || "—")}</td>
           <td>${(v.images || []).map(i => esc(i.file) + (i.latest_tags && i.latest_tags.length ? " → " + i.latest_tags.map(esc).join(", ") : "")).join("<br/>") || "—"}</td>
           <td>${esc((v.created_at || "").replace("T", " ").slice(0, 19))}</td>
-          <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}">恢复</button>`}</td>
+          <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}" ${state.busy ? "disabled" : ""}>${state.busy === "restore" ? "恢复中…" : "恢复"}</button>`}</td>
         </tr>`).join("");
 
       $("#main").innerHTML = `
@@ -331,8 +411,8 @@
           </div>
           <div class="row">
             <span class="pill">${p.current_version_no ? "v" + p.current_version_no : "无版本"} 当前</span>
-            <button class="btn" id="btn-refresh">刷新</button>
-            <button class="btn danger" id="btn-del">删除项目</button>
+            <button class="btn" id="btn-refresh" ${state.busy ? "disabled" : ""}>刷新</button>
+            <button class="btn danger" id="btn-del" ${state.busy ? "disabled" : ""}>删除项目</button>
           </div>
         </div>
         <div id="flash" hidden></div>
@@ -347,17 +427,17 @@
           <label class="hint"><input type="checkbox" id="restart" checked /> 导入成功后重启 Compose</label>
           <div class="progress" id="prog"><span></span></div>
           <div class="row" style="margin-top:14px">
-            <button class="btn primary" id="btn-update">导入并发布为最新版</button>
-            <button class="btn" id="btn-snap">仅备份当前目录</button>
+            <button class="btn primary" id="btn-update" ${state.busy ? "disabled" : ""}>导入并发布为最新版</button>
+            <button class="btn" id="btn-snap" ${state.busy ? "disabled" : ""}>仅备份当前目录</button>
           </div>
         </div>
         <div class="card">
           <h3>Compose</h3>
           <div class="row" style="margin-bottom:12px">
-            <button class="btn" id="btn-up">启动</button>
-            <button class="btn" id="btn-restart">重启</button>
-            <button class="btn" id="btn-down">停止</button>
-            <button class="btn" id="btn-logs">日志</button>
+            <button class="btn" id="btn-up" ${state.busy ? "disabled" : ""}>启动</button>
+            <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""}>重启</button>
+            <button class="btn" id="btn-down" ${state.busy ? "disabled" : ""}>停止</button>
+            <button class="btn" id="btn-logs" ${state.busy ? "disabled" : ""}>日志</button>
           </div>
           ${c.error ? `<div class="flash err">${esc(c.error)}</div>` : ""}
           <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
@@ -377,13 +457,13 @@
 
       const drop = $("#drop");
       const file = $("#file");
-      drop.onclick = () => file.click();
+      drop.onclick = () => { if (!state.busy) file.click(); };
       drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
       drop.ondragleave = () => drop.classList.remove("over");
       drop.ondrop = (e) => {
         e.preventDefault();
         drop.classList.remove("over");
-        addFiles(e.dataTransfer.files);
+        if (!state.busy) addFiles(e.dataTransfer.files);
       };
       file.onchange = () => addFiles(file.files);
       $("#btn-update").onclick = () => runUpdate(false);
@@ -405,7 +485,28 @@
       ul.innerHTML = state.files.map(f => `<li>${esc(f.name)} · ${(f.size / 1048576).toFixed(1)} MB</li>`).join("");
     }
 
+    function setBusy(kind) {
+      state.busy = kind;
+      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-logs", "btn-del", "btn-refresh"];
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.disabled = true;
+      }
+      for (const el of document.querySelectorAll("[data-restore]")) {
+        el.disabled = true;
+        if (kind === "restore") el.textContent = "恢复中…";
+      }
+    }
+
+    function clearBusy() {
+      state.busy = null;
+    }
+
     function runUpdate(snapshotOnly) {
+      if (state.busy) {
+        flash("err", "正在处理中，请勿重复操作");
+        return;
+      }
       if (!snapshotOnly && !state.files.length) {
         flash("err", "请至少选择一个镜像包，或使用「仅备份当前目录」。");
         return;
@@ -440,21 +541,38 @@
     }
 
     async function restore(versionId) {
+      if (state.busy) {
+        flash("err", "正在恢复中，请勿重复操作");
+        return;
+      }
       if (!confirm("确定恢复此版本？恢复前会先备份当前目录。")) return;
+      if (state.busy) {
+        flash("err", "正在恢复中，请勿重复操作");
+        return;
+      }
+      setBusy("restore");
+      flash("ok", "正在恢复，请稍候…");
       try {
         const data = await api("/api/projects/" + state.current.id + "/rollback", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ version_id: versionId, restart: $("#restart") ? $("#restart").checked : true }),
         });
+        clearBusy();
         await openProject(state.current.id);
         flash("ok", "已恢复 " + data.version.label + "，并标记为当前最新版。");
       } catch (e) {
+        clearBusy();
+        if (state.current) renderProject();
         flash("err", e.message);
       }
     }
 
     async function compose(action) {
+      if (state.busy) {
+        flash("err", "正在恢复中，请勿重复操作");
+        return;
+      }
       try {
         const data = await api("/api/projects/" + state.current.id + "/compose/" + action, { method: "POST" });
         const logs = $("#logs");
@@ -467,6 +585,10 @@
     }
 
     async function loadLogs() {
+      if (state.busy) {
+        flash("err", "正在恢复中，请勿重复操作");
+        return;
+      }
       try {
         const data = await api("/api/projects/" + state.current.id + "/compose/logs?tail=200");
         const logs = $("#logs");
@@ -478,6 +600,10 @@
     }
 
     async function deleteProject() {
+      if (state.busy) {
+        flash("err", "正在恢复中，请勿重复操作");
+        return;
+      }
       if (!confirm("确定删除此项目及其版本备份？主机上的 Compose 目录不会被删除。")) return;
       try {
         await api("/api/projects/" + state.current.id, { method: "DELETE" });
@@ -488,6 +614,22 @@
         flash("err", e.message);
       }
     }
+
+    const THEME_KEY = "cangling-update-theme";
+    const themeBtn = $("#theme-toggle");
+    function currentTheme() {
+      return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+    }
+    function renderTheme() {
+      themeBtn.textContent = currentTheme() === "dark" ? "浅色" : "深色";
+    }
+    themeBtn.onclick = () => {
+      const next = currentTheme() === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      localStorage.setItem(THEME_KEY, next);
+      renderTheme();
+    };
+    renderTheme();
 
     $("#btn-new").onclick = () => location.hash = "#/new";
     window.addEventListener("hashchange", route);

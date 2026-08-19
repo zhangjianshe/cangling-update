@@ -37,32 +37,32 @@
       --btn: #efe8da;
       --btn-text: #1c1a16;
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; border-radius: 0; }
+    html { font-size: 16px; }
     body {
       margin: 0; min-height: 100vh; display: grid; place-items: center;
       font-family: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
-      background: var(--bg); color: var(--text);
+      font-size: 16px; background: var(--bg); color: var(--text);
     }
     main {
       position: relative;
       width: min(560px, calc(100vw - 32px));
-      background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+      background: var(--card); border: 1px solid var(--line);
       padding: 32px 28px; text-align: center;
     }
     .theme-toggle {
       position: absolute; top: 14px; right: 14px;
       border: 1px solid var(--line); background: var(--btn); color: var(--btn-text);
-      border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px;
-      cursor: pointer;
+      padding: 6px 12px; font: inherit; cursor: pointer;
     }
     .theme-toggle:hover { filter: brightness(1.06); }
-    .kicker { letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-size: 12px; }
-    h1 { margin: 10px 0 6px; font-size: 20px; font-weight: 650; }
+    .kicker { letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+    h1 { margin: 10px 0 6px; font-size: 1.25rem; font-weight: 650; }
     .ver {
-      margin: 22px 0 8px; font-size: 64px; line-height: 1; font-weight: 750;
+      margin: 22px 0 8px; font-size: 4rem; line-height: 1; font-weight: 750;
       color: var(--accent); letter-spacing: 0.02em;
     }
-    p { color: var(--muted); font-size: 14px; line-height: 1.55; }
+    p { color: var(--muted); line-height: 1.55; }
     code { color: var(--text); }
   </style>
 </head>

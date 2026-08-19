@@ -485,7 +485,14 @@ async fn rollback(
     };
 
     let gate = state.lock_project(&id);
-    let _guard = gate.lock().await;
+    let _guard = match gate.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return Err(AppError::Conflict(
+                "正在恢复或升级中，请勿重复操作".into(),
+            ));
+        }
+    };
 
     // Snapshot current live tree first so rollback itself can be undone.
     let safety_id = Uuid::new_v4().to_string();
