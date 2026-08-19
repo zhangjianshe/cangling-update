@@ -1,4 +1,4 @@
-# 苍岭更新（cangling-update）
+# 苍灵更新（cangling-update）
 
 单文件主机升级台：在浏览器里管理本机的 Docker Compose 应用，支持导入镜像、替换 JAR、备份与回滚。
 
@@ -157,7 +157,7 @@ docker compose up -d
 
 ## 版本与回滚
 
-苍岭更新的 **v1 / v2 / v3** 是本系统的操作序号，和镜像 tag、JAR 文件名里的版本号没有对应关系。
+苍灵更新的 **v1 / v2 / v3** 是本系统的操作序号，和镜像 tag、JAR 文件名里的版本号没有对应关系。
 
 | 类型 | 含义 |
 |---|---|
@@ -244,7 +244,7 @@ docker compose up -d       # http://<主机>:8088 应显示 1.0.0
 ./bump.sh                  # 1.0.0 -> 1.0.1，生成 dist/cangling-test-1.0.1.tar.gz
 ```
 
-在苍岭更新里把项目目录指到 `test-docker/`，上传新的 tar.gz，刷新 8088 应看到新版本号。
+在苍灵更新里把项目目录指到 `test-docker/`，上传新的 tar.gz，刷新 8088 应看到新版本号。
 
 ## 命令一览
 
