@@ -1,5 +1,6 @@
 use crate::docker::Docker;
 use crate::paths::AppPaths;
+use crate::progress::JobHub;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,6 +12,7 @@ pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub docker: Docker,
     pub locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
+    pub jobs: JobHub,
     pub port: u16,
 }
 
@@ -21,6 +23,7 @@ impl AppState {
             db: Arc::new(Mutex::new(db)),
             docker,
             locks: Arc::new(Mutex::new(HashMap::new())),
+            jobs: JobHub::default(),
             port,
         }
     }

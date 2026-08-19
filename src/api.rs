@@ -1,5 +1,7 @@
 use crate::auth;
-use crate::backup::{remove_dir_if_exists, restore_directory, snapshot_directory};
+use crate::backup::{
+    remove_dir_if_exists, restore_directory, snapshot_directory, snapshot_directory_with_progress,
+};
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
 use crate::error::AppError;
@@ -27,6 +29,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/jobs", post(create_job))
+        .route("/api/jobs/{id}", get(get_job))
         .route("/api/meta", get(meta))
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -51,6 +55,53 @@ pub fn router(state: AppState) -> Router {
         ))
         .with_state(state)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024 * 1024))
+}
+
+async fn create_job(State(state): State<AppState>) -> Json<crate::progress::JobProgress> {
+    Json(state.jobs.create())
+}
+
+async fn get_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::progress::JobProgress>, AppError> {
+    state
+        .jobs
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| AppError::not_found("进度任务不存在"))
+}
+
+fn job_set(state: &AppState, job_id: Option<&str>, phase: &str, message: &str, current: u64, total: u64) {
+    if let Some(id) = job_id {
+        state.jobs.set(id, phase, message, current, total);
+    }
+}
+
+fn job_ok(state: &AppState, job_id: Option<&str>, message: &str) {
+    if let Some(id) = job_id {
+        state.jobs.finish_ok(id, message);
+    }
+}
+
+fn job_err(state: &AppState, job_id: Option<&str>, error: &str) {
+    if let Some(id) = job_id {
+        state.jobs.finish_err(id, error);
+    }
+}
+
+fn snapshot_blocking(
+    src: PathBuf,
+    dst: PathBuf,
+    jobs: crate::progress::JobHub,
+    job_id: Option<String>,
+) -> anyhow::Result<u64> {
+    match job_id {
+        Some(id) => snapshot_directory_with_progress(&src, &dst, |done, total, name| {
+            jobs.set(&id, "snapshot", &format!("备份 {name}"), done, total);
+        }),
+        None => snapshot_directory(&src, &dst),
+    }
 }
 
 async fn index() -> impl IntoResponse {
@@ -159,9 +210,19 @@ async fn create_project(
     let tree = state.paths.version_tree(&id, &version_id);
     let live = PathBuf::from(&inspected.directory);
     let tree_clone = tree.clone();
-    tokio::task::spawn_blocking(move || snapshot_directory(&live, &tree_clone))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))??;
+    let jobs = state.jobs.clone();
+    let job_id = body.job_id.clone();
+    job_set(&state, job_id.as_deref(), "snapshot", "正在建立基线快照…", 0, 0);
+    if let Err(err) = tokio::task::spawn_blocking(move || {
+        snapshot_blocking(live, tree_clone, jobs, job_id)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))
+    .and_then(|r| r.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
 
     {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
@@ -169,8 +230,10 @@ async fn create_project(
             let _ = remove_dir_if_exists(&state.paths.version_dir(&id, &version_id));
             let msg = err.to_string();
             if msg.contains("UNIQUE") {
+                job_err(&state, body.job_id.as_deref(), "已存在同名项目");
                 return Err(AppError::Conflict("已存在同名项目".into()));
             }
+            job_err(&state, body.job_id.as_deref(), &msg);
             return Err(err.into());
         }
         let version = Version {
@@ -188,6 +251,7 @@ async fn create_project(
         };
         db::insert_version(&conn, &version)?;
     }
+    job_ok(&state, body.job_id.as_deref(), "基线快照已建立");
 
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     db::get_project(&conn, &id)?
@@ -280,6 +344,7 @@ struct IncomingUpload {
     restart: bool,
     files: Vec<PathBuf>,
     tmp: PathBuf,
+    job_id: Option<String>,
 }
 
 async fn receive_upload(
@@ -292,6 +357,7 @@ async fn receive_upload(
     let mut note = String::new();
     let mut restart = true;
     let mut files = Vec::new();
+    let mut job_id = None;
 
     let result: Result<(), AppError> = async {
         while let Some(field) = multipart
@@ -307,6 +373,16 @@ async fn receive_upload(
                     .text()
                     .await
                     .map_err(|e| AppError::bad(e.to_string()))?;
+                continue;
+            }
+            if field_name == "job_id" {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::bad(e.to_string()))?;
+                if !v.trim().is_empty() {
+                    job_id = Some(v.trim().to_string());
+                }
                 continue;
             }
             if field_name == "restart" {
@@ -347,11 +423,15 @@ async fn receive_upload(
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Err(err);
     }
+    if let Some(id) = &job_id {
+        state.jobs.set(id, "upload", "上传已接收，准备处理…", 0, 0);
+    }
     Ok(IncomingUpload {
         note,
         restart,
         files,
         tmp,
+        job_id,
     })
 }
 
@@ -366,6 +446,7 @@ async fn apply_update(
         restart,
         files: staged_files,
         tmp,
+        job_id,
     } = upload;
     let version_id = Uuid::new_v4().to_string();
     let version_no = {
@@ -379,11 +460,17 @@ async fn apply_update(
 
     let tree_clone = tree.clone();
     let live_clone = live.clone();
-    if let Err(err) = tokio::task::spawn_blocking(move || snapshot_directory(&live_clone, &tree_clone))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-        .and_then(|r| r.map_err(AppError::from))
+    let jobs = state.jobs.clone();
+    let job_for_snap = job_id.clone();
+    job_set(&state, job_id.as_deref(), "snapshot", "正在备份当前目录…", 0, 0);
+    if let Err(err) = tokio::task::spawn_blocking(move || {
+        snapshot_blocking(live_clone, tree_clone, jobs, job_for_snap)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))
+    .and_then(|r| r.map_err(AppError::from))
     {
+        job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Err(err);
     }
@@ -404,7 +491,18 @@ async fn apply_update(
         });
 
     let mut loaded = Vec::new();
-    if let Err(err) = load_and_retag(&state, &archives, &images_dir, &mut loaded).await {
+    if !archives.is_empty() {
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "load",
+            "正在导入 Docker 镜像…",
+            0,
+            archives.len() as u64,
+        );
+    }
+    if let Err(err) = load_and_retag(&state, &archives, &images_dir, &mut loaded, job_id.as_deref()).await {
+        job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Err(err);
@@ -412,7 +510,18 @@ async fn apply_update(
 
     let mounts = read_jar_mounts(&live);
     let mut deployed_jars = Vec::new();
+    if !jar_files.is_empty() {
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "deploy",
+            "正在写入 JAR…",
+            0,
+            jar_files.len() as u64,
+        );
+    }
     if let Err(err) = deploy_jars(&jar_files, &jars_dir, &live, &mounts, &mut deployed_jars).await {
+        job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Err(err);
@@ -441,15 +550,19 @@ async fn apply_update(
     }
 
     if restart {
+        job_set(&state, job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
         if let Err(err) = restart_after_update(&state, &live, &deployed_jars, !archives.is_empty()).await
         {
             tracing::warn!("compose up after update failed: {err:#}");
-            return Err(AppError::internal(format!(
+            let msg = format!(
                 "文件已保存为版本 {}，但 Compose 启动失败：{err}",
                 version.label
-            )));
+            );
+            job_err(&state, job_id.as_deref(), &msg);
+            return Err(AppError::internal(msg));
         }
     }
+    job_ok(&state, job_id.as_deref(), "发布完成");
 
     let version = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
@@ -559,8 +672,10 @@ async fn load_and_retag(
     staged_files: &[PathBuf],
     images_dir: &std::path::Path,
     loaded: &mut Vec<LoadedImage>,
+    job_id: Option<&str>,
 ) -> Result<(), AppError> {
-    for src in staged_files {
+    let total = staged_files.len() as u64;
+    for (idx, src) in staged_files.iter().enumerate() {
         let name = src
             .file_name()
             .and_then(|s| s.to_str())
@@ -568,6 +683,14 @@ async fn load_and_retag(
             .to_string();
         let dest = images_dir.join(&name);
         tokio::fs::copy(src, &dest).await?;
+        job_set(
+            state,
+            job_id,
+            "load",
+            &format!("正在 docker load {name}"),
+            idx as u64,
+            total,
+        );
 
         let images = state
             .docker
@@ -632,9 +755,19 @@ async fn rollback(
     let live = PathBuf::from(&project.directory);
     let safety_tree_clone = safety_tree.clone();
     let live_clone = live.clone();
-    tokio::task::spawn_blocking(move || snapshot_directory(&live_clone, &safety_tree_clone))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))??;
+    let jobs = state.jobs.clone();
+    let job_id = body.job_id.clone();
+    job_set(&state, job_id.as_deref(), "snapshot", "正在备份当前目录…", 0, 0);
+    if let Err(err) = tokio::task::spawn_blocking(move || {
+        snapshot_blocking(live_clone, safety_tree_clone, jobs, job_id)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))
+    .and_then(|r| r.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
 
     {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
@@ -658,9 +791,15 @@ async fn rollback(
 
     let snapshot = PathBuf::from(&target.backup_path);
     let live_restore = live.clone();
-    tokio::task::spawn_blocking(move || restore_directory(&snapshot, &live_restore))
+    job_set(&state, body.job_id.as_deref(), "restore", "正在恢复目录…", 0, 0);
+    if let Err(err) = tokio::task::spawn_blocking(move || restore_directory(&snapshot, &live_restore))
         .await
-        .map_err(|e| AppError::internal(e.to_string()))??;
+        .map_err(|e| AppError::internal(e.to_string()))
+        .and_then(|r| r.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
 
     let images_dir = state.paths.version_images(&id, &target.id);
     let mut loaded = target.images.clone();
@@ -719,6 +858,7 @@ async fn rollback(
     }
 
     if body.restart {
+        job_set(&state, body.job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
         let mounts = read_jar_mounts(&live);
         let mut services: Vec<String> = mounts.into_iter().map(|m| m.service).collect();
         services.sort();
@@ -728,8 +868,12 @@ async fn rollback(
         } else {
             state.docker.compose_up(&live).await
         };
-        result.map_err(|e| AppError::internal(e.to_string()))?;
+        if let Err(err) = result {
+            job_err(&state, body.job_id.as_deref(), &err.to_string());
+            return Err(AppError::internal(err.to_string()));
+        }
     }
+    job_ok(&state, body.job_id.as_deref(), "恢复完成");
 
     let version = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;

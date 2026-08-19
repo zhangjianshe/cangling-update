@@ -4,13 +4,39 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub fn snapshot_directory(src: &Path, dst: &Path) -> Result<u64> {
+    snapshot_directory_with_progress(src, dst, |_, _, _| {})
+}
+
+pub fn snapshot_directory_with_progress(
+    src: &Path,
+    dst: &Path,
+    mut on_progress: impl FnMut(u64, u64, &str),
+) -> Result<u64> {
     if !src.is_dir() {
         bail!("source is not a directory: {}", src.display());
     }
     std::fs::create_dir_all(dst)
         .with_context(|| format!("create snapshot {}", dst.display()))?;
 
+    let mut total = 0u64;
+    for entry in WalkDir::new(src).follow_links(false) {
+        let entry = entry.with_context(|| format!("walk {}", src.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = match entry.path().strip_prefix(src) {
+            Ok(r) if !r.as_os_str().is_empty() => r,
+            _ => continue,
+        };
+        if should_skip(rel) {
+            continue;
+        }
+        total = total.saturating_add(entry.metadata().map(|m| m.len()).unwrap_or(0));
+    }
+    on_progress(0, total, "开始备份");
+
     let mut files = 0u64;
+    let mut done = 0u64;
     for entry in WalkDir::new(src).follow_links(false) {
         let entry = entry.with_context(|| format!("walk {}", src.display()))?;
         let rel = match entry.path().strip_prefix(src) {
@@ -30,9 +56,14 @@ pub fn snapshot_directory(src: &Path, dst: &Path) -> Result<u64> {
             }
             std::fs::copy(entry.path(), &target)
                 .with_context(|| format!("copy {} -> {}", entry.path().display(), target.display()))?;
+            let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            done = done.saturating_add(len);
             files += 1;
+            let name = rel.to_string_lossy();
+            on_progress(done, total, name.as_ref());
         }
     }
+    on_progress(total, total, "备份完成");
     Ok(files)
 }
 

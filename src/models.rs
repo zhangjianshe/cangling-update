@@ -47,6 +47,7 @@ pub struct CreateProject {
     pub name: String,
     pub description: Option<String>,
     pub directory: String,
+    pub job_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,6 +62,7 @@ pub struct RollbackBody {
     pub version_id: String,
     #[serde(default)]
     pub restart: bool,
+    pub job_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

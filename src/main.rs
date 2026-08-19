@@ -6,6 +6,7 @@ mod docker;
 mod error;
 mod models;
 mod paths;
+mod progress;
 mod state;
 
 use anyhow::{bail, Context};

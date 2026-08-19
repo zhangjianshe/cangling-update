@@ -176,8 +176,14 @@
     .drop.over { border-color: var(--accent-emphasis); color: var(--text); background: var(--bg-drop-over); }
     .filelist { margin: 12px 0 0; padding: 0; list-style: none; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
     .filelist li { padding: 4px 0; color: var(--text); }
-    .progress { height: 6px; background: var(--progress-bg); overflow: hidden; margin-top: 12px; display: none; }
-    .progress > span { display: block; height: 100%; width: 0; background: var(--success-emphasis); }
+    .progress-wrap { margin-top: 14px; }
+    .progress-wrap[hidden] { display: none !important; }
+    .progress-meta { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+    .progress-sub { color: var(--muted); margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; }
+    .progress { height: 10px; background: var(--progress-bg); overflow: hidden; }
+    .progress > span { display: block; height: 100%; width: 0; background: var(--success-emphasis); transition: width 0.15s linear; }
+    .progress.unknown > span { width: 32%; animation: prog-slide 1.1s ease-in-out infinite; }
+    @keyframes prog-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
     th { color: var(--muted); font-weight: 500; }
@@ -446,6 +452,11 @@
           <div class="field"><label>说明</label><textarea id="f-desc" placeholder="选填"></textarea></div>
           <div class="field"><label>主机目录（绝对路径）</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" /></div>
           <div class="hint" id="dir-hint">目录必须已存在于本机，并且包含 Compose 文件。</div>
+          <div class="progress-wrap" id="create-prog" hidden>
+            <div class="progress-meta"><span id="create-prog-msg">准备中</span><span id="create-prog-pct">0%</span></div>
+            <div class="progress" id="create-prog-bar"><span></span></div>
+            <div class="progress-sub" id="create-prog-sub"></div>
+          </div>
           <div class="row" style="margin-top:14px">
             <button class="btn" id="btn-check">检查目录</button>
             <button class="btn primary" id="btn-create">创建</button>
@@ -471,12 +482,68 @@
       }
     }
 
+    function fmtBytes(n) {
+      n = Number(n) || 0;
+      if (n < 1024) return n + " B";
+      if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
+      if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB";
+      return (n / 1073741824).toFixed(2) + " GB";
+    }
+
+    function showProgress(prefix, on) {
+      const wrap = document.getElementById(prefix);
+      if (wrap) wrap.hidden = !on;
+    }
+
+    function renderProgress(prefix, job) {
+      const wrap = document.getElementById(prefix);
+      if (!wrap) return;
+      wrap.hidden = false;
+      const msg = document.getElementById(prefix + "-msg");
+      const pct = document.getElementById(prefix + "-pct");
+      const bar = document.querySelector("#" + prefix + "-bar");
+      const fill = bar ? bar.querySelector("span") : null;
+      const sub = document.getElementById(prefix + "-sub");
+      const unknown = !job.total;
+      if (bar) bar.classList.toggle("unknown", unknown && !job.done);
+      if (msg) msg.textContent = job.message || job.phase || "处理中";
+      if (pct) pct.textContent = unknown && !job.done ? "…" : (job.percent || 0) + "%";
+      if (fill && !unknown) fill.style.width = (job.percent || 0) + "%";
+      if (sub) {
+        sub.textContent = job.total
+          ? fmtBytes(job.current) + " / " + fmtBytes(job.total)
+          : "";
+      }
+    }
+
+    function watchJob(id, prefix) {
+      let timer = setInterval(async () => {
+        try {
+          const job = await api("/api/jobs/" + id);
+          renderProgress(prefix, job);
+          if (job.done) {
+            clearInterval(timer);
+            timer = null;
+          }
+        } catch {}
+      }, 400);
+      return () => { if (timer) clearInterval(timer); };
+    }
+
     async function createProject() {
+      const btn = $("#btn-create");
+      let stop = () => {};
       try {
+        btn.disabled = true;
+        const job = await api("/api/jobs", { method: "POST" });
+        showProgress("create-prog", true);
+        renderProgress("create-prog", { message: "正在建立基线快照…", percent: 0, current: 0, total: 0 });
+        stop = watchJob(job.id, "create-prog");
         const body = {
           name: $("#f-name").value,
           description: $("#f-desc").value,
           directory: $("#f-dir").value,
+          job_id: job.id,
         };
         const p = await api("/api/projects", {
           method: "POST",
@@ -487,6 +554,9 @@
         location.hash = "#/p/" + p.id;
       } catch (e) {
         flash("err", e.message);
+      } finally {
+        stop();
+        btn.disabled = false;
       }
     }
 
@@ -539,6 +609,11 @@
           </div>
         </div>
         <div id="flash" hidden></div>
+        <div class="progress-wrap" id="op-prog" hidden>
+          <div class="progress-meta"><span id="op-prog-msg">准备中</span><span id="op-prog-pct">0%</span></div>
+          <div class="progress" id="op-prog-bar"><span></span></div>
+          <div class="progress-sub" id="op-prog-sub"></div>
+        </div>
         <div class="card">
           <h3>导入镜像 / JAR / 发布新版本</h3>
           <p class="hint">可上传 <code>docker save</code> 镜像包，或直接上传 <code>.jar</code>（文件名需与 compose 挂载一致，例如 <code>cis-server-1.0.0.jar</code>）。系统先备份目录；JAR 会覆盖挂载路径并强制重建对应服务。</p>
@@ -548,7 +623,11 @@
           <ul class="filelist" id="filelist"></ul>
           <div class="field" style="margin-top:12px"><label>备注</label><input id="note" type="text" placeholder="本次升级改了什么" /></div>
           <label class="hint"><input type="checkbox" id="restart" checked /> 导入成功后重启 Compose（JAR 会强制重建对应服务）</label>
-          <div class="progress" id="prog"><span></span></div>
+          <div class="progress-wrap" id="prog" hidden>
+            <div class="progress-meta"><span id="prog-msg">准备中</span><span id="prog-pct">0%</span></div>
+            <div class="progress" id="prog-bar"><span></span></div>
+            <div class="progress-sub" id="prog-sub"></div>
+          </div>
           <div class="row" style="margin-top:14px">
             <button class="btn primary" id="btn-update" ${state.busy ? "disabled" : ""}>导入并发布为最新版</button>
             <button class="btn" id="btn-snap" ${state.busy ? "disabled" : ""}>仅备份当前目录</button>
@@ -626,7 +705,7 @@
       state.busy = null;
     }
 
-    function runUpdate(snapshotOnly) {
+    async function runUpdate(snapshotOnly) {
       if (state.busy) {
         flash("err", "正在处理中，请勿重复操作");
         return;
@@ -635,33 +714,64 @@
         flash("err", "请至少选择一个镜像包或 JAR，或使用「仅备份当前目录」。");
         return;
       }
-      const fd = new FormData();
-      fd.append("note", $("#note").value || (snapshotOnly ? "目录快照" : ""));
-      fd.append("restart", snapshotOnly ? "false" : ($("#restart").checked ? "true" : "false"));
-      if (!snapshotOnly) for (const f of state.files) fd.append("files", f, f.name);
+      let stop = () => {};
+      setBusy("update");
+      try {
+        const job = await api("/api/jobs", { method: "POST" });
+        const fd = new FormData();
+        fd.append("note", $("#note").value || (snapshotOnly ? "目录快照" : ""));
+        fd.append("restart", snapshotOnly ? "false" : ($("#restart").checked ? "true" : "false"));
+        fd.append("job_id", job.id);
+        if (!snapshotOnly) for (const f of state.files) fd.append("files", f, f.name);
 
-      const xhr = new XMLHttpRequest();
-      const prog = $("#prog");
-      const bar = $("#prog > span");
-      prog.style.display = "block";
-      xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) bar.style.width = Math.round(e.loaded / e.total * 100) + "%";
-      };
-      xhr.onload = async () => {
-        try {
-          const data = JSON.parse(xhr.responseText || "{}");
-          if (xhr.status >= 400) throw new Error(data.error || xhr.statusText);
-          flash("ok", `已将 ${data.version.label} 发布为最新版。`);
-          state.files = [];
-          await openProject(state.current.id);
-          flash("ok", `已将 ${data.version.label} 发布为最新版。`);
-        } catch (e) {
-          flash("err", e.message);
-        }
-      };
-      xhr.onerror = () => flash("err", "上传失败");
-      xhr.open("POST", "/api/projects/" + state.current.id + "/updates");
-      xhr.send(fd);
+        const totalBytes = snapshotOnly ? 0 : state.files.reduce((s, f) => s + (f.size || 0), 0);
+        showProgress("prog", true);
+        renderProgress("prog", {
+          message: snapshotOnly ? "正在备份当前目录…" : "正在上传文件…",
+          percent: 0,
+          current: 0,
+          total: totalBytes,
+        });
+        stop = watchJob(job.id, "prog");
+
+        const data = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.upload.onprogress = (e) => {
+            if (!e.lengthComputable || snapshotOnly) return;
+            renderProgress("prog", {
+              message: "正在上传文件…",
+              percent: Math.round(e.loaded / e.total * 100),
+              current: e.loaded,
+              total: e.total,
+            });
+          };
+          xhr.onload = () => {
+            let payload = {};
+            try { payload = JSON.parse(xhr.responseText || "{}"); } catch { payload = { error: xhr.responseText }; }
+            if (xhr.status === 401) {
+              showGate((payload && payload.error) || "请先登录或登录已过期");
+              reject(new Error((payload && payload.error) || "请先登录"));
+              return;
+            }
+            if (xhr.status >= 400) reject(new Error(payload.error || xhr.statusText));
+            else resolve(payload);
+          };
+          xhr.onerror = () => reject(new Error("上传失败"));
+          xhr.open("POST", "/api/projects/" + state.current.id + "/updates");
+          xhr.send(fd);
+        });
+        flash("ok", `已将 ${data.version.label} 发布为最新版。`);
+        state.files = [];
+        clearBusy();
+        await openProject(state.current.id);
+        flash("ok", `已将 ${data.version.label} 发布为最新版。`);
+      } catch (e) {
+        clearBusy();
+        if (state.current) renderProject();
+        flash("err", e.message);
+      } finally {
+        stop();
+      }
     }
 
     async function restore(versionId) {
@@ -676,11 +786,20 @@
       }
       setBusy("restore");
       flash("ok", "正在恢复，请稍候…");
+      let stop = () => {};
       try {
+        const job = await api("/api/jobs", { method: "POST" });
+        showProgress("op-prog", true);
+        renderProgress("op-prog", { message: "正在备份当前目录…", percent: 0, current: 0, total: 0 });
+        stop = watchJob(job.id, "op-prog");
         const data = await api("/api/projects/" + state.current.id + "/rollback", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ version_id: versionId, restart: $("#restart") ? $("#restart").checked : true }),
+          body: JSON.stringify({
+            version_id: versionId,
+            restart: $("#restart") ? $("#restart").checked : true,
+            job_id: job.id,
+          }),
         });
         clearBusy();
         await openProject(state.current.id);
@@ -689,6 +808,8 @@
         clearBusy();
         if (state.current) renderProject();
         flash("err", e.message);
+      } finally {
+        stop();
       }
     }
 
