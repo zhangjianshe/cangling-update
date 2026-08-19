@@ -35,7 +35,11 @@ jobs:
       - name: Install cross linker
         if: matrix.extra_apt != ''
         run: |
-          # 1. 彻底清空并重写 sources.list，使用官方高性能主源
+          # 1. 彻底删除系统默认的所有 apt 源配置文件（包括 ubuntu.sources 等）
+          sudo rm -f /etc/apt/sources.list.d/*.sources
+          sudo rm -f /etc/apt/sources.list.d/*.list
+          
+          # 2. 重新写入干净的主源
           sudo tee /etc/apt/sources.list << 'EOF'
           deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
           deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
@@ -43,13 +47,9 @@ jobs:
           deb http://archive.ubuntu.com/ubuntu noble-security main restricted universe multiverse
           EOF
           
-          # 2. 清理掉 /etc/apt/sources.list.d/ 下可能残留的第三方 azure 源配置文件
-          sudo rm -f /etc/apt/sources.list.d/*azure*.list
-          
           # 3. 更新并安装
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ${{ matrix.extra_apt }}
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
