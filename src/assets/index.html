@@ -188,6 +188,13 @@
     .btn.danger:hover { background: var(--danger-emphasis); color: var(--on-emphasis); border-color: var(--danger-emphasis); }
     .btn.ghost { background: transparent; }
     .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.working:disabled {
+      opacity: 1;
+      animation: btn-working 0.9s ease-in-out infinite;
+    }
+    @keyframes btn-working { 50% { opacity: 0.55; } }
+    .compose-op { color: var(--accent); font-weight: 600; }
+    .compose-op[hidden] { display: none !important; }
     .card {
       background: var(--bg-2); border: 1px solid var(--line);
       padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
@@ -1169,8 +1176,8 @@
             <button class="btn" id="btn-up" ${state.busy ? "disabled" : ""} title="docker compose up -d --remove-orphans">启动</button>
             <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""} title="docker compose up -d --force-recreate --remove-orphans">重启</button>
             <button class="btn" id="btn-down" ${state.busy ? "disabled" : ""}>停止</button>
-            <button class="btn" id="btn-logs" ${state.busy ? "disabled" : ""}>日志</button>
             <button class="btn" id="btn-edit-compose" ${state.busy ? "disabled" : ""}>编辑</button>
+            <span id="compose-op" class="compose-op" hidden></span>
           </div>
           <div class="flash err" id="compose-err" ${c.error ? "" : "hidden"}>${esc(c.error || "")}</div>
           <div class="hint hint-soft" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
@@ -1179,7 +1186,6 @@
             <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>操作</th></tr></thead>
             <tbody id="compose-svc-body">${services || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
-          <pre class="logs" id="logs" hidden></pre>
         </div>
         <div class="card">
           <h3>版本${sizeHint ? `<span class="hint" style="margin-left:10px;font-weight:400">${esc(sizeHint)}</span>` : ""}</h3>
@@ -1208,7 +1214,6 @@
       $("#btn-up").onclick = () => compose("up");
       $("#btn-down").onclick = () => compose("down");
       $("#btn-restart").onclick = () => compose("restart");
-      $("#btn-logs").onclick = loadLogs;
       $("#btn-edit-compose").onclick = openComposeEditor;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
@@ -1226,7 +1231,7 @@
 
     function setBusy(kind) {
       state.busy = kind;
-      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-logs", "btn-edit-compose", "btn-del", "btn-refresh"];
+      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-del", "btn-refresh"];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.disabled = true;
@@ -1234,6 +1239,9 @@
       for (const el of document.querySelectorAll("[data-restore]")) {
         el.disabled = true;
         if (kind === "restore") el.textContent = "恢复中…";
+      }
+      for (const el of document.querySelectorAll("[data-svc-restart], [data-term], [data-svc-logs]")) {
+        el.disabled = true;
       }
     }
 
@@ -1366,18 +1374,50 @@
       }
     }
 
-    async function compose(action) {
-      if (state.busy) {
-        flash("err", "正在恢复中，请勿重复操作");
+    const COMPOSE_ACTION = {
+      up: { btn: "btn-up", idle: "启动", busy: "启动中…", run: "正在启动 Compose…", done: "已启动" },
+      restart: { btn: "btn-restart", idle: "重启", busy: "重启中…", run: "正在重启 Compose…", done: "已重启" },
+      down: { btn: "btn-down", idle: "停止", busy: "停止中…", run: "正在停止 Compose…", done: "已停止" },
+    };
+
+    function showComposeOp(msg) {
+      const op = $("#compose-op");
+      if (!op) return;
+      if (!msg) {
+        op.hidden = true;
+        op.textContent = "";
         return;
       }
+      op.hidden = false;
+      op.textContent = msg;
+    }
+
+    async function compose(action) {
+      const spec = COMPOSE_ACTION[action];
+      if (!spec || !state.current) return;
+      if (state.busy) {
+        flash("err", "正在处理中，请勿重复操作");
+        return;
+      }
+      setBusy("compose");
+      const btn = document.getElementById(spec.btn);
+      if (btn) {
+        btn.textContent = spec.busy;
+        btn.classList.add("working");
+      }
+      showComposeOp(spec.run);
+      flash("ok", spec.run);
       try {
-        const data = await api("/api/projects/" + state.current.id + "/compose/" + action, { method: "POST" });
-        const logs = $("#logs");
-        logs.hidden = false;
-        setLogs(logs, data.logs);
-        await openProject(state.current.id);
+        await api("/api/projects/" + state.current.id + "/compose/" + action, { method: "POST" });
+        try {
+          state.compose = await api("/api/projects/" + state.current.id + "/compose");
+        } catch {}
+        clearBusy();
+        renderProject();
+        flash("ok", spec.done);
       } catch (e) {
+        clearBusy();
+        if (state.current) renderProject();
         flash("err", e.message);
       }
     }
@@ -1389,39 +1429,29 @@
         return;
       }
       if (!confirm("确定重启服务 " + name + "？其它容器不受影响。")) return;
-      const btn = document.querySelector('[data-svc-restart="' + name + '"]');
-      if (btn) btn.disabled = true;
+      const btn = document.querySelector('[data-svc-restart="' + CSS.escape(name) + '"]');
+      const idle = btn ? btn.textContent : "重启";
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "重启中…";
+        btn.classList.add("working");
+      }
+      flash("ok", "正在重启 " + name + "…");
       try {
-        const data = await api(
+        await api(
           "/api/projects/" + state.current.id + "/compose/restart/" + encodeURIComponent(name),
           { method: "POST" }
         );
-        const logs = $("#logs");
-        if (logs) {
-          logs.hidden = false;
-          setLogs(logs, data.logs);
-        }
         flash("ok", "已重启 " + name);
         await refreshComposeStatus();
       } catch (e) {
         flash("err", e.message);
       } finally {
-        if (btn) btn.disabled = false;
-      }
-    }
-
-    async function loadLogs() {
-      if (state.busy) {
-        flash("err", "正在恢复中，请勿重复操作");
-        return;
-      }
-      try {
-        const data = await api("/api/projects/" + state.current.id + "/compose/logs?tail=200");
-        const logs = $("#logs");
-        logs.hidden = false;
-        setLogs(logs, data.logs);
-      } catch (e) {
-        flash("err", e.message);
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = idle;
+          btn.classList.remove("working");
+        }
       }
     }
 

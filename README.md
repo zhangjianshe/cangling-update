@@ -183,11 +183,9 @@ Git 对象在项目级的 `repo.git` 里跨版本去重，体积单独标在标�
 
 - **日志**：打开该服务最近约 500 行日志（`docker compose logs`），可刷新。支持 ANSI 颜色、粗体、斜体、暗色（如 tracing / mqtt 日志）。日志字体与终端相同，为 **Iosevka Term**。
 - **终端**：仅运行中的服务可点。弹出 xterm.js 窗口，通过 WebSocket 进入容器（默认 `/bin/sh`）。可在里面执行命令；关闭窗口即断开。没有 shell 的镜像会失败。终端字体为 **Iosevka Term**（已内置 Regular/Bold；本机若已安装同名字体则优先用本机的）。
-- **重启**：只重启这一行对应的服务（`docker compose restart <服务>`），其它容器不动。顶部「启动」执行 `docker compose up -d --remove-orphans`；顶部「重启」执行 `docker compose up -d --force-recreate --remove-orphans`，会清掉 compose 文件里已经不存在的服务。
+- **重启**：只重启这一行对应的服务（`docker compose restart <服务>`），其它容器不动。顶部「启动」执行 `docker compose up -d --remove-orphans`；顶部「重启」执行 `docker compose up -d --force-recreate --remove-orphans`，会清掉 compose 文件里已经不存在的服务。点启动 / 重启 / 停止后按钮会立刻变成「…中」并提示正在执行，完成后刷新服务表。
 
 Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打断正在编辑的升级表单、已打开的终端或 Compose 文件编辑窗口。
-
-顶部「日志」按钮仍查看整个 Compose 项目的日志。
 
 终端需要本机 `docker compose exec` 可用，浏览器会自动带上登录 Cookie。
 
