@@ -4,35 +4,98 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cangling Test __VERSION__</title>
+  <script>
+    (function () {
+      var key = "cangling-test-theme";
+      var saved = localStorage.getItem(key);
+      var theme = saved === "light" || saved === "dark"
+        ? saved
+        : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
   <style>
-    :root { color-scheme: dark; }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #12141a;
+      --card: #1a1d27;
+      --line: #2c3240;
+      --text: #ece7dc;
+      --muted: #8d93a5;
+      --accent: #e2a03a;
+      --btn: #262a36;
+      --btn-text: #ece7dc;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f1ea;
+      --card: #fffdf8;
+      --line: #d9d2c4;
+      --text: #1c1a16;
+      --muted: #6d675c;
+      --accent: #b56a12;
+      --btn: #efe8da;
+      --btn-text: #1c1a16;
+    }
     * { box-sizing: border-box; }
     body {
       margin: 0; min-height: 100vh; display: grid; place-items: center;
       font-family: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
-      background: #12141a; color: #ece7dc;
+      background: var(--bg); color: var(--text);
     }
     main {
+      position: relative;
       width: min(560px, calc(100vw - 32px));
-      background: #1a1d27; border: 1px solid #2c3240; border-radius: 16px;
+      background: var(--card); border: 1px solid var(--line); border-radius: 16px;
       padding: 32px 28px; text-align: center;
     }
-    .kicker { letter-spacing: 0.16em; text-transform: uppercase; color: #8d93a5; font-size: 12px; }
+    .theme-toggle {
+      position: absolute; top: 14px; right: 14px;
+      border: 1px solid var(--line); background: var(--btn); color: var(--btn-text);
+      border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px;
+      cursor: pointer;
+    }
+    .theme-toggle:hover { filter: brightness(1.06); }
+    .kicker { letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-size: 12px; }
     h1 { margin: 10px 0 6px; font-size: 20px; font-weight: 650; }
     .ver {
       margin: 22px 0 8px; font-size: 64px; line-height: 1; font-weight: 750;
-      color: #e2a03a; letter-spacing: 0.02em;
+      color: var(--accent); letter-spacing: 0.02em;
     }
-    p { color: #8d93a5; font-size: 14px; line-height: 1.55; }
-    code { color: #ece7dc; }
+    p { color: var(--muted); font-size: 14px; line-height: 1.55; }
+    code { color: var(--text); }
   </style>
 </head>
 <body>
   <main>
+    <button type="button" class="theme-toggle" id="theme-toggle" aria-label="切换深色或浅色主题">浅色</button>
     <div class="kicker">cangling-test</div>
     <h1>当前镜像版本</h1>
     <div class="ver">__VERSION__</div>
     <p>若升级成功，刷新本页应看到新的版本号。<br/>也可访问 <code>/version</code> 获取纯文本版本。</p>
   </main>
+  <script>
+    (function () {
+      var key = "cangling-test-theme";
+      var btn = document.getElementById("theme-toggle");
+
+      function current() {
+        return document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark";
+      }
+
+      function render() {
+        btn.textContent = current() === "dark" ? "浅色" : "深色";
+      }
+
+      btn.addEventListener("click", function () {
+        var next = current() === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem(key, next);
+        render();
+      });
+
+      render();
+    })();
+  </script>
 </body>
 </html>
