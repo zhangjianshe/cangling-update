@@ -33,6 +33,24 @@ make arm64
 
 建议把 `target/release/cangling-update` 拷到固定目录再运行或安装服务，不要长期用 `target/debug/`。
 
+### GitHub Actions 发布
+
+仓库已配置 `.github/workflows/release.yml`，会同时编译：
+
+| 文件 | 架构 |
+|---|---|
+| `cangling-update-linux-amd64` | x86_64 |
+| `cangling-update-linux-arm64` | ARM64 |
+| 对应的 `.sha256` | 校验和 |
+
+- 推送 `main` / 开 PR / 手动 Run workflow：在 Actions 里下载构建产物
+- 打标签并推送后，自动发布到 GitHub Releases：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## 运行
 
 ```bash
