@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tar::{Archive, Builder, EntryType, Header};
 use walkdir::WalkDir;
 
@@ -29,6 +30,18 @@ pub fn snapshot_directory_with_progress(
         bail!("source is not a directory: {}", src.display());
     }
 
+    if looks_like_gitref(dst) {
+        if git_available() {
+            return snapshot_git(src, dst, &mut on_progress);
+        }
+        let tar = dst.with_file_name("tree.tar.gz");
+        let n = snapshot_tar_gz(src, &tar, &mut on_progress)?;
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(dst, format!("tar\n{}\n", tar.display()))?;
+        return Ok(n);
+    }
     if looks_like_archive(dst) {
         return snapshot_tar_gz(src, dst, &mut on_progress);
     }
@@ -44,6 +57,9 @@ pub fn restore_directory_with_progress(
     live: &Path,
     mut on_progress: impl FnMut(u64, u64, &str),
 ) -> Result<()> {
+    if looks_like_gitref(snapshot) {
+        return restore_gitref(snapshot, live, &mut on_progress);
+    }
     if looks_like_archive(snapshot) {
         return restore_tar_gz(snapshot, live, &mut on_progress);
     }
@@ -53,6 +69,13 @@ pub fn restore_directory_with_progress(
     bail!("snapshot is missing: {}", snapshot.display());
 }
 
+fn looks_like_gitref(path: &Path) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("gitref"))
+        .unwrap_or(false)
+}
+
 fn looks_like_archive(path: &Path) -> bool {
     let name = path
         .file_name()
@@ -60,6 +83,273 @@ fn looks_like_archive(path: &Path) -> bool {
         .unwrap_or("")
         .to_ascii_lowercase();
     name.ends_with(".tar.gz") || name.ends_with(".tgz")
+}
+
+#[derive(Serialize, Deserialize)]
+struct FileAttr {
+    path: String,
+    kind: String,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    #[serde(default)]
+    target: Option<String>,
+}
+
+fn git_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn snapshot_git(
+    src: &Path,
+    gitref: &Path,
+    on_progress: &mut impl FnMut(u64, u64, &str),
+) -> Result<u64> {
+    let version_dir = gitref
+        .parent()
+        .context("gitref has no parent")?;
+    let project_dir = version_dir
+        .parent()
+        .context("version dir has no parent")?;
+    let repo = project_dir.join("repo.git");
+    ensure_git_repo(&repo)?;
+
+    let mut attrs = Vec::new();
+    let mut total = 0u64;
+    let mut files = 0u64;
+    for entry in WalkDir::new(src).follow_links(false) {
+        let entry = entry.with_context(|| format!("walk {}", src.display()))?;
+        let rel = match entry.path().strip_prefix(src) {
+            Ok(r) if !r.as_os_str().is_empty() => r,
+            _ => continue,
+        };
+        if should_skip(rel) {
+            continue;
+        }
+        let path = rel.to_string_lossy().replace('\\', "/");
+        let meta = entry.metadata().ok();
+        let (mode, uid, gid) = unix_ids(entry.path(), meta.as_ref());
+        let ft = entry.file_type();
+        if ft.is_dir() {
+            attrs.push(FileAttr {
+                path,
+                kind: "dir".into(),
+                mode,
+                uid,
+                gid,
+                target: None,
+            });
+        } else if ft.is_symlink() {
+            let target = fs::read_link(entry.path())
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+            attrs.push(FileAttr {
+                path,
+                kind: "symlink".into(),
+                mode,
+                uid,
+                gid,
+                target,
+            });
+        } else if ft.is_file() {
+            let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            total = total.saturating_add(len);
+            files += 1;
+            attrs.push(FileAttr {
+                path: path.clone(),
+                kind: "file".into(),
+                mode,
+                uid,
+                gid,
+                target: None,
+            });
+            on_progress(files, 0, &format!("扫描 {path}"));
+        }
+    }
+
+    on_progress(0, total.max(1), "正在写入 Git 对象…");
+    git_run(&repo, Some(src), &["add", "-A"])?;
+    let dirty = git_run(&repo, Some(src), &["status", "--porcelain"])?;
+    if dirty.trim().is_empty() && git_has_head(&repo) {
+        let sha = git_run(&repo, None, &["rev-parse", "HEAD"])?;
+        let sha = sha.trim().to_string();
+        write_gitref(gitref, &sha)?;
+        write_git_attrs(&repo, &sha, &attrs)?;
+        on_progress(total, total.max(1), "备份完成（内容无变化）");
+        return Ok(files);
+    }
+    git_run(
+        &repo,
+        Some(src),
+        &["commit", "--allow-empty", "-m", "cangling snapshot"],
+    )?;
+    let sha = git_run(&repo, None, &["rev-parse", "HEAD"])?;
+    let sha = sha.trim().to_string();
+    write_gitref(gitref, &sha)?;
+    write_git_attrs(&repo, &sha, &attrs)?;
+    let _ = git_run(&repo, None, &["gc", "--auto"]);
+    on_progress(total, total.max(1), "备份完成");
+    Ok(files)
+}
+
+fn restore_gitref(
+    gitref: &Path,
+    live: &Path,
+    on_progress: &mut impl FnMut(u64, u64, &str),
+) -> Result<()> {
+    let text = fs::read_to_string(gitref)
+        .with_context(|| format!("read {}", gitref.display()))?;
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("").trim();
+    if first == "tar" {
+        let tar = lines
+            .next()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| gitref.with_file_name("tree.tar.gz"));
+        return restore_tar_gz(&tar, live, on_progress);
+    }
+    let sha = first;
+    if sha.is_empty() {
+        bail!("gitref 为空：{}", gitref.display());
+    }
+    let repo = gitref
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("repo.git"))
+        .context("cannot resolve repo.git")?;
+    if !repo.join("HEAD").exists() {
+        bail!("Git 仓库不存在：{}", repo.display());
+    }
+
+    fs::create_dir_all(live)?;
+    on_progress(0, 1, "正在检出 Git 快照…");
+    git_run(&repo, Some(live), &["checkout", "-f", sha])?;
+
+    let attrs = read_git_attrs(&repo, sha).unwrap_or_default();
+    let total = attrs.len() as u64;
+    let mut kept = HashSet::new();
+    for (i, attr) in attrs.iter().enumerate() {
+        let rel = PathBuf::from(&attr.path);
+        if !is_safe_rel(&rel) {
+            continue;
+        }
+        kept.insert(rel.clone());
+        let dest = live.join(&rel);
+        if attr.kind == "dir" {
+            fs::create_dir_all(&dest)?;
+        }
+        apply_meta(
+            &dest,
+            attr.mode,
+            Some(attr.uid),
+            Some(attr.gid),
+            attr.kind == "dir",
+        )?;
+        on_progress(i as u64 + 1, total.max(1), &attr.path);
+    }
+
+    if let Ok(list) = git_run(&repo, None, &["ls-tree", "-r", "--name-only", sha]) {
+        for line in list.lines() {
+            let rel = PathBuf::from(line);
+            if is_safe_rel(&rel) && !rel.as_os_str().is_empty() {
+                kept.insert(rel);
+            }
+        }
+    }
+    remove_extras(live, &kept)?;
+    on_progress(1, 1, "恢复完成");
+    Ok(())
+}
+
+fn ensure_git_repo(repo: &Path) -> Result<()> {
+    if !repo.join("HEAD").exists() {
+        fs::create_dir_all(repo)?;
+        git_run(repo, None, &["init", "--bare"])?;
+        git_run(repo, None, &["config", "user.name", "cangling-update"])?;
+        git_run(repo, None, &["config", "user.email", "cangling-update@localhost"])?;
+        let exclude = repo.join("info").join("exclude");
+        if let Some(parent) = exclude.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(exclude, ".git\nlost+found\n")?;
+    }
+    Ok(())
+}
+
+fn git_has_head(repo: &Path) -> bool {
+    git_run(repo, None, &["rev-parse", "--verify", "HEAD"]).is_ok()
+}
+
+fn git_run(repo: &Path, work: Option<&Path>, args: &[&str]) -> Result<String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-c").arg("user.name=cangling-update");
+    cmd.arg("-c").arg("user.email=cangling-update@localhost");
+    cmd.arg("-c").arg("core.quotepath=false");
+    cmd.arg("-c").arg("commit.gpgsign=false");
+    cmd.arg("--git-dir").arg(repo);
+    if let Some(w) = work {
+        cmd.arg("--work-tree").arg(w);
+    }
+    cmd.args(args);
+    let output = cmd
+        .output()
+        .with_context(|| format!("执行 git {}", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "git {} 失败：{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn write_gitref(path: &Path, sha: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, format!("{sha}\n")).with_context(|| format!("write {}", path.display()))
+}
+
+fn write_git_attrs(repo: &Path, sha: &str, attrs: &[FileAttr]) -> Result<()> {
+    let dir = repo.join("cangling-meta");
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{sha}.json"));
+    let data = serde_json::to_vec(attrs).context("serialize attrs")?;
+    fs::write(path, data)?;
+    Ok(())
+}
+
+fn read_git_attrs(repo: &Path, sha: &str) -> Result<Vec<FileAttr>> {
+    let path = repo.join("cangling-meta").join(format!("{sha}.json"));
+    let data = fs::read(path)?;
+    Ok(serde_json::from_slice(&data)?)
+}
+
+fn unix_ids(path: &Path, meta: Option<&fs::Metadata>) -> (u32, u32, u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if let Some(m) = meta {
+            return (m.permissions().mode(), m.uid(), m.gid());
+        }
+        if let Ok(m) = fs::symlink_metadata(path) {
+            return (m.permissions().mode(), m.uid(), m.gid());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, meta);
+    }
+    (0o644, 0, 0)
 }
 
 fn snapshot_tar_gz(
@@ -253,13 +543,13 @@ fn unpack_entry<R: std::io::Read>(
 fn apply_meta(path: &Path, mode: u32, uid: Option<u32>, gid: Option<u32>, is_dir: bool) -> Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{chown, PermissionsExt};
+        use std::os::unix::fs::PermissionsExt;
         if !path.is_symlink() {
             let mode = if is_dir { mode | 0o111 } else { mode };
             let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
         }
         if uid.is_some() || gid.is_some() {
-            let _ = chown(path, uid, gid);
+            let _ = std::os::unix::fs::lchown(path, uid, gid);
         }
     }
     #[cfg(not(unix))]
@@ -443,6 +733,37 @@ mod tests {
         restore_directory(&dst, &live).unwrap();
         let restored = live.join("app.jar");
         assert_eq!(fs::read(&restored).unwrap(), b"hello-jar");
+        let mode = fs::metadata(&restored).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn git_roundtrip_keeps_mode_and_dedups() {
+        if !git_available() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "cangling-git-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let src = root.join("src");
+        let live = root.join("live");
+        let gitref = root.join("pid").join("vid").join("tree.gitref");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("app.jar");
+        fs::write(&file, b"hello-git-jar").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+
+        snapshot_directory(&src, &gitref).unwrap();
+        assert!(gitref.is_file());
+        assert!(root.join("pid").join("repo.git").join("HEAD").exists());
+        restore_directory(&gitref, &live).unwrap();
+        let restored = live.join("app.jar");
+        assert_eq!(fs::read(&restored).unwrap(), b"hello-git-jar");
         let mode = fs::metadata(&restored).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
         let _ = fs::remove_dir_all(&root);

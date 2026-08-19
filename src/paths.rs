@@ -59,7 +59,7 @@ impl AppPaths {
     }
 
     pub fn version_tree(&self, project_id: &str, version_id: &str) -> PathBuf {
-        self.version_dir(project_id, version_id).join("tree.tar.gz")
+        self.version_dir(project_id, version_id).join("tree.gitref")
     }
 
     pub fn version_images(&self, project_id: &str, version_id: &str) -> PathBuf {

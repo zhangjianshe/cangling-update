@@ -435,7 +435,7 @@
           <p class="hint">
             1. 新建项目，指向本机上已存在且包含 compose.yaml / docker-compose.yml 的绝对路径目录。<br/>
             2. 上传 <code>.tar.gz</code> 镜像包和/或 <code>.jar</code>。镜像会 <code>docker load</code> 并打成 <code>:latest</code>；JAR 按文件名替换 compose 里挂载的文件（如 <code>./jars/cis-server-1.0.0.jar</code>），并强制重建对应服务。<br/>
-            3. 可在版本列表中恢复任意历史快照，同时会重新加载该版本保存的镜像包。目录备份为 tar.gz，保留原文件权限和属主。
+            3. 可在版本列表中恢复任意历史快照，同时会重新加载该版本保存的镜像包。目录用 Git 备份（去重），并单独保存权限和属主。
           </p>
           <button class="btn primary" onclick="location.hash='#/new'">新建项目</button>
         </div>`;

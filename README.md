@@ -11,7 +11,7 @@
 1. 把本机某个 Compose 目录登记为「项目」
 2. 上传 `docker save` 出来的 `.tar` / `.tar.gz` / `.tgz`，执行 `docker load`，并把镜像打成 `:latest`
 3. 上传 `.jar`，按 compose 里的挂载文件名覆盖（例如 `./jars/cis-server-1.0.0.jar`），再强制重建对应服务
-4. 每次升级前用 **tar.gz** 备份整个项目目录（保留权限和属主），可回滚
+4. 每次升级前用 **Git** 备份项目目录（相同文件只存一份，并单独记下权限/属主），可回滚
 5. 登录保护；2 小时无操作自动退出
 
 ## 编译
@@ -153,7 +153,7 @@ docker compose up -d --force-recreate <服务名>
 | 升级 | 一次导入镜像或 JAR |
 | 回滚前快照 | 点「恢复」时，先给当前线上目录再打一份保险 |
 
-恢复某版本时：先自动备份当前目录，再解压该版本的 tar.gz，必要时重新 `docker load` 当时保存的镜像包，并重建 JAR 相关服务。
+恢复某版本时：先自动备份当前目录，再从 Git 快照检出该版本（并写回权限/属主），必要时重新 `docker load` 当时保存的镜像包，并重建 JAR 相关服务。旧版 tar.gz 备份仍可恢复。
 
 进行中的恢复/升级不能重复点击。
 
@@ -166,8 +166,9 @@ cangling-update                 # 程序
 config/
   cangling.db                   # SQLite（项目、版本、用户、会话）
   backups/<项目ID>/<版本ID>/
-    tree.tar.gz                 # 目录备份（保留权限/属主）
-    tree.tar.gz.meta.json       # 备份体积，用于进度
+    repo.git/                   # 项目级 Git 仓库（跨版本去重）
+    <版本ID>/tree.gitref        # 指向某次 commit
+    repo.git/cangling-meta/     # uid/gid/mode 等属性
     images/                     # 当时上传的镜像包
     jars/                       # 当时上传的 JAR
   uploads/                      # 上传临时目录
