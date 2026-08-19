@@ -1,4 +1,4 @@
-use crate::models::{LoadedImage, Project, Version};
+use crate::models::{DeployedJar, LoadedImage, Project, Version};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -53,6 +53,10 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
     conn.execute_batch(SCHEMA)?;
+    let _ = conn.execute(
+        "ALTER TABLE versions ADD COLUMN jars_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
     Ok(conn)
 }
 
@@ -133,8 +137,8 @@ pub fn next_version_no(conn: &Connection, project_id: &str) -> Result<i64> {
 pub fn insert_version(conn: &Connection, v: &Version) -> Result<()> {
     conn.execute(
         "INSERT INTO versions
-            (id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            (id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at, jars_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             v.id,
             v.project_id,
@@ -146,6 +150,7 @@ pub fn insert_version(conn: &Connection, v: &Version) -> Result<()> {
             if v.is_current { 1 } else { 0 },
             v.kind,
             v.created_at,
+            serde_json::to_string(&v.jars).unwrap_or_else(|_| "[]".into()),
         ],
     )?;
     Ok(())
@@ -169,7 +174,7 @@ pub fn mark_current(conn: &Connection, project_id: &str, version_id: &str) -> Re
 
 pub fn list_versions(conn: &Connection, project_id: &str) -> Result<Vec<Version>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at
+        "SELECT id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at, jars_json
          FROM versions WHERE project_id = ?1 ORDER BY version_no DESC",
     )?;
     let rows = stmt.query_map(params![project_id], map_version)?;
@@ -178,7 +183,7 @@ pub fn list_versions(conn: &Connection, project_id: &str) -> Result<Vec<Version>
 
 pub fn get_version(conn: &Connection, project_id: &str, version_id: &str) -> Result<Option<Version>> {
     let mut stmt = conn.prepare(
-        "SELECT id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at
+        "SELECT id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at, jars_json
          FROM versions WHERE project_id = ?1 AND id = ?2",
     )?;
     stmt.query_row(params![project_id, version_id], map_version)
@@ -190,6 +195,8 @@ fn map_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<Version> {
     let images_json: String = row.get(6)?;
     let images: Vec<LoadedImage> = serde_json::from_str(&images_json).unwrap_or_default();
     let is_current: i64 = row.get(7)?;
+    let jars_json: String = row.get(10).unwrap_or_else(|_| "[]".to_string());
+    let jars: Vec<DeployedJar> = serde_json::from_str(&jars_json).unwrap_or_default();
     Ok(Version {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -198,6 +205,7 @@ fn map_version(row: &rusqlite::Row<'_>) -> rusqlite::Result<Version> {
         note: row.get(4)?,
         backup_path: row.get(5)?,
         images,
+        jars,
         is_current: is_current != 0,
         kind: row.get(8)?,
         created_at: row.get(9)?,

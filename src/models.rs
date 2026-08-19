@@ -22,6 +22,7 @@ pub struct Version {
     pub note: String,
     pub backup_path: String,
     pub images: Vec<LoadedImage>,
+    pub jars: Vec<DeployedJar>,
     pub is_current: bool,
     pub created_at: String,
     pub kind: String,
@@ -32,6 +33,13 @@ pub struct LoadedImage {
     pub file: String,
     pub loaded: Vec<String>,
     pub latest_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeployedJar {
+    pub file: String,
+    pub dest: String,
+    pub services: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +74,7 @@ pub struct ValidateDirResult {
     pub directory: String,
     pub compose_file: Option<String>,
     pub images: Vec<String>,
+    pub jar_mounts: Vec<crate::paths::JarMount>,
     pub warning: Option<String>,
 }
 
@@ -94,6 +103,7 @@ pub struct ComposeStatus {
     pub available: bool,
     pub compose_file: Option<String>,
     pub images: Vec<String>,
+    pub jar_mounts: Vec<crate::paths::JarMount>,
     pub services: Vec<ComposeService>,
     pub raw: Option<String>,
     pub error: Option<String>,
@@ -111,6 +121,7 @@ pub struct ComposeService {
 pub struct UpdateResult {
     pub version: Version,
     pub loaded: Vec<LoadedImage>,
+    pub jars: Vec<DeployedJar>,
 }
 
 #[derive(Debug, Serialize)]

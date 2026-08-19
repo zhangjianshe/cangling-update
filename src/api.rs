@@ -5,8 +5,9 @@ use crate::docker::{parse_compose_ps, to_latest_tag};
 use crate::error::AppError;
 use crate::models::*;
 use crate::paths::{
-    find_compose_file, is_image_archive_name, parse_compose_images, require_absolute_dir,
-    safe_filename,
+    find_compose_file, is_image_archive_name, is_uploadable_name,
+    parse_compose_images, parse_compose_jar_mounts, require_absolute_dir, resolve_host_path,
+    safe_filename, JarMount,
 };
 use crate::state::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
@@ -82,12 +83,13 @@ async fn validate_directory(
 fn inspect_directory(raw: &str) -> Result<ValidateDirResult, AppError> {
     let dir = require_absolute_dir(raw).map_err(|e| AppError::bad(e.to_string()))?;
     let compose = find_compose_file(&dir);
-    let (images, warning) = match &compose {
+    let (images, jar_mounts, warning) = match &compose {
         Some(path) => {
             let text = std::fs::read_to_string(path).unwrap_or_default();
-            (parse_compose_images(&text), None)
+            (parse_compose_images(&text), parse_compose_jar_mounts(&text), None)
         }
         None => (
+            Vec::new(),
             Vec::new(),
             Some("该目录中未找到 docker-compose.yml / compose.yaml".into()),
         ),
@@ -102,6 +104,7 @@ fn inspect_directory(raw: &str) -> Result<ValidateDirResult, AppError> {
                 .into_owned()
         }),
         images,
+        jar_mounts,
         warning,
     })
 }
@@ -178,6 +181,7 @@ async fn create_project(
             note: "基线快照".into(),
             backup_path: tree.display().to_string(),
             images: Vec::new(),
+            jars: Vec::new(),
             is_current: true,
             kind: "baseline".into(),
             created_at: now,
@@ -317,9 +321,9 @@ async fn receive_upload(
                 continue;
             }
             let filename = safe_filename(&filename).map_err(|e| AppError::bad(e.to_string()))?;
-            if !is_image_archive_name(&filename) {
+            if !is_uploadable_name(&filename) {
                 return Err(AppError::bad(format!(
-                    "{filename} 不是 .tar / .tar.gz / .tgz 镜像包"
+                    "{filename} 不是 .tar / .tar.gz / .tgz 镜像包或 .jar"
                 )));
             }
             let dest = tmp.join(&filename);
@@ -370,6 +374,7 @@ async fn apply_update(
     };
     let tree = state.paths.version_tree(&project.id, &version_id);
     let images_dir = state.paths.version_images(&project.id, &version_id);
+    let jars_dir = state.paths.version_jars(&project.id, &version_id);
     let live = PathBuf::from(&project.directory);
 
     let tree_clone = tree.clone();
@@ -389,8 +394,25 @@ async fn apply_update(
         return Err(err.into());
     }
 
+    let (archives, jar_files): (Vec<PathBuf>, Vec<PathBuf>) = staged_files
+        .into_iter()
+        .partition(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(is_image_archive_name)
+                .unwrap_or(false)
+        });
+
     let mut loaded = Vec::new();
-    if let Err(err) = load_and_retag(&state, &staged_files, &images_dir, &mut loaded).await {
+    if let Err(err) = load_and_retag(&state, &archives, &images_dir, &mut loaded).await {
+        let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Err(err);
+    }
+
+    let mounts = read_jar_mounts(&live);
+    let mut deployed_jars = Vec::new();
+    if let Err(err) = deploy_jars(&jar_files, &jars_dir, &live, &mounts, &mut deployed_jars).await {
         let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Err(err);
@@ -406,6 +428,7 @@ async fn apply_update(
         note: note.trim().to_string(),
         backup_path: tree.display().to_string(),
         images: loaded.clone(),
+        jars: deployed_jars.clone(),
         is_current: true,
         kind: kind.to_string(),
         created_at: now,
@@ -418,10 +441,11 @@ async fn apply_update(
     }
 
     if restart {
-        if let Err(err) = state.docker.compose_up(&live).await {
+        if let Err(err) = restart_after_update(&state, &live, &deployed_jars, !archives.is_empty()).await
+        {
             tracing::warn!("compose up after update failed: {err:#}");
             return Err(AppError::internal(format!(
-                "镜像已导入且版本 {} 已保存，但 Compose 启动失败：{err}",
+                "文件已保存为版本 {}，但 Compose 启动失败：{err}",
                 version.label
             )));
         }
@@ -433,7 +457,101 @@ async fn apply_update(
             .ok_or_else(|| AppError::internal("version missing after insert"))?
     };
 
-    Ok(Json(UpdateResult { version, loaded }))
+    Ok(Json(UpdateResult {
+        version,
+        loaded,
+        jars: deployed_jars,
+    }))
+}
+
+fn read_jar_mounts(project_dir: &std::path::Path) -> Vec<JarMount> {
+    match find_compose_file(project_dir) {
+        Some(path) => {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            parse_compose_jar_mounts(&text)
+        }
+        None => Vec::new(),
+    }
+}
+
+async fn deploy_jars(
+    jar_files: &[PathBuf],
+    archive_dir: &std::path::Path,
+    live: &std::path::Path,
+    mounts: &[JarMount],
+    deployed: &mut Vec<DeployedJar>,
+) -> Result<(), AppError> {
+    if jar_files.is_empty() {
+        return Ok(());
+    }
+    tokio::fs::create_dir_all(archive_dir).await?;
+    for src in jar_files {
+        let name = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app.jar")
+            .to_string();
+        tokio::fs::copy(src, archive_dir.join(&name)).await?;
+
+        let matches: Vec<&JarMount> = mounts.iter().filter(|m| m.basename == name).collect();
+        let (dests, services) = if matches.is_empty() {
+            let fallback = if live.join("jars").is_dir() {
+                live.join("jars").join(&name)
+            } else {
+                live.join(&name)
+            };
+            (vec![fallback], Vec::new())
+        } else {
+            let dests = matches
+                .iter()
+                .map(|m| resolve_host_path(live, &m.host_path))
+                .collect::<Vec<_>>();
+            let services = matches
+                .iter()
+                .map(|m| m.service.clone())
+                .collect::<Vec<_>>();
+            (dests, services)
+        };
+
+        for dest in &dests {
+            if let Some(parent) = dest.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::copy(src, dest).await?;
+        }
+        deployed.push(DeployedJar {
+            file: name,
+            dest: dests
+                .first()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            services,
+        });
+    }
+    Ok(())
+}
+
+async fn restart_after_update(
+    state: &AppState,
+    live: &std::path::Path,
+    jars: &[DeployedJar],
+    loaded_images: bool,
+) -> anyhow::Result<String> {
+    let mut services: Vec<String> = jars
+        .iter()
+        .flat_map(|j| j.services.iter().cloned())
+        .collect();
+    services.sort();
+    services.dedup();
+    if !services.is_empty() {
+        let out = state.docker.compose_up_recreate(live, &services).await?;
+        if loaded_images {
+            let more = state.docker.compose_up(live).await?;
+            return Ok(format!("{out}\n{more}"));
+        }
+        return Ok(out);
+    }
+    state.docker.compose_up(live).await
 }
 
 async fn load_and_retag(
@@ -530,6 +648,7 @@ async fn rollback(
                 note: format!("回滚到 {} 前的自动快照", target.label),
                 backup_path: safety_tree.display().to_string(),
                 images: Vec::new(),
+                jars: Vec::new(),
                 is_current: false,
                 kind: "pre-rollback".into(),
                 created_at: db::now_rfc3339(),
@@ -600,11 +719,16 @@ async fn rollback(
     }
 
     if body.restart {
-        state
-            .docker
-            .compose_up(&live)
-            .await
-            .map_err(|e| AppError::internal(e.to_string()))?;
+        let mounts = read_jar_mounts(&live);
+        let mut services: Vec<String> = mounts.into_iter().map(|m| m.service).collect();
+        services.sort();
+        services.dedup();
+        let result = if !services.is_empty() {
+            state.docker.compose_up_recreate(&live, &services).await
+        } else {
+            state.docker.compose_up(&live).await
+        };
+        result.map_err(|e| AppError::internal(e.to_string()))?;
     }
 
     let version = {
@@ -613,7 +737,11 @@ async fn rollback(
             .ok_or_else(|| AppError::internal("version missing"))?
     };
 
-    Ok(Json(UpdateResult { version, loaded }))
+    Ok(Json(UpdateResult {
+        version,
+        loaded,
+        jars: target.jars,
+    }))
 }
 
 async fn compose_status(
@@ -626,9 +754,12 @@ async fn compose_status(
     };
     let dir = PathBuf::from(&project.directory);
     let compose_file = find_compose_file(&dir);
-    let images = match &compose_file {
-        Some(p) => parse_compose_images(&std::fs::read_to_string(p).unwrap_or_default()),
-        None => Vec::new(),
+    let (images, jar_mounts) = match &compose_file {
+        Some(p) => {
+            let text = std::fs::read_to_string(p).unwrap_or_default();
+            (parse_compose_images(&text), parse_compose_jar_mounts(&text))
+        }
+        None => (Vec::new(), Vec::new()),
     };
 
     let (services, raw, error) = match state.docker.compose_ps_raw(&dir).await {
@@ -648,6 +779,7 @@ async fn compose_status(
                 .into_owned()
         }),
         images,
+        jar_mounts,
         services,
         raw,
         error,

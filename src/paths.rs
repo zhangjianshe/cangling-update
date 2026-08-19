@@ -66,6 +66,10 @@ impl AppPaths {
         self.version_dir(project_id, version_id).join("images")
     }
 
+    pub fn version_jars(&self, project_id: &str, version_id: &str) -> PathBuf {
+        self.version_dir(project_id, version_id).join("jars")
+    }
+
     pub fn project_backup_root(&self, project_id: &str) -> PathBuf {
         self.backups_dir.join(project_id)
     }
@@ -141,6 +145,84 @@ pub fn is_image_archive_name(name: &str) -> bool {
     lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".tar")
 }
 
+pub fn is_jar_name(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".jar")
+}
+
+pub fn is_uploadable_name(name: &str) -> bool {
+    is_image_archive_name(name) || is_jar_name(name)
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct JarMount {
+    pub service: String,
+    pub host_path: String,
+    pub basename: String,
+}
+
+pub fn parse_compose_jar_mounts(compose_text: &str) -> Vec<JarMount> {
+    let mut current_service = String::new();
+    let mut mounts = Vec::new();
+    for raw in compose_text.lines() {
+        if leading_spaces(raw) == 2 {
+            if let Some(name) = raw.trim().strip_suffix(':') {
+                if !name.is_empty() && !name.contains(' ') && !name.contains(':') && !name.starts_with('#')
+                {
+                    current_service = name.to_string();
+                }
+            }
+        }
+        let Some(host) = volume_host_path(raw) else {
+            continue;
+        };
+        let Some(base) = std::path::Path::new(&host)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if !is_jar_name(&base) || current_service.is_empty() {
+            continue;
+        }
+        mounts.push(JarMount {
+            service: current_service.clone(),
+            host_path: host,
+            basename: base,
+        });
+    }
+    mounts
+}
+
+pub fn resolve_host_path(project_dir: &Path, host_rel: &str) -> PathBuf {
+    let p = host_rel.trim();
+    let p = p.strip_prefix("./").unwrap_or(p);
+    let path = PathBuf::from(p);
+    if path.is_absolute() {
+        path
+    } else {
+        project_dir.join(path)
+    }
+}
+
+fn leading_spaces(s: &str) -> usize {
+    s.chars().take_while(|c| *c == ' ').count()
+}
+
+fn volume_host_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let item = trimmed.strip_prefix('-')?.trim();
+    let item = item.trim_matches(|c| c == '"' || c == '\'');
+    if !item.contains(".jar") {
+        return None;
+    }
+    let host = item.split(':').next()?.trim();
+    if host.is_empty() {
+        return None;
+    }
+    Some(host.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +248,24 @@ services:
         assert_eq!(safe_filename("a/b.tar.gz").unwrap(), "b.tar.gz");
         assert!(safe_filename("").is_err());
         assert!(safe_filename("..").is_err());
+    }
+
+    #[test]
+    fn parse_np5_style_jar_mounts() {
+        let yaml = r#"
+services:
+  cis-server:
+    image: hub.example/gdal-base:v4
+    volumes:
+      - ./jars/cis-server-1.0.0.jar:/app/app.jar:ro
+  cis-k8s:
+    volumes:
+      - ./jars/cis-k8s-1.0.0.jar:/app/app.jar:ro
+"#;
+        let mounts = parse_compose_jar_mounts(yaml);
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].service, "cis-server");
+        assert_eq!(mounts[0].basename, "cis-server-1.0.0.jar");
+        assert_eq!(mounts[1].service, "cis-k8s");
     }
 }

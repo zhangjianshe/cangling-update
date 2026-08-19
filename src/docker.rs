@@ -104,6 +104,17 @@ impl Docker {
         self.compose_run(dir, &["up", "-d", "--remove-orphans"]).await
     }
 
+    pub async fn compose_up_recreate(&self, dir: &Path, services: &[String]) -> Result<String> {
+        let mut args = vec![
+            "up".to_string(),
+            "-d".to_string(),
+            "--remove-orphans".to_string(),
+            "--force-recreate".to_string(),
+        ];
+        args.extend(services.iter().cloned());
+        self.compose_run_owned(dir, &args).await
+    }
+
     pub async fn compose_down(&self, dir: &Path) -> Result<String> {
         self.compose_run(dir, &["down"]).await
     }
@@ -126,6 +137,11 @@ impl Docker {
     }
 
     async fn compose_run(&self, dir: &Path, args: &[&str]) -> Result<String> {
+        let owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+        self.compose_run_owned(dir, &owned).await
+    }
+
+    async fn compose_run_owned(&self, dir: &Path, args: &[String]) -> Result<String> {
         self.require()?;
         let output = match self.compose {
             ComposeKind::Plugin => {

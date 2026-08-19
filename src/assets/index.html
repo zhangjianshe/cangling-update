@@ -421,14 +421,14 @@
         <div class="title-row">
           <div>
             <h2>主机升级</h2>
-            <div class="path">绑定 Docker Compose 目录，导入镜像包，并保留可回滚版本。</div>
+            <div class="path">绑定 Docker Compose 目录，导入镜像包或 JAR，并保留可回滚版本。</div>
           </div>
         </div>
         <div class="card">
           <h3>使用说明</h3>
           <p class="hint">
             1. 新建项目，指向本机上已存在且包含 compose.yaml / docker-compose.yml 的绝对路径目录。<br/>
-            2. 上传一个或多个 <code>.tar.gz</code> 镜像包。系统会先备份当前目录，再执行 <code>docker load</code>，并将镜像重新标记为 <code>:latest</code>。<br/>
+            2. 上传 <code>.tar.gz</code> 镜像包和/或 <code>.jar</code>。镜像会 <code>docker load</code> 并打成 <code>:latest</code>；JAR 按文件名替换 compose 里挂载的文件（如 <code>./jars/cis-server-1.0.0.jar</code>），并强制重建对应服务。<br/>
             3. 可在版本列表中恢复任意历史快照，同时会重新加载该版本保存的镜像包。
           </p>
           <button class="btn primary" onclick="location.hash='#/new'">新建项目</button>
@@ -464,7 +464,7 @@
           body: JSON.stringify({ directory }),
         });
         $("#dir-hint").innerHTML = r.ok
-          ? `已找到 <b>${esc(r.compose_file)}</b> · 镜像：${r.images.length ? r.images.map(esc).join(", ") : "（未声明）"}`
+          ? `已找到 <b>${esc(r.compose_file)}</b> · 镜像：${r.images.length ? r.images.map(esc).join(", ") : "（未声明）"} · JAR：${r.jar_mounts && r.jar_mounts.length ? r.jar_mounts.map(j => esc(j.basename)).join(", ") : "（无）"}`
           : `<span class="bad">${esc(r.warning || "不是 Compose 目录")}</span>`;
       } catch (e) {
         $("#dir-hint").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
@@ -518,7 +518,10 @@
           <td><span class="pill ${v.is_current ? "latest" : ""}">${esc(v.label)}${v.is_current ? " 当前" : ""}</span></td>
           <td>${esc(KIND[v.kind] || v.kind)}</td>
           <td>${esc(v.note || "—")}</td>
-          <td>${(v.images || []).map(i => esc(i.file) + (i.latest_tags && i.latest_tags.length ? " → " + i.latest_tags.map(esc).join(", ") : "")).join("<br/>") || "—"}</td>
+          <td>${[
+            ...(v.images || []).map(i => esc(i.file) + (i.latest_tags && i.latest_tags.length ? " → " + i.latest_tags.map(esc).join(", ") : "")),
+            ...(v.jars || []).map(j => esc(j.file) + (j.services && j.services.length ? " → " + j.services.map(esc).join(", ") : " → " + esc(j.dest || "")))
+          ].join("<br/>") || "—"}</td>
           <td>${esc((v.created_at || "").replace("T", " ").slice(0, 19))}</td>
           <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}" ${state.busy ? "disabled" : ""}>${state.busy === "restore" ? "恢复中…" : "恢复"}</button>`}</td>
         </tr>`).join("");
@@ -537,14 +540,14 @@
         </div>
         <div id="flash" hidden></div>
         <div class="card">
-          <h3>导入镜像 / 发布新版本</h3>
-          <p class="hint">上传一个或多个 <code>docker save</code> 镜像包。系统会先备份当前目录，再执行 <code>docker load</code>，并将镜像重新标记为 <code>:latest</code>。</p>
-          <div class="drop" id="drop">将 .tar.gz / .tgz / .tar 文件拖到此处，或点击选择
-            <input id="file" type="file" accept=".tar,.tar.gz,.tgz,application/gzip" multiple hidden />
+          <h3>导入镜像 / JAR / 发布新版本</h3>
+          <p class="hint">可上传 <code>docker save</code> 镜像包，或直接上传 <code>.jar</code>（文件名需与 compose 挂载一致，例如 <code>cis-server-1.0.0.jar</code>）。系统先备份目录；JAR 会覆盖挂载路径并强制重建对应服务。</p>
+          <div class="drop" id="drop">将 .tar.gz / .tgz / .tar / .jar 拖到此处，或点击选择
+            <input id="file" type="file" accept=".tar,.tar.gz,.tgz,.jar,application/gzip,application/java-archive" multiple hidden />
           </div>
           <ul class="filelist" id="filelist"></ul>
           <div class="field" style="margin-top:12px"><label>备注</label><input id="note" type="text" placeholder="本次升级改了什么" /></div>
-          <label class="hint"><input type="checkbox" id="restart" checked /> 导入成功后重启 Compose</label>
+          <label class="hint"><input type="checkbox" id="restart" checked /> 导入成功后重启 Compose（JAR 会强制重建对应服务）</label>
           <div class="progress" id="prog"><span></span></div>
           <div class="row" style="margin-top:14px">
             <button class="btn primary" id="btn-update" ${state.busy ? "disabled" : ""}>导入并发布为最新版</button>
@@ -561,6 +564,7 @@
           </div>
           ${c.error ? `<div class="flash err">${esc(c.error)}</div>` : ""}
           <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
+          <div class="hint" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
           <table>
             <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th></tr></thead>
             <tbody>${services || `<tr><td colspan="4" class="empty">未报告运行中的服务</td></tr>`}</tbody>
@@ -628,7 +632,7 @@
         return;
       }
       if (!snapshotOnly && !state.files.length) {
-        flash("err", "请至少选择一个镜像包，或使用「仅备份当前目录」。");
+        flash("err", "请至少选择一个镜像包或 JAR，或使用「仅备份当前目录」。");
         return;
       }
       const fd = new FormData();
