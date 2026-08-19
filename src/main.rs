@@ -108,7 +108,11 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Update { check, force, proxy }) => {
             return update::run(check, force, proxy);
         }
-        None => {}
+        None => {
+            if service::is_installed() && !service::running_as_systemd_service() {
+                return service::print_installed_access();
+            }
+        }
     }
 
     let paths = AppPaths::resolve(cli.data_dir)?;

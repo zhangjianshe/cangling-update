@@ -59,6 +59,7 @@ make arm64
 ```bash
 ./cangling-update
 # 浏览器打开 http://<主机>:5400
+# 若已安装为系统服务，则只打印访问地址后退出
 ```
 
 常用参数：
@@ -91,6 +92,16 @@ sudo ./cangling-update uninstall-service
 - 查看状态：`systemctl status cangling-update`
 
 安装后 `config/` 仍在程序旁边（除非指定了 `--data-dir`）。换新版本时：覆盖二进制，再执行 `restart`。
+
+安装完成后，再次直接运行本程序会打印当前服务的访问地址后退出，不会再启动第二个进程：
+
+```bash
+./cangling-update
+# 已安装为系统服务，不会在前台再次启动。
+# 访问地址：
+#   http://127.0.0.1:5400
+#   http://<本机IP>:5400
+```
 
 ### 自我更新
 
