@@ -18,7 +18,7 @@ pub fn is_public(path: &str) -> bool {
     matches!(
         path,
         "/" | "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout"
-    )
+    ) || path.starts_with("/vendor/")
 }
 
 pub async fn require_auth(

@@ -130,10 +130,51 @@ impl Docker {
         }
     }
 
-    pub async fn compose_logs(&self, dir: &Path, tail: u32) -> Result<String> {
+    pub async fn compose_logs(
+        &self,
+        dir: &Path,
+        tail: u32,
+        service: Option<&str>,
+    ) -> Result<String> {
         let tail = tail.to_string();
-        self.compose_run(dir, &["logs", "--no-color", "--tail", &tail])
-            .await
+        let mut args = vec![
+            "logs".to_string(),
+            "--no-color".to_string(),
+            "--tail".to_string(),
+            tail,
+        ];
+        if let Some(name) = service {
+            validate_service_name(name)?;
+            args.push(name.to_string());
+        }
+        self.compose_run_owned(dir, &args).await
+    }
+
+    pub fn compose_exec_argv(&self, service: &str) -> Result<(String, Vec<String>)> {
+        self.require()?;
+        validate_service_name(service)?;
+        match self.compose {
+            ComposeKind::Plugin => Ok((
+                "docker".into(),
+                vec![
+                    "compose".into(),
+                    "exec".into(),
+                    "-it".into(),
+                    service.into(),
+                    "/bin/sh".into(),
+                ],
+            )),
+            ComposeKind::Standalone => Ok((
+                "docker-compose".into(),
+                vec![
+                    "exec".into(),
+                    "-it".into(),
+                    service.into(),
+                    "/bin/sh".into(),
+                ],
+            )),
+            ComposeKind::Missing => bail!("本机未安装 docker compose"),
+        }
     }
 
     async fn compose_run(&self, dir: &Path, args: &[&str]) -> Result<String> {
@@ -211,6 +252,23 @@ pub fn to_latest_tag(image: &str) -> Option<String> {
         return None;
     }
     Some(format!("{name}:latest"))
+}
+
+pub fn validate_service_name(name: &str) -> Result<()> {
+    if !is_safe_service_name(name) {
+        bail!("无效的服务名");
+    }
+    Ok(())
+}
+
+pub fn is_safe_service_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && !name.contains("..")
+        && bytes
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'-' || *c == b'_' || *c == b'.')
 }
 
 pub fn parse_compose_ps(raw: &str) -> Vec<ComposeService> {
@@ -298,6 +356,17 @@ mod tests {
         );
         assert_eq!(to_latest_tag("sha256:abc"), None);
         assert_eq!(to_latest_tag("nginx").as_deref(), Some("nginx:latest"));
+    }
+
+    #[test]
+    fn service_name_allows_compose_ids() {
+        assert!(is_safe_service_name("web"));
+        assert!(is_safe_service_name("cis-server"));
+        assert!(is_safe_service_name("db.1"));
+        assert!(!is_safe_service_name(""));
+        assert!(!is_safe_service_name("../etc"));
+        assert!(!is_safe_service_name("a/b"));
+        assert!(!is_safe_service_name("web;reboot"));
     }
 
     #[test]

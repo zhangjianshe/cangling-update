@@ -9,6 +9,7 @@ mod paths;
 mod progress;
 mod service;
 mod state;
+mod term;
 mod update;
 
 use anyhow::{bail, Context};

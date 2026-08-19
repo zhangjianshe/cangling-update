@@ -228,9 +228,35 @@
     .gate .card { width: min(420px, 100%); }
     .gate[hidden], .app[hidden] { display: none !important; }
     #who { color: var(--text); }
+    .overlay {
+      position: fixed; inset: 0; z-index: 40;
+      background: rgba(1, 4, 9, 0.65);
+      display: grid; place-items: center; padding: 20px;
+    }
+    :root[data-theme="light"] .overlay { background: rgba(31, 35, 40, 0.45); }
+    .overlay[hidden] { display: none !important; }
+    .modal {
+      width: min(1080px, 100%); height: min(78vh, 820px);
+      background: var(--bg-2); border: 1px solid var(--line); box-shadow: var(--shadow);
+      display: flex; flex-direction: column; min-height: 0;
+    }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 10px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+    }
+    .modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+    .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .modal-body .term {
+      flex: 1; min-height: 0; padding: 8px; background: var(--log-bg);
+    }
+    .modal-body .term .xterm, .modal-body .term .xterm-viewport { height: 100%; }
+    .modal-body pre.logs {
+      flex: 1; max-height: none; margin: 0; border: 0;
+    }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
+      .modal { height: min(90vh, 820px); }
     }
   </style>
 </head>
@@ -278,8 +304,21 @@
       <main id="main"></main>
     </div>
   </div>
+  <div class="overlay" id="dialog" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="dialog-title">窗口</h3>
+        <div class="row">
+          <button type="button" class="btn" id="dialog-extra" hidden>刷新</button>
+          <button type="button" class="btn" id="dialog-close">关闭</button>
+        </div>
+      </div>
+      <div class="modal-body" id="dialog-body"></div>
+    </div>
+  </div>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false };
+    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
     const IDLE_MS = 2 * 60 * 60 * 1000;
@@ -399,6 +438,7 @@
     }
 
     async function logout(message) {
+      closeDialog();
       try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
       state.user = null;
       state.projects = [];
@@ -440,6 +480,7 @@
     }
 
     function route() {
+      closeDialog();
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
       const m = hash.match(/^#\/p\/([^/]+)$/);
@@ -662,9 +703,17 @@
     function renderProject() {
       const p = state.current;
       const c = state.compose || {};
-      const services = (c.services || []).map(s =>
-        `<tr><td>${esc(s.name)}</td><td>${esc(s.image)}</td><td>${esc(s.state)}</td><td>${esc(s.status)}</td></tr>`
-      ).join("");
+      const services = (c.services || []).map(s => {
+        const running = /run/i.test(s.state || "");
+        return `<tr>
+          <td>${esc(s.name)}</td>
+          <td>${esc(s.image)}</td>
+          <td>${esc(s.state)}</td>
+          <td>${esc(s.status)}</td>
+          <td><button class="btn" data-svc-logs="${esc(s.name)}">日志</button></td>
+          <td><button class="btn" data-term="${esc(s.name)}" ${running ? "" : "disabled"} title="${running ? "进入容器" : "容器未运行"}">终端</button></td>
+        </tr>`;
+      }).join("");
       const versions = state.versions.map(v => `
         <tr>
           <td><span class="pill ${v.is_current ? "latest" : ""}">${esc(v.label)}${v.is_current ? " 当前" : ""}</span></td>
@@ -727,8 +776,8 @@
           <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
           <div class="hint" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
           <table>
-            <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th></tr></thead>
-            <tbody>${services || `<tr><td colspan="4" class="empty">未报告运行中的服务</td></tr>`}</tbody>
+            <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>日志</th><th></th></tr></thead>
+            <tbody>${services || `<tr><td colspan="6" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
           <pre class="logs" id="logs" hidden></pre>
         </div>
@@ -762,6 +811,12 @@
       $("#btn-logs").onclick = loadLogs;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
+      }
+      for (const b of document.querySelectorAll("[data-svc-logs]")) {
+        b.onclick = () => openServiceLogs(b.getAttribute("data-svc-logs"));
+      }
+      for (const b of document.querySelectorAll("[data-term]")) {
+        b.onclick = () => openTerm(b.getAttribute("data-term"));
       }
       loadOrphans("orphan-box");
     }
@@ -945,6 +1000,146 @@
       }
     }
 
+    function termTheme() {
+      const dark = currentTheme() !== "light";
+      return dark
+        ? { background: "#0d1117", foreground: "#f0f6fc", cursor: "#f0f6fc", selectionBackground: "#388bfd66" }
+        : { background: "#ffffff", foreground: "#1f2328", cursor: "#1f2328", selectionBackground: "#0969da33" };
+    }
+
+    function loadXterm() {
+      if (window.Terminal && window.FitAddon) return Promise.resolve();
+      if (dialog.xtermReady) return dialog.xtermReady;
+      dialog.xtermReady = new Promise((resolve, reject) => {
+        if (!document.getElementById("xterm-css")) {
+          const css = document.createElement("link");
+          css.id = "xterm-css";
+          css.rel = "stylesheet";
+          css.href = "/vendor/xterm.css";
+          document.head.appendChild(css);
+        }
+        const s1 = document.createElement("script");
+        s1.src = "/vendor/xterm.js";
+        s1.onload = () => {
+          const s2 = document.createElement("script");
+          s2.src = "/vendor/xterm-addon-fit.js";
+          s2.onload = resolve;
+          s2.onerror = () => reject(new Error("无法加载 xterm-addon-fit.js"));
+          document.head.appendChild(s2);
+        };
+        s1.onerror = () => reject(new Error("无法加载 xterm.js"));
+        document.head.appendChild(s1);
+      });
+      return dialog.xtermReady;
+    }
+
+    function closeDialog() {
+      if (dialog.ws) {
+        try { dialog.ws.close(); } catch {}
+        dialog.ws = null;
+      }
+      if (dialog.onResize) {
+        window.removeEventListener("resize", dialog.onResize);
+        dialog.onResize = null;
+      }
+      if (dialog.term) {
+        try { dialog.term.dispose(); } catch {}
+        dialog.term = null;
+        dialog.fit = null;
+      }
+      const extra = $("#dialog-extra");
+      if (extra) {
+        extra.hidden = true;
+        extra.onclick = null;
+      }
+      const box = $("#dialog");
+      if (box) box.hidden = true;
+      const body = $("#dialog-body");
+      if (body) body.innerHTML = "";
+    }
+
+    async function openServiceLogs(name) {
+      if (!state.current || !name) return;
+      closeDialog();
+      $("#dialog-title").textContent = "日志 · " + name;
+      const extra = $("#dialog-extra");
+      extra.hidden = false;
+      extra.textContent = "刷新";
+      $("#dialog-body").innerHTML = `<pre class="logs" id="dialog-logs">加载中…</pre>`;
+      $("#dialog").hidden = false;
+      const load = async () => {
+        const el = $("#dialog-logs");
+        if (!el) return;
+        try {
+          const data = await api(
+            "/api/projects/" + state.current.id + "/compose/logs?tail=500&service=" + encodeURIComponent(name)
+          );
+          el.textContent = data.logs || "（无输出）";
+          el.scrollTop = el.scrollHeight;
+        } catch (e) {
+          el.textContent = e.message;
+        }
+      };
+      extra.onclick = load;
+      await load();
+    }
+
+    async function openTerm(name) {
+      if (!state.current || !name) return;
+      closeDialog();
+      try {
+        await loadXterm();
+      } catch (e) {
+        flash("err", e.message);
+        return;
+      }
+      $("#dialog-title").textContent = "终端 · " + name;
+      $("#dialog-extra").hidden = true;
+      $("#dialog-body").innerHTML = `<div class="term" id="term"></div>`;
+      $("#dialog").hidden = false;
+      const term = new window.Terminal({
+        cursorBlink: true,
+        fontSize: 15,
+        fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+        theme: termTheme(),
+      });
+      const Fit = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
+      const fit = Fit ? new Fit() : null;
+      if (fit) term.loadAddon(fit);
+      term.open($("#term"));
+      if (fit) fit.fit();
+      dialog.term = term;
+      dialog.fit = fit;
+
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const qs = "?cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24);
+      const ws = new WebSocket(
+        proto + "://" + location.host + "/api/projects/" + state.current.id +
+        "/compose/exec/" + encodeURIComponent(name) + qs
+      );
+      ws.binaryType = "arraybuffer";
+      dialog.ws = ws;
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === "string") term.write(ev.data);
+        else term.write(new Uint8Array(ev.data));
+      };
+      ws.onerror = () => term.writeln("\r\n连接失败");
+      ws.onclose = () => term.writeln("\r\n连接已关闭");
+      term.onData((data) => {
+        if (ws.readyState === 1) ws.send(data);
+      });
+      const sendResize = () => {
+        if (fit) fit.fit();
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        }
+      };
+      dialog.onResize = sendResize;
+      window.addEventListener("resize", sendResize);
+      setTimeout(sendResize, 50);
+      term.focus();
+    }
+
     async function deleteProject() {
       if (state.busy) {
         flash("err", "正在恢复中，请勿重复操作");
@@ -982,6 +1177,7 @@
     $("#gate-theme").onclick = toggleTheme;
     renderTheme();
 
+    $("#dialog-close").onclick = closeDialog;
     $("#btn-new").onclick = () => location.hash = "#/new";
     $("#btn-logout").onclick = () => logout();
     $("#gate-submit").onclick = submitGate;

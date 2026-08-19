@@ -52,6 +52,13 @@ pub fn router(state: AppState) -> Router {
             post(compose_restart),
         )
         .route("/api/projects/{id}/compose/logs", get(compose_logs))
+        .route(
+            "/api/projects/{id}/compose/exec/{service}",
+            get(compose_exec),
+        )
+        .route("/vendor/xterm.css", get(vendor_xterm_css))
+        .route("/vendor/xterm.js", get(vendor_xterm_js))
+        .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -1292,6 +1299,7 @@ where
 #[derive(serde::Deserialize)]
 struct LogsQuery {
     tail: Option<u32>,
+    service: Option<String>,
 }
 
 async fn compose_logs(
@@ -1304,12 +1312,71 @@ async fn compose_logs(
         db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
     let tail = q.tail.unwrap_or(200).min(2000);
+    let service = match q.service.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) => {
+            crate::term::require_service_name(name)?;
+            Some(name.to_string())
+        }
+        None => None,
+    };
     let logs = state
         .docker
-        .compose_logs(&PathBuf::from(project.directory), tail)
+        .compose_logs(
+            &PathBuf::from(project.directory),
+            tail,
+            service.as_deref(),
+        )
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Json(LogsResult { logs }))
+}
+
+async fn compose_exec(
+    State(state): State<AppState>,
+    Path((id, service)): Path<(String, String)>,
+    Query(query): Query<crate::term::ExecQuery>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Result<impl IntoResponse, AppError> {
+    crate::term::require_service_name(&service)?;
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    let dir = PathBuf::from(project.directory);
+    let docker = state.docker.clone();
+    Ok(ws.on_upgrade(move |socket| {
+        crate::term::run_exec_socket(socket, docker, dir, service, query)
+    }))
+}
+
+async fn vendor_xterm_css() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("assets/vendor/xterm.css"),
+    )
+}
+
+async fn vendor_xterm_js() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("assets/vendor/xterm.js"),
+    )
+}
+
+async fn vendor_xterm_fit() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("assets/vendor/xterm-addon-fit.js"),
+    )
 }
 
 #[cfg(test)]
