@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Cangling Update</title>
+  <title>苍岭更新</title>
   <style>
     :root {
       --bg: #111318;
@@ -37,8 +37,8 @@
       background: linear-gradient(145deg, #f0b95a, #b56a12);
       box-shadow: 0 0 0 1px #0008, inset 0 1px 0 #fff4;
     }
-    .brand h1 { margin: 0; font-size: 16px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 650; }
-    .brand small { display: block; color: var(--muted); letter-spacing: 0.04em; font-size: 11px; text-transform: none; margin-top: 1px; }
+    .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.08em; font-weight: 650; }
+    .brand small { display: block; color: var(--muted); letter-spacing: 0.02em; font-size: 12px; margin-top: 1px; }
     .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
     .meta b { color: var(--text); font-weight: 500; }
     .ok { color: var(--green); }
@@ -49,7 +49,7 @@
       display: flex; flex-direction: column; min-height: 0;
     }
     .aside-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 10px; }
-    .aside-head h2 { margin: 0; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+    .aside-head h2 { margin: 0; font-size: 13px; letter-spacing: 0.08em; color: var(--muted); }
     .plist { overflow: auto; padding: 6px 10px 18px; }
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
@@ -74,7 +74,7 @@
       background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
       padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
     }
-    .card h3 { margin: 0 0 12px; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+    .card h3 { margin: 0 0 12px; font-size: 13px; letter-spacing: 0.08em; color: var(--muted); }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
     input[type=text], textarea {
@@ -104,7 +104,7 @@
     .progress > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #b56a12, var(--amber)); }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+    th { color: var(--muted); font-weight: 500; font-size: 12px; letter-spacing: 0.04em; }
     .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
     .flash { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
     .flash.err { background: #3a1d21; color: #ffd4d7; border: 1px solid #6a3036; }
@@ -126,25 +126,27 @@
       <div class="brand">
         <div class="mark"></div>
         <div>
-          <h1>Cangling Update</h1>
-          <small>docker-compose host updater</small>
+          <h1>苍岭更新</h1>
+          <small>主机 Docker Compose 升级台</small>
         </div>
       </div>
-      <div class="meta" id="meta">loading…</div>
+      <div class="meta" id="meta">加载中…</div>
     </header>
     <div class="shell">
       <aside>
         <div class="aside-head">
-          <h2>Projects</h2>
-          <button class="btn primary" id="btn-new">New</button>
+          <h2>项目</h2>
+          <button class="btn primary" id="btn-new">新建</button>
         </div>
-        <div class="plist" id="plist"><div class="empty">No projects yet</div></div>
+        <div class="plist" id="plist"><div class="empty">暂无项目</div></div>
       </aside>
       <main id="main"></main>
     </div>
   </div>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [] };
+    const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
+    const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
 
     const $ = (sel, el = document) => el.querySelector(sel);
     const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content; };
@@ -174,8 +176,8 @@
         const dockerOk = m.docker.available;
         $("#meta").innerHTML =
           `<span>${esc(m.os)} / <b>${esc(m.arch)}</b></span>` +
-          `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerOk ? esc(m.docker.version || "ok") : "missing"}</b> · compose ${esc(m.docker.compose)}</span>` +
-          `<span>db <b>${esc(m.db_path)}</b></span>`;
+          `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerOk ? esc(m.docker.version || "正常") : "未检测到"}</b> · compose ${esc(COMPOSE[m.docker.compose] || m.docker.compose)}</span>` +
+          `<span>数据库 <b>${esc(m.db_path)}</b></span>`;
       } catch (e) {
         $("#meta").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
       }
@@ -191,7 +193,7 @@
     function renderList() {
       const root = $("#plist");
       if (!state.projects.length) {
-        root.innerHTML = `<div class="empty">No projects yet</div>`;
+        root.innerHTML = `<div class="empty">暂无项目</div>`;
         return;
       }
       root.innerHTML = "";
@@ -218,18 +220,18 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div>
-            <h2>Host updates</h2>
-            <div class="path">Attach a docker-compose directory, load image archives, keep rollback points.</div>
+            <h2>主机升级</h2>
+            <div class="path">绑定 Docker Compose 目录，导入镜像包，并保留可回滚版本。</div>
           </div>
         </div>
         <div class="card">
-          <h3>How it works</h3>
+          <h3>使用说明</h3>
           <p class="hint">
-            1. Create a project pointing at an absolute host directory that contains compose.yaml / docker-compose.yml.<br/>
-            2. Upload one or more <code>.tar.gz</code> image archives. The server runs <code>docker load</code>, retags each image to <code>:latest</code>, and snapshots the directory first.<br/>
-            3. Restore any previous snapshot from the version list. Image archives from that version are loaded again.
+            1. 新建项目，指向本机上已存在且包含 compose.yaml / docker-compose.yml 的绝对路径目录。<br/>
+            2. 上传一个或多个 <code>.tar.gz</code> 镜像包。系统会先备份当前目录，再执行 <code>docker load</code>，并将镜像重新标记为 <code>:latest</code>。<br/>
+            3. 可在版本列表中恢复任意历史快照，同时会重新加载该版本保存的镜像包。
           </p>
-          <button class="btn primary" onclick="location.hash='#/new'">Create project</button>
+          <button class="btn primary" onclick="location.hash='#/new'">新建项目</button>
         </div>`;
     }
 
@@ -237,16 +239,16 @@
       state.current = null;
       renderList();
       $("#main").innerHTML = `
-        <div class="title-row"><div><h2>New project</h2><div class="path">Bind a compose application directory</div></div></div>
+        <div class="title-row"><div><h2>新建项目</h2><div class="path">绑定本机上的 Compose 应用目录</div></div></div>
         <div id="flash" hidden></div>
         <div class="card">
-          <div class="field"><label>Name</label><input id="f-name" type="text" placeholder="edge-gateway" /></div>
-          <div class="field"><label>Description</label><textarea id="f-desc" placeholder="optional"></textarea></div>
-          <div class="field"><label>Host directory (absolute)</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" /></div>
-          <div class="hint" id="dir-hint">The directory must already exist on this host and contain a compose file.</div>
+          <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="边缘网关" /></div>
+          <div class="field"><label>说明</label><textarea id="f-desc" placeholder="选填"></textarea></div>
+          <div class="field"><label>主机目录（绝对路径）</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" /></div>
+          <div class="hint" id="dir-hint">目录必须已存在于本机，并且包含 Compose 文件。</div>
           <div class="row" style="margin-top:14px">
-            <button class="btn" id="btn-check">Check directory</button>
-            <button class="btn primary" id="btn-create">Create</button>
+            <button class="btn" id="btn-check">检查目录</button>
+            <button class="btn primary" id="btn-create">创建</button>
           </div>
         </div>`;
       $("#btn-check").onclick = checkDir;
@@ -262,8 +264,8 @@
           body: JSON.stringify({ directory }),
         });
         $("#dir-hint").innerHTML = r.ok
-          ? `Found <b>${esc(r.compose_file)}</b> · images: ${r.images.length ? r.images.map(esc).join(", ") : "(none declared)"}`
-          : `<span class="bad">${esc(r.warning || "not a compose directory")}</span>`;
+          ? `已找到 <b>${esc(r.compose_file)}</b> · 镜像：${r.images.length ? r.images.map(esc).join(", ") : "（未声明）"}`
+          : `<span class="bad">${esc(r.warning || "不是 Compose 目录")}</span>`;
       } catch (e) {
         $("#dir-hint").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
       }
@@ -313,63 +315,63 @@
       ).join("");
       const versions = state.versions.map(v => `
         <tr>
-          <td><span class="pill ${v.is_current ? "latest" : ""}">${esc(v.label)}${v.is_current ? " latest" : ""}</span></td>
-          <td>${esc(v.kind)}</td>
+          <td><span class="pill ${v.is_current ? "latest" : ""}">${esc(v.label)}${v.is_current ? " 当前" : ""}</span></td>
+          <td>${esc(KIND[v.kind] || v.kind)}</td>
           <td>${esc(v.note || "—")}</td>
           <td>${(v.images || []).map(i => esc(i.file) + (i.latest_tags && i.latest_tags.length ? " → " + i.latest_tags.map(esc).join(", ") : "")).join("<br/>") || "—"}</td>
           <td>${esc((v.created_at || "").replace("T", " ").slice(0, 19))}</td>
-          <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}">Restore</button>`}</td>
+          <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}">恢复</button>`}</td>
         </tr>`).join("");
 
       $("#main").innerHTML = `
         <div class="title-row">
           <div>
             <h2>${esc(p.name)}</h2>
-            <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "compose file missing")}</div>
+            <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}</div>
           </div>
           <div class="row">
-            <span class="pill">${p.current_version_no ? "v" + p.current_version_no : "no version"} current</span>
-            <button class="btn" id="btn-refresh">Refresh</button>
-            <button class="btn danger" id="btn-del">Delete project</button>
+            <span class="pill">${p.current_version_no ? "v" + p.current_version_no : "无版本"} 当前</span>
+            <button class="btn" id="btn-refresh">刷新</button>
+            <button class="btn danger" id="btn-del">删除项目</button>
           </div>
         </div>
         <div id="flash" hidden></div>
         <div class="card">
-          <h3>Load images / new version</h3>
-          <p class="hint">Upload one or more docker <code>save</code> archives. The live directory is snapshotted first, then each archive is imported with <code>docker load</code> and retagged to <code>:latest</code>.</p>
-          <div class="drop" id="drop">Drop .tar.gz / .tgz / .tar files here, or click to choose
+          <h3>导入镜像 / 发布新版本</h3>
+          <p class="hint">上传一个或多个 <code>docker save</code> 镜像包。系统会先备份当前目录，再执行 <code>docker load</code>，并将镜像重新标记为 <code>:latest</code>。</p>
+          <div class="drop" id="drop">将 .tar.gz / .tgz / .tar 文件拖到此处，或点击选择
             <input id="file" type="file" accept=".tar,.tar.gz,.tgz,application/gzip" multiple hidden />
           </div>
           <ul class="filelist" id="filelist"></ul>
-          <div class="field" style="margin-top:12px"><label>Note</label><input id="note" type="text" placeholder="what changed in this release" /></div>
-          <label class="hint"><input type="checkbox" id="restart" checked /> Restart compose after a successful load</label>
+          <div class="field" style="margin-top:12px"><label>备注</label><input id="note" type="text" placeholder="本次升级改了什么" /></div>
+          <label class="hint"><input type="checkbox" id="restart" checked /> 导入成功后重启 Compose</label>
           <div class="progress" id="prog"><span></span></div>
           <div class="row" style="margin-top:14px">
-            <button class="btn primary" id="btn-update">Load & publish as latest</button>
-            <button class="btn" id="btn-snap">Snapshot directory only</button>
+            <button class="btn primary" id="btn-update">导入并发布为最新版</button>
+            <button class="btn" id="btn-snap">仅备份当前目录</button>
           </div>
         </div>
         <div class="card">
           <h3>Compose</h3>
           <div class="row" style="margin-bottom:12px">
-            <button class="btn" id="btn-up">Up</button>
-            <button class="btn" id="btn-restart">Restart</button>
-            <button class="btn" id="btn-down">Down</button>
-            <button class="btn" id="btn-logs">Logs</button>
+            <button class="btn" id="btn-up">启动</button>
+            <button class="btn" id="btn-restart">重启</button>
+            <button class="btn" id="btn-down">停止</button>
+            <button class="btn" id="btn-logs">日志</button>
           </div>
           ${c.error ? `<div class="flash err">${esc(c.error)}</div>` : ""}
-          <div class="hint" style="margin-bottom:8px">Declared images: ${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
+          <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
           <table>
-            <thead><tr><th>Service</th><th>Image</th><th>State</th><th>Status</th></tr></thead>
-            <tbody>${services || `<tr><td colspan="4" class="empty">No running services reported</td></tr>`}</tbody>
+            <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th></tr></thead>
+            <tbody>${services || `<tr><td colspan="4" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
           <pre class="logs" id="logs" hidden></pre>
         </div>
         <div class="card">
-          <h3>Versions</h3>
+          <h3>版本</h3>
           <table>
-            <thead><tr><th>Version</th><th>Kind</th><th>Note</th><th>Images</th><th>When</th><th></th></tr></thead>
-            <tbody>${versions || `<tr><td colspan="6" class="empty">No versions</td></tr>`}</tbody>
+            <thead><tr><th>版本</th><th>类型</th><th>备注</th><th>镜像</th><th>时间</th><th></th></tr></thead>
+            <tbody>${versions || `<tr><td colspan="6" class="empty">暂无版本</td></tr>`}</tbody>
           </table>
         </div>`;
 
@@ -405,11 +407,11 @@
 
     function runUpdate(snapshotOnly) {
       if (!snapshotOnly && !state.files.length) {
-        flash("err", "Choose at least one image archive, or use Snapshot directory only.");
+        flash("err", "请至少选择一个镜像包，或使用「仅备份当前目录」。");
         return;
       }
       const fd = new FormData();
-      fd.append("note", $("#note").value || (snapshotOnly ? "directory snapshot" : ""));
+      fd.append("note", $("#note").value || (snapshotOnly ? "目录快照" : ""));
       fd.append("restart", snapshotOnly ? "false" : ($("#restart").checked ? "true" : "false"));
       if (!snapshotOnly) for (const f of state.files) fd.append("files", f, f.name);
 
@@ -424,21 +426,21 @@
         try {
           const data = JSON.parse(xhr.responseText || "{}");
           if (xhr.status >= 400) throw new Error(data.error || xhr.statusText);
-          flash("ok", `Published ${data.version.label} as latest.`);
+          flash("ok", `已将 ${data.version.label} 发布为最新版。`);
           state.files = [];
           await openProject(state.current.id);
-          flash("ok", `Published ${data.version.label} as latest.`);
+          flash("ok", `已将 ${data.version.label} 发布为最新版。`);
         } catch (e) {
           flash("err", e.message);
         }
       };
-      xhr.onerror = () => flash("err", "upload failed");
+      xhr.onerror = () => flash("err", "上传失败");
       xhr.open("POST", "/api/projects/" + state.current.id + "/updates");
       xhr.send(fd);
     }
 
     async function restore(versionId) {
-      if (!confirm("Restore this version? The current directory will be snapshotted first.")) return;
+      if (!confirm("确定恢复此版本？恢复前会先备份当前目录。")) return;
       try {
         const data = await api("/api/projects/" + state.current.id + "/rollback", {
           method: "POST",
@@ -446,7 +448,7 @@
           body: JSON.stringify({ version_id: versionId, restart: $("#restart") ? $("#restart").checked : true }),
         });
         await openProject(state.current.id);
-        flash("ok", "Restored " + data.version.label + " and marked it latest.");
+        flash("ok", "已恢复 " + data.version.label + "，并标记为当前最新版。");
       } catch (e) {
         flash("err", e.message);
       }
@@ -457,7 +459,7 @@
         const data = await api("/api/projects/" + state.current.id + "/compose/" + action, { method: "POST" });
         const logs = $("#logs");
         logs.hidden = false;
-        logs.textContent = data.logs || "(no output)";
+        logs.textContent = data.logs || "（无输出）";
         await openProject(state.current.id);
       } catch (e) {
         flash("err", e.message);
@@ -469,14 +471,14 @@
         const data = await api("/api/projects/" + state.current.id + "/compose/logs?tail=200");
         const logs = $("#logs");
         logs.hidden = false;
-        logs.textContent = data.logs || "(no output)";
+        logs.textContent = data.logs || "（无输出）";
       } catch (e) {
         flash("err", e.message);
       }
     }
 
     async function deleteProject() {
-      if (!confirm("Delete this project and its version backups? The live compose directory is not deleted.")) return;
+      if (!confirm("确定删除此项目及其版本备份？主机上的 Compose 目录不会被删除。")) return;
       try {
         await api("/api/projects/" + state.current.id, { method: "DELETE" });
         location.hash = "#/";

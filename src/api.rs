@@ -79,7 +79,7 @@ fn inspect_directory(raw: &str) -> Result<ValidateDirResult, AppError> {
         }
         None => (
             Vec::new(),
-            Some("no docker-compose.yml / compose.yaml found in this directory".into()),
+            Some("该目录中未找到 docker-compose.yml / compose.yaml".into()),
         ),
     };
     Ok(ValidateDirResult {
@@ -108,7 +108,7 @@ async fn get_project(
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     db::get_project(&conn, &id)?
         .map(Json)
-        .ok_or_else(|| AppError::not_found("project not found"))
+        .ok_or_else(|| AppError::not_found("项目不存在"))
 }
 
 async fn create_project(
@@ -117,14 +117,14 @@ async fn create_project(
 ) -> Result<Json<Project>, AppError> {
     let name = body.name.trim().to_string();
     if name.is_empty() {
-        return Err(AppError::bad("project name is required"));
+        return Err(AppError::bad("项目名称不能为空"));
     }
     let inspected = inspect_directory(&body.directory)?;
     if !inspected.ok {
         return Err(AppError::bad(
             inspected
                 .warning
-                .unwrap_or_else(|| "directory is not a docker-compose application".into()),
+                .unwrap_or_else(|| "该目录不是 Docker Compose 应用".into()),
         ));
     }
 
@@ -156,7 +156,7 @@ async fn create_project(
             let _ = remove_dir_if_exists(&state.paths.version_dir(&id, &version_id));
             let msg = err.to_string();
             if msg.contains("UNIQUE") {
-                return Err(AppError::Conflict("a project with this name already exists".into()));
+                return Err(AppError::Conflict("已存在同名项目".into()));
             }
             return Err(err.into());
         }
@@ -165,7 +165,7 @@ async fn create_project(
             project_id: id.clone(),
             version_no: 1,
             label: "v1".into(),
-            note: "baseline snapshot".into(),
+            note: "基线快照".into(),
             backup_path: tree.display().to_string(),
             images: Vec::new(),
             is_current: true,
@@ -188,7 +188,7 @@ async fn update_project(
 ) -> Result<Json<Project>, AppError> {
     let existing = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("project not found"))?
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
 
     let name = body
@@ -203,7 +203,7 @@ async fn update_project(
             return Err(AppError::bad(
                 inspected
                     .warning
-                    .unwrap_or_else(|| "directory is not a docker-compose application".into()),
+                    .unwrap_or_else(|| "该目录不是 Docker Compose 应用".into()),
             ));
         }
         inspected.directory
@@ -215,7 +215,7 @@ async fn update_project(
     db::update_project(&conn, &id, &name, &description, &directory, &db::now_rfc3339())?;
     db::get_project(&conn, &id)?
         .map(Json)
-        .ok_or_else(|| AppError::not_found("project not found"))
+        .ok_or_else(|| AppError::not_found("项目不存在"))
 }
 
 async fn delete_project(
@@ -225,7 +225,7 @@ async fn delete_project(
     {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         if !db::delete_project(&conn, &id)? {
-            return Err(AppError::not_found("project not found"));
+            return Err(AppError::not_found("项目不存在"));
         }
     }
     let root = state.paths.project_backup_root(&id);
@@ -239,7 +239,7 @@ async fn list_versions(
 ) -> Result<Json<Vec<Version>>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     if db::get_project(&conn, &id)?.is_none() {
-        return Err(AppError::not_found("project not found"));
+        return Err(AppError::not_found("项目不存在"));
     }
     Ok(Json(db::list_versions(&conn, &id)?))
 }
@@ -251,7 +251,7 @@ async fn create_update(
 ) -> Result<Json<UpdateResult>, AppError> {
     let project = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("project not found"))?
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
 
     let gate = state.lock_project(&id);
@@ -283,7 +283,7 @@ async fn receive_upload(
         while let Some(field) = multipart
             .next_field()
             .await
-            .map_err(|e| AppError::bad(format!("invalid multipart: {e}")))?
+            .map_err(|e| AppError::bad(format!("无效的上传数据：{e}")))?
         {
             let field_name = field.name().unwrap_or("").to_string();
             let filename = field.file_name().unwrap_or("").to_string();
@@ -309,7 +309,7 @@ async fn receive_upload(
             let filename = safe_filename(&filename).map_err(|e| AppError::bad(e.to_string()))?;
             if !is_image_archive_name(&filename) {
                 return Err(AppError::bad(format!(
-                    "{filename} is not a .tar / .tar.gz / .tgz docker image archive"
+                    "{filename} 不是 .tar / .tar.gz / .tgz 镜像包"
                 )));
             }
             let dest = tmp.join(&filename);
@@ -318,7 +318,7 @@ async fn receive_upload(
             while let Some(chunk) = field
                 .chunk()
                 .await
-                .map_err(|e| AppError::bad(format!("upload interrupted: {e}")))?
+                .map_err(|e| AppError::bad(format!("上传中断：{e}")))?
             {
                 file.write_all(&chunk).await?;
             }
@@ -411,7 +411,7 @@ async fn apply_update(
         if let Err(err) = state.docker.compose_up(&live).await {
             tracing::warn!("compose up after update failed: {err:#}");
             return Err(AppError::internal(format!(
-                "images loaded and version {} saved, but compose up failed: {err}",
+                "镜像已导入且版本 {} 已保存，但 Compose 启动失败：{err}",
                 version.label
             )));
         }
@@ -476,12 +476,12 @@ async fn rollback(
 ) -> Result<Json<UpdateResult>, AppError> {
     let project = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("project not found"))?
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
     let target = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         db::get_version(&conn, &id, &body.version_id)?
-            .ok_or_else(|| AppError::not_found("version not found"))?
+            .ok_or_else(|| AppError::not_found("版本不存在"))?
     };
 
     let gate = state.lock_project(&id);
@@ -510,7 +510,7 @@ async fn rollback(
                 project_id: id.clone(),
                 version_no: safety_no,
                 label: format!("v{safety_no}"),
-                note: format!("auto snapshot before rollback to {}", target.label),
+                note: format!("回滚到 {} 前的自动快照", target.label),
                 backup_path: safety_tree.display().to_string(),
                 images: Vec::new(),
                 is_current: false,
@@ -605,7 +605,7 @@ async fn compose_status(
 ) -> Result<Json<ComposeStatus>, AppError> {
     let project = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("project not found"))?
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
     let dir = PathBuf::from(&project.directory);
     let compose_file = find_compose_file(&dir);
@@ -669,7 +669,7 @@ where
 {
     let project = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("project not found"))?
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
     let gate = state.lock_project(&id);
     let _guard = gate.lock().await;
@@ -691,7 +691,7 @@ async fn compose_logs(
 ) -> Result<Json<LogsResult>, AppError> {
     let project = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("project not found"))?
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
     let tail = q.tail.unwrap_or(200).min(2000);
     let logs = state

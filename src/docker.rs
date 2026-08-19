@@ -58,7 +58,7 @@ impl Docker {
 
     pub fn require(&self) -> Result<()> {
         if !self.available {
-            bail!("docker CLI is not available on this host");
+            bail!("本机未安装 docker 命令");
         }
         Ok(())
     }
@@ -75,7 +75,7 @@ impl Docker {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() {
             bail!(
-                "docker load failed for {}: {}",
+                "docker load 失败（{}）：{}",
                 archive.display(),
                 stderr.trim().if_empty(stdout.trim())
             );
@@ -95,7 +95,7 @@ impl Docker {
             .context("failed to spawn docker tag")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("docker tag {source} -> {target} failed: {}", stderr.trim());
+            bail!("docker tag {source} -> {target} 失败：{}", stderr.trim());
         }
         Ok(())
     }
@@ -140,13 +140,13 @@ impl Docker {
                     .await
                     .context("failed to spawn docker-compose")?
             }
-            ComposeKind::Missing => bail!("docker compose is not available on this host"),
+            ComposeKind::Missing => bail!("本机未安装 docker compose"),
         };
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         if !output.status.success() {
             bail!(
-                "compose {} failed: {}",
+                "compose {} 失败：{}",
                 args.join(" "),
                 stderr.trim().if_empty(stdout.trim())
             );

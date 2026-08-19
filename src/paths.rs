@@ -74,20 +74,20 @@ impl AppPaths {
 pub fn require_absolute_dir(path: &str) -> Result<PathBuf> {
     let path = path.trim();
     if path.is_empty() {
-        bail!("directory path is required");
+        bail!("请填写目录路径");
     }
     let p = PathBuf::from(path);
     if !p.is_absolute() {
-        bail!("directory must be an absolute host path");
+        bail!("目录必须是本机绝对路径");
     }
     if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        bail!("directory path must not contain '..'");
+        bail!("目录路径不能包含 '..'");
     }
     if !p.exists() {
-        bail!("directory does not exist: {}", p.display());
+        bail!("目录不存在：{}", p.display());
     }
     if !p.is_dir() {
-        bail!("path is not a directory: {}", p.display());
+        bail!("路径不是目录：{}", p.display());
     }
     Ok(p.canonicalize().unwrap_or(p))
 }
@@ -128,10 +128,10 @@ pub fn safe_filename(name: &str) -> Result<String> {
         .unwrap_or("")
         .trim();
     if base.is_empty() || base == "." || base == ".." {
-        bail!("invalid file name");
+        bail!("无效的文件名");
     }
     if base.chars().any(|c| matches!(c, '/' | '\\' | '\0')) {
-        bail!("invalid file name");
+        bail!("无效的文件名");
     }
     Ok(base.to_string())
 }
