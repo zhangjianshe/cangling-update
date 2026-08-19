@@ -9,6 +9,7 @@ mod paths;
 mod progress;
 mod service;
 mod state;
+mod update;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
@@ -59,6 +60,15 @@ enum Command {
     UninstallService,
     /// 重启本服务
     Restart,
+    /// 检查 GitHub Release 并按当前架构下载新版本（不重启服务）
+    Update {
+        /// 只检查是否有新版本，不下载
+        #[arg(long)]
+        check: bool,
+        /// 即使版本相同或更旧也强制下载替换
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -84,6 +94,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::Restart) => {
             return service::restart();
+        }
+        Some(Command::Update { check, force }) => {
+            return update::run(check, force);
         }
         None => {}
     }

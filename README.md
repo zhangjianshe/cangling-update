@@ -90,6 +90,18 @@ sudo ./cangling-update uninstall-service
 
 安装后 `config/` 仍在程序旁边（除非指定了 `--data-dir`）。换新版本时：覆盖二进制，再执行 `restart`。
 
+### 自我更新
+
+从 [GitHub Releases](https://github.com/zhangjianshe/cangling-update/releases) 检查并下载对应架构的二进制，保存为程序目录下的 `cangling-update`。**不会**重启 systemd 服务，当前进程继续跑旧文件，下次启动或手动 `restart` 后才用新版本。
+
+```bash
+./cangling-update update --check    # 只看有没有新版本
+sudo ./cangling-update update       # 下载并替换文件
+sudo ./cangling-update restart      # 需要时再重启服务
+```
+
+x86_64 下载 `cangling-update-linux-amd64`，ARM64 下载 `cangling-update-linux-arm64`。需要本机能访问 GitHub，并安装 `curl` 或 `wget`。
+
 ## 首次使用
 
 1. 打开 `http://<主机>:5400`
@@ -208,6 +220,7 @@ cangling-update [选项] [命令]
   install-service      安装 systemd 服务
   uninstall-service    卸载 systemd 服务
   restart              重启本服务
+  update               从 GitHub 下载新版本（不重启服务）
 
 选项：
   --bind               监听地址

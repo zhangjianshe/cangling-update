@@ -43,7 +43,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          # Share registry + target/ across branches, tags, and version bumps.
+          # Default keys include the branch and Cargo.lock hash, so a
+          # release.sh tag (only the crate version changes) would miss.
+          shared-key: linux-${{ matrix.target }}
+          cache-on-failure: true
 
       - name: Build release
         env:
