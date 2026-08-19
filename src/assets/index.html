@@ -511,6 +511,7 @@
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false };
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, confirmClose: null };
     const composePoll = { timer: null, inflight: false };
+    const metaPoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { etag: "", disk: "", filename: "", selected: null, busy: false };
@@ -589,20 +590,54 @@
       $("#app").hidden = false;
       $("#who").textContent = user.username;
       touchActivity();
-      try {
-        state.meta = await api("/api/meta");
-        const m = state.meta;
-        const dockerOk = m.docker.available;
-        $("#meta").innerHTML =
-          `<span>程序 <b>v${esc(m.version)}</b></span>` +
-          `<span>${esc(m.os)} / <b>${esc(m.arch)}</b></span>` +
-          `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerOk ? esc(m.docker.version || "正常") : "未检测到"}</b> · compose ${esc(COMPOSE[m.docker.compose] || m.docker.compose)}</span>` +
-          `<span>数据库 <b>${esc(m.db_path)}</b></span>`;
-      } catch (e) {
-        $("#meta").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
-      }
+      await loadMeta();
       await refreshProjects();
       route();
+    }
+
+    function dockerLabel(d) {
+      if (!d) return "未检测到";
+      if (d.available) return esc(d.version || "正常");
+      if (d.version) return "守护进程未就绪";
+      return "未检测到";
+    }
+
+    function renderMetaBar(m) {
+      const dockerOk = !!(m.docker && m.docker.available);
+      $("#meta").innerHTML =
+        `<span>程序 <b>v${esc(m.version)}</b></span>` +
+        `<span>${esc(m.os)} / <b>${esc(m.arch)}</b></span>` +
+        `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerLabel(m.docker)}</b> · compose ${esc(COMPOSE[m.docker.compose] || m.docker.compose)}</span>` +
+        `<span>数据库 <b>${esc(m.db_path)}</b></span>`;
+    }
+
+    async function loadMeta() {
+      try {
+        state.meta = await api("/api/meta");
+        renderMetaBar(state.meta);
+        if (state.meta.docker && state.meta.docker.available) stopMetaPoll();
+        else startMetaPoll();
+      } catch (e) {
+        $("#meta").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+        startMetaPoll();
+      }
+    }
+
+    function startMetaPoll() {
+      if (metaPoll.timer) return;
+      metaPoll.timer = setInterval(async () => {
+        if (!state.user || metaPoll.inflight) return;
+        metaPoll.inflight = true;
+        try { await loadMeta(); } catch {}
+        metaPoll.inflight = false;
+      }, 3000);
+    }
+
+    function stopMetaPoll() {
+      if (metaPoll.timer) {
+        clearInterval(metaPoll.timer);
+        metaPoll.timer = null;
+      }
     }
 
     async function submitGate() {
@@ -633,6 +668,7 @@
 
     async function logout(message) {
       stopComposePoll();
+      stopMetaPoll();
       closeDialog();
       try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
       state.user = null;
@@ -1106,6 +1142,9 @@
           error: compose.error || "",
         });
         if (prev !== next) applyComposeStatus(compose);
+        if (compose.available && state.meta && !(state.meta.docker && state.meta.docker.available)) {
+          loadMeta();
+        }
       } catch {}
       composePoll.inflight = false;
     }

@@ -212,7 +212,7 @@ async fn meta(State(state): State<AppState>) -> Json<Meta> {
         config_dir: state.paths.config_dir.display().to_string(),
         db_path: state.paths.db_path.display().to_string(),
         port: state.port,
-        docker: state.docker.meta(),
+        docker: state.docker.meta().await,
     })
 }
 
@@ -1308,9 +1308,10 @@ async fn compose_status(
         }
         Err(err) => (Vec::new(), None, Some(err.to_string())),
     };
+    let meta = state.docker.meta().await;
 
     Ok(Json(ComposeStatus {
-        available: state.docker.available,
+        available: meta.available,
         compose_file: compose_file.map(|p| {
             p.file_name()
                 .unwrap_or_default()
@@ -1419,7 +1420,10 @@ async fn install_compose_file(
     dest: &std::path::Path,
     content: &str,
 ) -> Result<(), AppError> {
-    if matches!(state.docker.compose, crate::docker::ComposeKind::Missing) {
+    if matches!(
+        state.docker.compose_kind().await,
+        crate::docker::ComposeKind::Missing
+    ) {
         write_text_atomic(dest, content)?;
         return Ok(());
     }

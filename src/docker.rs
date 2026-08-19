@@ -2,7 +2,10 @@ use crate::models::{ComposeService, DockerMeta};
 use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
+use tokio::sync::RwLock;
 
 #[derive(Clone, Debug)]
 pub enum ComposeKind {
@@ -22,49 +25,134 @@ impl ComposeKind {
 }
 
 #[derive(Clone, Debug)]
-pub struct Docker {
-    pub available: bool,
-    pub version: Option<String>,
-    pub compose: ComposeKind,
+struct Snapshot {
+    cli: bool,
+    daemon: bool,
+    version: Option<String>,
+    compose: ComposeKind,
+    checked_at: Instant,
 }
 
-impl Docker {
-    pub async fn detect() -> Self {
-        let version = docker_version().await.ok();
-        let available = version.is_some();
-        let compose = if !available {
-            ComposeKind::Missing
-        } else if command_ok("docker", &["compose", "version"]).await {
-            ComposeKind::Plugin
-        } else if command_ok("docker-compose", &["version"]).await {
-            ComposeKind::Standalone
-        } else {
-            ComposeKind::Missing
-        };
-        Self {
-            available,
-            version,
-            compose,
-        }
+impl Snapshot {
+    fn available(&self) -> bool {
+        self.daemon
     }
 
-    pub fn meta(&self) -> DockerMeta {
+    fn to_meta(&self) -> DockerMeta {
         DockerMeta {
-            available: self.available,
+            available: self.available(),
             version: self.version.clone(),
             compose: self.compose.as_str().to_string(),
         }
     }
 
-    pub fn require(&self) -> Result<()> {
-        if !self.available {
-            bail!("本机未安装 docker 命令");
+    fn ready_error(&self) -> Option<&'static str> {
+        if self.daemon {
+            None
+        } else if self.cli {
+            Some("Docker 守护进程尚未就绪，请先启动 docker")
+        } else {
+            Some("本机未安装 docker 命令")
+        }
+    }
+}
+
+/// Cached docker/compose detection. Re-probes when the daemon was down at
+/// startup (or later disappears), so the UI can recover without a restart.
+#[derive(Clone)]
+pub struct Docker {
+    inner: Arc<RwLock<Snapshot>>,
+}
+
+impl std::fmt::Debug for Docker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.inner.try_read() {
+            Ok(s) => f
+                .debug_struct("Docker")
+                .field("available", &s.available())
+                .field("version", &s.version)
+                .field("compose", &s.compose)
+                .finish(),
+            Err(_) => f.write_str("Docker(..)"),
+        }
+    }
+}
+
+const REFRESH_WHEN_DOWN: Duration = Duration::from_secs(2);
+const REFRESH_WHEN_UP: Duration = Duration::from_secs(30);
+
+impl Docker {
+    pub async fn detect() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(detect_now().await)),
+        }
+    }
+
+    pub async fn meta(&self) -> DockerMeta {
+        self.refresh(false).await;
+        self.inner.read().await.to_meta()
+    }
+
+    pub async fn compose_kind(&self) -> ComposeKind {
+        self.refresh(false).await;
+        self.inner.read().await.compose.clone()
+    }
+
+    /// Re-detect immediately if the daemon is currently missing, then error if
+    /// docker still cannot be used.
+    async fn ensure(&self) -> Result<()> {
+        self.refresh(true).await;
+        if let Some(msg) = self.inner.read().await.ready_error() {
+            bail!("{msg}");
         }
         Ok(())
     }
 
+    /// `force`: always probe again when the daemon is currently down (user
+    /// action such as backup). Periodic callers pass `false` and honor TTL.
+    async fn refresh(&self, force: bool) {
+        {
+            let g = self.inner.read().await;
+            let ttl = if g.available() {
+                REFRESH_WHEN_UP
+            } else {
+                REFRESH_WHEN_DOWN
+            };
+            let stale = g.checked_at.elapsed() >= ttl;
+            if g.available() {
+                if !stale {
+                    return;
+                }
+            } else if !force && !stale {
+                return;
+            }
+        }
+        let next = detect_now().await;
+        let mut g = self.inner.write().await;
+        let ttl = if g.available() {
+            REFRESH_WHEN_UP
+        } else {
+            REFRESH_WHEN_DOWN
+        };
+        if !force && g.checked_at.elapsed() < ttl {
+            return;
+        }
+        let was = g.available();
+        let now = next.available();
+        if !was && now {
+            tracing::info!(
+                version = ?next.version,
+                compose = next.compose.as_str(),
+                "docker daemon is now available"
+            );
+        } else if was && !now {
+            tracing::warn!("docker daemon is no longer reachable");
+        }
+        *g = next;
+    }
+
     pub async fn load_archive(&self, archive: &Path) -> Result<Vec<String>> {
-        self.require()?;
+        self.ensure().await?;
         let output = Command::new("docker")
             .args(["load", "-i"])
             .arg(archive)
@@ -84,7 +172,7 @@ impl Docker {
     }
 
     pub async fn tag(&self, source: &str, target: &str) -> Result<()> {
-        self.require()?;
+        self.ensure().await?;
         if source == target {
             return Ok(());
         }
@@ -171,10 +259,11 @@ impl Docker {
         self.compose_run_owned(dir, &args).await
     }
 
-    pub fn compose_exec_argv(&self, service: &str) -> Result<(String, Vec<String>)> {
-        self.require()?;
+    pub async fn compose_exec_argv(&self, service: &str) -> Result<(String, Vec<String>)> {
+        self.ensure().await?;
         validate_service_name(service)?;
-        match self.compose {
+        let compose = self.inner.read().await.compose.clone();
+        match compose {
             ComposeKind::Plugin => Ok((
                 "docker".into(),
                 vec![
@@ -204,8 +293,9 @@ impl Docker {
     }
 
     async fn compose_run_owned(&self, dir: &Path, args: &[String]) -> Result<String> {
-        self.require()?;
-        let output = match self.compose {
+        self.ensure().await?;
+        let compose = self.inner.read().await.compose.clone();
+        let output = match compose {
             ComposeKind::Plugin => {
                 let mut cmd = Command::new("docker");
                 cmd.arg("compose").args(args).current_dir(dir);
@@ -318,19 +408,46 @@ pub fn parse_compose_ps(raw: &str) -> Vec<ComposeService> {
     services
 }
 
-async fn docker_version() -> Result<String> {
+async fn detect_now() -> Snapshot {
+    let client = docker_version_field("{{.Client.Version}}", false).await;
+    let server = docker_version_field("{{.Server.Version}}", true).await;
+    let cli = client.is_ok() || server.is_ok();
+    let daemon = server.is_ok();
+    let version = server.ok().or_else(|| client.ok());
+    let compose = if !daemon {
+        ComposeKind::Missing
+    } else if command_ok("docker", &["compose", "version"]).await {
+        ComposeKind::Plugin
+    } else if command_ok("docker-compose", &["version"]).await {
+        ComposeKind::Standalone
+    } else {
+        ComposeKind::Missing
+    };
+    Snapshot {
+        cli,
+        daemon,
+        version,
+        compose,
+        checked_at: Instant::now(),
+    }
+}
+
+/// `require_success` is for the server field (daemon must be up). Client
+/// version is accepted from stdout even when `docker version` exits 1 because
+/// the daemon is down.
+async fn docker_version_field(fmt: &str, require_success: bool) -> Result<String> {
     let output = Command::new("docker")
-        .args(["version", "--format", "{{.Client.Version}}"])
+        .args(["version", "--format", fmt])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await
         .context("docker not found")?;
-    if !output.status.success() {
+    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if require_success && !output.status.success() {
         bail!("docker version failed");
     }
-    let v = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if v.is_empty() {
+    if v.is_empty() || v == "<no value>" {
         bail!("empty docker version");
     }
     Ok(v)
@@ -364,6 +481,42 @@ impl IfEmpty for str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ready_error_distinguishes_missing_cli_and_daemon() {
+        let down = Snapshot {
+            cli: true,
+            daemon: false,
+            version: Some("27.0.0".into()),
+            compose: ComposeKind::Missing,
+            checked_at: Instant::now(),
+        };
+        assert_eq!(
+            down.ready_error(),
+            Some("Docker 守护进程尚未就绪，请先启动 docker")
+        );
+        assert!(!down.available());
+        assert_eq!(down.to_meta().version.as_deref(), Some("27.0.0"));
+
+        let missing = Snapshot {
+            cli: false,
+            daemon: false,
+            version: None,
+            compose: ComposeKind::Missing,
+            checked_at: Instant::now(),
+        };
+        assert_eq!(missing.ready_error(), Some("本机未安装 docker 命令"));
+
+        let ok = Snapshot {
+            cli: true,
+            daemon: true,
+            version: Some("27.0.0".into()),
+            compose: ComposeKind::Plugin,
+            checked_at: Instant::now(),
+        };
+        assert_eq!(ok.ready_error(), None);
+        assert!(ok.available());
+    }
 
     #[test]
     fn latest_tags() {

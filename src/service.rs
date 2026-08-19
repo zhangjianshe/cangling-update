@@ -35,8 +35,8 @@ pub fn install(bind: &str, port: u16, data_dir: Option<&Path>) -> Result<()> {
         r#"[Unit]
 Description=Cangling Update docker-compose host updater
 Documentation=file:{exe}
-After=network-online.target docker.service
-Wants=network-online.target
+After=network-online.target docker.service docker.socket
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple

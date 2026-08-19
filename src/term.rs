@@ -46,7 +46,7 @@ async fn pump(
     cols: u16,
     rows: u16,
 ) -> Result<()> {
-    let (program, args) = match docker.compose_exec_argv(service) {
+    let (program, args) = match docker.compose_exec_argv(service).await {
         Ok(v) => v,
         Err(err) => {
             let _ = socket

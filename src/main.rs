@@ -119,13 +119,15 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = db::open(&paths.db_path)?;
     let docker = Docker::detect().await;
+    let docker_meta = docker.meta().await;
 
     tracing::info!(
         exe_dir = %paths.exe_dir.display(),
         config = %paths.config_dir.display(),
         db = %paths.db_path.display(),
-        docker = ?docker.version,
-        compose = docker.compose.as_str(),
+        docker = ?docker_meta.version,
+        compose = %docker_meta.compose,
+        docker_available = docker_meta.available,
         "starting cangling-update"
     );
 
