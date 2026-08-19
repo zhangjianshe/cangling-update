@@ -213,6 +213,11 @@
       border: 1px solid var(--line);
     }
     .hint { color: var(--muted); line-height: 1.5; }
+    label.check {
+      display: flex; align-items: flex-start; gap: 8px;
+      margin: 10px 0 0; cursor: pointer; color: var(--muted); line-height: 1.45;
+    }
+    label.check input { margin-top: 3px; flex: 0 0 auto; }
     .gate {
       min-height: 100%; display: grid; place-items: center; padding: 24px;
     }
@@ -453,10 +458,12 @@
           <p class="hint">
             1. 新建项目，指向本机上已存在且包含 compose.yaml / docker-compose.yml 的绝对路径目录。<br/>
             2. 上传 <code>.tar.gz</code> 镜像包和/或 <code>.jar</code>。镜像会 <code>docker load</code> 并打成 <code>:latest</code>；JAR 按文件名替换 compose 里挂载的文件（如 <code>./jars/cis-server-1.0.0.jar</code>），并强制重建对应服务。<br/>
-            3. 可在版本列表中恢复任意历史快照，同时会重新加载该版本保存的镜像包。目录用 Git 备份（去重），并单独保存权限和属主。
+            3. 可在版本列表中恢复任意历史快照，同时会重新加载该版本保存的镜像包。目录做 <b>全量备份</b>（含 PostGIS 等数据目录）。备份前请先停止应用，页面会提示并默认先 Compose Down。
           </p>
           <button class="btn primary" onclick="location.hash='#/new'">新建项目</button>
-        </div>`;
+        </div>
+        <div id="orphan-box"></div>`;
+      loadOrphans("orphan-box");
     }
 
     function renderNew() {
@@ -470,6 +477,8 @@
           <div class="field"><label>说明</label><textarea id="f-desc" placeholder="选填"></textarea></div>
           <div class="field"><label>主机目录（绝对路径）</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" /></div>
           <div class="hint" id="dir-hint">目录必须已存在于本机，并且包含 Compose 文件。</div>
+          <p class="hint">创建时会全量备份该目录（含数据库数据）。正在运行的应用可能锁住文件，导致备份失败或不完整。</p>
+          <label class="check"><input type="checkbox" id="f-stop" checked /> 备份前先执行 Compose Down（推荐）。备份结束后会再启动。</label>
           <div class="progress-wrap" id="create-prog" hidden>
             <div class="progress-meta"><span id="create-prog-msg">准备中</span><span id="create-prog-pct">0%</span></div>
             <div class="progress" id="create-prog-bar"><span></span></div>
@@ -479,9 +488,11 @@
             <button class="btn" id="btn-check">检查目录</button>
             <button class="btn primary" id="btn-create">创建</button>
           </div>
-        </div>`;
+        </div>
+        <div id="orphan-box"></div>`;
       $("#btn-check").onclick = checkDir;
       $("#btn-create").onclick = createProject;
+      loadOrphans("orphan-box");
     }
 
     async function checkDir() {
@@ -548,7 +559,54 @@
       return () => { if (timer) clearInterval(timer); };
     }
 
+    async function loadOrphans(boxId) {
+      const box = document.getElementById(boxId);
+      if (!box) return;
+      try {
+        const items = await api("/api/orphans");
+        if (!items.length) {
+          box.innerHTML = "";
+          return;
+        }
+        box.innerHTML = `
+          <div class="card">
+            <h3>未完成的备份残留</h3>
+            <p class="hint">首次备份或升级失败时，磁盘上可能留下没有项目/版本记录的目录，平时列表里看不到。可在此查看并清理。</p>
+            <table>
+              <thead><tr><th>编号</th><th>大小</th><th>时间</th><th>路径</th><th></th></tr></thead>
+              <tbody>${items.map(o => `<tr>
+                <td class="path">${esc(o.id)}</td>
+                <td>${fmtBytes(o.bytes || 0)}</td>
+                <td>${esc((o.modified || "").replace("T", " ").slice(0, 19) || "—")}</td>
+                <td class="path">${esc(o.path)}</td>
+                <td><button class="btn danger" data-orphan="${esc(o.id)}">清理</button></td>
+              </tr>`).join("")}</tbody>
+            </table>
+          </div>`;
+        for (const b of box.querySelectorAll("[data-orphan]")) {
+          b.onclick = async () => {
+            if (!confirm("确定删除这份残留备份？")) return;
+            try {
+              const oid = b.getAttribute("data-orphan") || "";
+              await api("/api/orphans/" + encodeURIComponent(oid), { method: "DELETE" });
+              await loadOrphans(boxId);
+            } catch (e) {
+              flash("err", e.message);
+            }
+          };
+        }
+      } catch (e) {
+        box.innerHTML = `<div class="flash err">${esc(e.message)}</div>`;
+      }
+    }
+
     async function createProject() {
+      const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
+      if (!confirm(
+        "将全量备份该目录（包含 PostGIS 等数据库文件）。\n" +
+        (stopFirst ? "会先停止 Compose，备份完成后再启动。\n" : "请先手动停止当前应用，否则备份可能失败或不完整。\n") +
+        "确定继续？"
+      )) return;
       const btn = $("#btn-create");
       let stop = () => {};
       try {
@@ -562,6 +620,7 @@
           description: $("#f-desc").value,
           directory: $("#f-dir").value,
           job_id: job.id,
+          stop_compose: stopFirst,
         };
         const p = await api("/api/projects", {
           method: "POST",
@@ -572,6 +631,7 @@
         location.hash = "#/p/" + p.id;
       } catch (e) {
         flash("err", e.message);
+        loadOrphans("orphan-box");
       } finally {
         stop();
         btn.disabled = false;
@@ -634,13 +694,14 @@
         </div>
         <div class="card">
           <h3>导入镜像 / JAR / 发布新版本</h3>
-          <p class="hint">可上传 <code>docker save</code> 镜像包，或直接上传 <code>.jar</code>（文件名需与 compose 挂载一致，例如 <code>cis-server-1.0.0.jar</code>）。系统先备份目录；JAR 会覆盖挂载路径并强制重建对应服务。</p>
+          <p class="hint">可上传 <code>docker save</code> 镜像包，或直接上传 <code>.jar</code>（文件名需与 compose 挂载一致，例如 <code>cis-server-1.0.0.jar</code>）。发布前会<b>全量备份</b>目录（含数据库数据），请先停止应用。</p>
           <div class="drop" id="drop">将 .tar.gz / .tgz / .tar / .jar 拖到此处，或点击选择
             <input id="file" type="file" accept=".tar,.tar.gz,.tgz,.jar,application/gzip,application/java-archive" multiple hidden />
           </div>
           <ul class="filelist" id="filelist"></ul>
           <div class="field" style="margin-top:12px"><label>备注</label><input id="note" type="text" placeholder="本次升级改了什么" /></div>
-          <label class="hint"><input type="checkbox" id="restart" checked /> 导入成功后重启 Compose（JAR 会强制重建对应服务）</label>
+          <label class="check"><input type="checkbox" id="f-stop" checked /> 备份前先执行 Compose Down（推荐）</label>
+          <label class="check"><input type="checkbox" id="restart" checked /> 完成后启动 Compose（JAR 会强制重建对应服务）</label>
           <div class="progress-wrap" id="prog" hidden>
             <div class="progress-meta"><span id="prog-msg">准备中</span><span id="prog-pct">0%</span></div>
             <div class="progress" id="prog-bar"><span></span></div>
@@ -674,7 +735,8 @@
             <thead><tr><th>版本</th><th>类型</th><th>备注</th><th>镜像</th><th>时间</th><th></th></tr></thead>
             <tbody>${versions || `<tr><td colspan="6" class="empty">暂无版本</td></tr>`}</tbody>
           </table>
-        </div>`;
+        </div>
+        <div id="orphan-box"></div>`;
 
       const drop = $("#drop");
       const file = $("#file");
@@ -698,6 +760,7 @@
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
+      loadOrphans("orphan-box");
     }
 
     function addFiles(list) {
@@ -732,13 +795,24 @@
         flash("err", "请至少选择一个镜像包或 JAR，或使用「仅备份当前目录」。");
         return;
       }
+      const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
+      if (!confirm(
+        "将全量备份当前目录（包含数据库数据）。\n" +
+        (stopFirst ? "会先停止 Compose，再备份。\n" : "请先手动停止当前应用，否则备份可能失败或不完整。\n") +
+        "确定继续？"
+      )) {
+        return;
+      }
       let stop = () => {};
       setBusy("update");
       try {
         const job = await api("/api/jobs", { method: "POST" });
         const fd = new FormData();
         fd.append("note", $("#note").value || (snapshotOnly ? "目录快照" : ""));
-        fd.append("restart", snapshotOnly ? "false" : ($("#restart").checked ? "true" : "false"));
+        fd.append("stop_compose", stopFirst ? "true" : "false");
+        fd.append("restart", snapshotOnly
+          ? (stopFirst ? "true" : "false")
+          : ($("#restart") && $("#restart").checked ? "true" : "false"));
         fd.append("job_id", job.id);
         if (!snapshotOnly) for (const f of state.files) fd.append("files", f, f.name);
 
@@ -797,7 +871,12 @@
         flash("err", "正在恢复中，请勿重复操作");
         return;
       }
-      if (!confirm("确定恢复此版本？恢复前会先备份当前目录。")) return;
+      const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
+      if (!confirm(
+        "确定恢复此版本？恢复前会先全量备份当前目录。\n" +
+        (stopFirst ? "会先停止 Compose，再备份并恢复。\n" : "请先手动停止当前应用。\n") +
+        "确定继续？"
+      )) return;
       if (state.busy) {
         flash("err", "正在恢复中，请勿重复操作");
         return;
@@ -816,6 +895,7 @@
           body: JSON.stringify({
             version_id: versionId,
             restart: $("#restart") ? $("#restart").checked : true,
+            stop_compose: stopFirst,
             job_id: job.id,
           }),
         });

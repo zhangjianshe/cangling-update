@@ -123,7 +123,7 @@ fn snapshot_git(
     let mut attrs = Vec::new();
     let mut total = 0u64;
     let mut files = 0u64;
-    for entry in WalkDir::new(src).follow_links(false) {
+    for entry in walk_project(src) {
         let entry = entry.with_context(|| format!("walk {}", src.display()))?;
         let rel = match entry.path().strip_prefix(src) {
             Ok(r) if !r.as_os_str().is_empty() => r,
@@ -204,7 +204,8 @@ fn snapshot_git(
     let mut current_paths = HashSet::new();
     for (rel, abs, len, mode) in &file_entries {
         current_paths.insert(rel.clone());
-        let sha = git_hash_object_file(&repo, abs, rel, done, total, on_progress)?;
+        let sha = git_hash_object_file(&repo, abs, rel, done, total, on_progress)
+            .with_context(|| format!("读取 {rel} 失败，请先停止应用后再全量备份"))?;
         let git_mode = if mode & 0o111 != 0 { "100755" } else { "100644" };
         index_info.push_str(&format!("{git_mode} blob {sha}\t{rel}\n"));
         done = done.saturating_add(*len);
@@ -420,7 +421,7 @@ fn ensure_git_repo(repo: &Path) -> Result<()> {
         if let Some(parent) = exclude.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(exclude, ".git\nlost+found\n")?;
+        fs::write(exclude, GIT_EXCLUDE)?;
     }
     Ok(())
 }
@@ -505,7 +506,7 @@ fn snapshot_tar_gz(
 
     let mut total = 0u64;
     let mut files = 0u64;
-    for entry in WalkDir::new(src).follow_links(false) {
+    for entry in walk_project(src) {
         let entry = entry.with_context(|| format!("walk {}", src.display()))?;
         let rel = match entry.path().strip_prefix(src) {
             Ok(r) if !r.as_os_str().is_empty() => r,
@@ -527,7 +528,7 @@ fn snapshot_tar_gz(
     tar.follow_symlinks(false);
 
     let mut done = 0u64;
-    for entry in WalkDir::new(src).follow_links(false) {
+    for entry in walk_project(src) {
         let entry = entry.with_context(|| format!("walk {}", src.display()))?;
         let rel = match entry.path().strip_prefix(src) {
             Ok(r) if !r.as_os_str().is_empty() => r,
@@ -734,7 +735,7 @@ fn snapshot_copy_tree(
 ) -> Result<u64> {
     fs::create_dir_all(dst).with_context(|| format!("create snapshot {}", dst.display()))?;
     let mut total = 0u64;
-    for entry in WalkDir::new(src).follow_links(false) {
+    for entry in walk_project(src) {
         let entry = entry?;
         if !entry.file_type().is_file() {
             continue;
@@ -751,7 +752,7 @@ fn snapshot_copy_tree(
     on_progress(0, total, "开始备份");
     let mut files = 0u64;
     let mut done = 0u64;
-    for entry in WalkDir::new(src).follow_links(false) {
+    for entry in walk_project(src) {
         let entry = entry?;
         let rel = match entry.path().strip_prefix(src) {
             Ok(r) if !r.as_os_str().is_empty() => r,
@@ -790,7 +791,7 @@ fn restore_copy_tree(
 
 fn collect_rel_paths(root: &Path) -> Result<HashSet<PathBuf>> {
     let mut set = HashSet::new();
-    for entry in WalkDir::new(root).follow_links(false) {
+    for entry in walk_project(root) {
         let entry = entry?;
         if let Ok(rel) = entry.path().strip_prefix(root) {
             if !rel.as_os_str().is_empty() && !should_skip(rel) {
@@ -803,7 +804,16 @@ fn collect_rel_paths(root: &Path) -> Result<HashSet<PathBuf>> {
 
 fn remove_extras(live: &Path, kept: &HashSet<PathBuf>) -> Result<()> {
     let mut extras: Vec<PathBuf> = Vec::new();
-    for entry in WalkDir::new(live).follow_links(false).contents_first(true) {
+    for entry in WalkDir::new(live)
+        .follow_links(false)
+        .contents_first(true)
+        .into_iter()
+        .filter_entry(|e| match e.path().strip_prefix(live) {
+            Ok(rel) if rel.as_os_str().is_empty() => true,
+            Ok(rel) => !should_skip(rel),
+            Err(_) => true,
+        })
+    {
         let entry = entry?;
         let rel = match entry.path().strip_prefix(live) {
             Ok(r) if !r.as_os_str().is_empty() => r.to_path_buf(),
@@ -826,10 +836,27 @@ fn remove_extras(live: &Path, kept: &HashSet<PathBuf>) -> Result<()> {
     Ok(())
 }
 
+const SKIP_DIR_NAMES: &[&str] = &[".git", "lost+found"];
+
+const GIT_EXCLUDE: &str = ".git\nlost+found\n";
+
+fn walk_project(src: &Path) -> walkdir::FilterEntry<walkdir::IntoIter, impl FnMut(&walkdir::DirEntry) -> bool + '_> {
+    WalkDir::new(src)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(move |e| match e.path().strip_prefix(src) {
+            Ok(rel) if rel.as_os_str().is_empty() => true,
+            Ok(rel) => !should_skip(rel),
+            Err(_) => true,
+        })
+}
+
 fn should_skip(rel: &Path) -> bool {
     rel.components().any(|c| {
-        let s = c.as_os_str();
-        s == ".git" || s == "lost+found"
+        let name = c.as_os_str().to_string_lossy();
+        SKIP_DIR_NAMES
+            .iter()
+            .any(|skip| name.eq_ignore_ascii_case(skip))
     })
 }
 
@@ -846,11 +873,29 @@ pub fn remove_dir_if_exists(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn dir_size(path: &Path) -> u64 {
+    WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum()
+}
+
 #[cfg(unix)]
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn skips_running_database_dirs() {
+        assert!(should_skip(Path::new(".git/config")));
+        assert!(should_skip(Path::new("lost+found")));
+        assert!(!should_skip(Path::new("core/postgis/base/20992/498954")));
+        assert!(!should_skip(Path::new("jars/cis-server-1.0.0.jar")));
+    }
 
     #[test]
     fn tar_roundtrip_keeps_mode() {
@@ -907,6 +952,37 @@ mod tests {
         assert_eq!(fs::read(&restored).unwrap(), b"hello-git-jar");
         let mode = fs::metadata(&restored).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unreadable_file_fails_full_backup() {
+        if !git_available() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "cangling-unreadable-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let src = root.join("src");
+        let gitref = root.join("pid").join("vid").join("tree.gitref");
+        fs::create_dir_all(&src).unwrap();
+        let file = src.join("secret.dat");
+        fs::write(&file, b"secret").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(&file).is_ok() {
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+        let err = snapshot_directory(&src, &gitref).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("secret.dat") || msg.contains("读取"),
+            "unexpected error: {msg}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

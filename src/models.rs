@@ -48,6 +48,8 @@ pub struct CreateProject {
     pub description: Option<String>,
     pub directory: String,
     pub job_id: Option<String>,
+    #[serde(default)]
+    pub stop_compose: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,6 +64,8 @@ pub struct RollbackBody {
     pub version_id: String,
     #[serde(default)]
     pub restart: bool,
+    #[serde(default)]
+    pub stop_compose: bool,
     pub job_id: Option<String>,
 }
 
@@ -129,6 +133,14 @@ pub struct UpdateResult {
 #[derive(Debug, Serialize)]
 pub struct LogsResult {
     pub logs: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrphanBackup {
+    pub id: String,
+    pub path: String,
+    pub bytes: u64,
+    pub modified: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

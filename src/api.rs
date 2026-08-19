@@ -1,7 +1,7 @@
 use crate::auth;
 use crate::backup::{
-    remove_dir_if_exists, restore_directory, restore_directory_with_progress, snapshot_directory,
-    snapshot_directory_with_progress,
+    dir_size, remove_dir_if_exists, restore_directory, restore_directory_with_progress,
+    snapshot_directory, snapshot_directory_with_progress,
 };
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
@@ -34,6 +34,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/meta", get(meta))
         .route("/api/validate-directory", post(validate_directory))
+        .route("/api/orphans", get(list_orphans))
+        .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/{id}",
@@ -88,6 +90,43 @@ fn job_ok(state: &AppState, job_id: Option<&str>, message: &str) {
 fn job_err(state: &AppState, job_id: Option<&str>, error: &str) {
     if let Some(id) = job_id {
         state.jobs.finish_err(id, error);
+    }
+}
+
+async fn compose_down_for_backup(
+    state: &AppState,
+    live: &std::path::Path,
+    job_id: Option<&str>,
+    stop: bool,
+) -> Result<bool, AppError> {
+    if !stop {
+        return Ok(false);
+    }
+    job_set(
+        state,
+        job_id,
+        "compose",
+        "正在停止 Compose，以便全量备份…",
+        0,
+        0,
+    );
+    state
+        .docker
+        .compose_down(live)
+        .await
+        .map_err(|e| AppError::bad(format!("停止 Compose 失败，已取消备份：{e}")))?;
+    Ok(true)
+}
+
+async fn compose_up_best_effort(
+    state: &AppState,
+    live: &std::path::Path,
+    job_id: Option<&str>,
+    message: &str,
+) {
+    job_set(state, job_id, "compose", message, 0, 0);
+    if let Err(err) = state.docker.compose_up(live).await {
+        tracing::warn!("compose up after backup: {err:#}");
     }
 }
 
@@ -228,47 +267,88 @@ async fn create_project(
     let version_id = Uuid::new_v4().to_string();
     let tree = state.paths.version_tree(&id, &version_id);
     let live = PathBuf::from(&inspected.directory);
+    let stopped = compose_down_for_backup(
+        &state,
+        &live,
+        body.job_id.as_deref(),
+        body.stop_compose,
+    )
+    .await?;
     let tree_clone = tree.clone();
     let jobs = state.jobs.clone();
     let job_id = body.job_id.clone();
+    let live_for_snap = live.clone();
     job_set(&state, job_id.as_deref(), "snapshot", "正在建立基线快照…", 0, 0);
     if let Err(err) = tokio::task::spawn_blocking(move || {
-        snapshot_blocking(live, tree_clone, jobs, job_id)
+        snapshot_blocking(live_for_snap, tree_clone, jobs, job_id)
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))
     .and_then(|r| r.map_err(AppError::from))
     {
         job_err(&state, body.job_id.as_deref(), &err.to_string());
+        let root = state.paths.project_backup_root(&id);
+        let _ = remove_dir_if_exists(&root);
+        if stopped {
+            compose_up_best_effort(&state, &live, body.job_id.as_deref(), "备份失败，正在重新启动 Compose…").await;
+        }
         return Err(err);
     }
 
-    {
+    let db_err = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         if let Err(err) = db::insert_project(&conn, &project) {
-            let _ = remove_dir_if_exists(&state.paths.version_dir(&id, &version_id));
-            let msg = err.to_string();
-            if msg.contains("UNIQUE") {
-                job_err(&state, body.job_id.as_deref(), "已存在同名项目");
-                return Err(AppError::Conflict("已存在同名项目".into()));
+            Some(err)
+        } else {
+            let version = Version {
+                id: version_id.clone(),
+                project_id: id.clone(),
+                version_no: 1,
+                label: "v1".into(),
+                note: "基线快照".into(),
+                backup_path: tree.display().to_string(),
+                images: Vec::new(),
+                jars: Vec::new(),
+                is_current: true,
+                kind: "baseline".into(),
+                created_at: now,
+            };
+            if let Err(err) = db::insert_version(&conn, &version) {
+                let _ = db::delete_project(&conn, &id);
+                Some(err)
+            } else {
+                None
             }
-            job_err(&state, body.job_id.as_deref(), &msg);
-            return Err(err.into());
         }
-        let version = Version {
-            id: version_id.clone(),
-            project_id: id.clone(),
-            version_no: 1,
-            label: "v1".into(),
-            note: "基线快照".into(),
-            backup_path: tree.display().to_string(),
-            images: Vec::new(),
-            jars: Vec::new(),
-            is_current: true,
-            kind: "baseline".into(),
-            created_at: now,
-        };
-        db::insert_version(&conn, &version)?;
+    };
+    if let Some(err) = db_err {
+        let root = state.paths.project_backup_root(&id);
+        let _ = remove_dir_if_exists(&root);
+        if stopped {
+            compose_up_best_effort(
+                &state,
+                &live,
+                body.job_id.as_deref(),
+                "写入失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
+        let msg = err.to_string();
+        if msg.contains("UNIQUE") {
+            job_err(&state, body.job_id.as_deref(), "已存在同名项目");
+            return Err(AppError::Conflict("已存在同名项目".into()));
+        }
+        job_err(&state, body.job_id.as_deref(), &msg);
+        return Err(err.into());
+    }
+    if stopped {
+        compose_up_best_effort(
+            &state,
+            &live,
+            body.job_id.as_deref(),
+            "基线已建立，正在重新启动 Compose…",
+        )
+        .await;
     }
     job_ok(&state, body.job_id.as_deref(), "基线快照已建立");
 
@@ -313,6 +393,138 @@ async fn update_project(
     db::get_project(&conn, &id)?
         .map(Json)
         .ok_or_else(|| AppError::not_found("项目不存在"))
+}
+
+fn orphan_stat(id: String, path: &std::path::Path) -> OrphanBackup {
+    let modified = std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+    OrphanBackup {
+        id,
+        path: path.display().to_string(),
+        bytes: dir_size(path),
+        modified,
+    }
+}
+
+fn valid_backup_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.contains("..")
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn collect_orphans(
+    backups_dir: &std::path::Path,
+    known_projects: &std::collections::HashSet<String>,
+    versions_by_project: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+) -> Vec<OrphanBackup> {
+    let mut orphans = Vec::new();
+    if backups_dir.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(backups_dir) {
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if !known_projects.contains(&id) {
+                    orphans.push(orphan_stat(id, &path));
+                }
+            }
+        }
+    }
+    for pid in known_projects {
+        let Some(known_versions) = versions_by_project.get(pid) else {
+            continue;
+        };
+        let root = backups_dir.join(pid);
+        if !root.is_dir() {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == "repo.git" || known_versions.contains(&name) {
+                continue;
+            }
+            orphans.push(orphan_stat(format!("{pid}/{name}"), &path));
+        }
+    }
+    orphans.sort_by(|a, b| a.id.cmp(&b.id));
+    orphans
+}
+
+async fn list_orphans(State(state): State<AppState>) -> Result<Json<Vec<OrphanBackup>>, AppError> {
+    let (projects, versions_by_project) = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        let projects = db::list_projects(&conn)?;
+        let mut versions_by_project = std::collections::HashMap::new();
+        for p in &projects {
+            let ids: std::collections::HashSet<String> = db::list_versions(&conn, &p.id)?
+                .into_iter()
+                .map(|v| v.id)
+                .collect();
+            versions_by_project.insert(p.id.clone(), ids);
+        }
+        (projects, versions_by_project)
+    };
+    let known: std::collections::HashSet<String> = projects.into_iter().map(|p| p.id).collect();
+    Ok(Json(collect_orphans(
+        &state.paths.backups_dir,
+        &known,
+        &versions_by_project,
+    )))
+}
+
+async fn delete_orphan(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let id = id.trim_matches('/').to_string();
+    if id.contains("..") {
+        return Err(AppError::bad("无效的残留备份编号"));
+    }
+    let root = if let Some((pid, vid)) = id.split_once('/') {
+        if !valid_backup_id(pid) || !valid_backup_id(vid) {
+            return Err(AppError::bad("无效的残留备份编号"));
+        }
+        let exists = {
+            let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+            db::get_version(&conn, pid, vid)?.is_some()
+        };
+        if exists {
+            return Err(AppError::Conflict("该目录属于已登记版本，请用「删除项目」".into()));
+        }
+        state.paths.version_dir(pid, vid)
+    } else {
+        if !valid_backup_id(&id) {
+            return Err(AppError::bad("无效的残留备份编号"));
+        }
+        let known = {
+            let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+            db::get_project(&conn, &id)?.is_some()
+        };
+        if known {
+            return Err(AppError::Conflict("该目录属于已登记项目，请用「删除项目」".into()));
+        }
+        state.paths.project_backup_root(&id)
+    };
+    if !root.exists() {
+        return Err(AppError::not_found("没有找到该残留备份"));
+    }
+    tokio::task::spawn_blocking(move || remove_dir_if_exists(&root))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn delete_project(
@@ -361,6 +573,7 @@ async fn create_update(
 struct IncomingUpload {
     note: String,
     restart: bool,
+    stop_compose: bool,
     files: Vec<PathBuf>,
     tmp: PathBuf,
     job_id: Option<String>,
@@ -375,6 +588,7 @@ async fn receive_upload(
 
     let mut note = String::new();
     let mut restart = true;
+    let mut stop_compose = false;
     let mut files = Vec::new();
     let mut job_id = None;
 
@@ -410,6 +624,14 @@ async fn receive_upload(
                     .await
                     .map_err(|e| AppError::bad(e.to_string()))?;
                 restart = matches!(v.trim(), "1" | "true" | "on" | "yes");
+                continue;
+            }
+            if field_name == "stop_compose" {
+                let v = field
+                    .text()
+                    .await
+                    .map_err(|e| AppError::bad(e.to_string()))?;
+                stop_compose = matches!(v.trim(), "1" | "true" | "on" | "yes");
                 continue;
             }
             if filename.is_empty() {
@@ -448,6 +670,7 @@ async fn receive_upload(
     Ok(IncomingUpload {
         note,
         restart,
+        stop_compose,
         files,
         tmp,
         job_id,
@@ -463,6 +686,7 @@ async fn apply_update(
     let IncomingUpload {
         note,
         restart,
+        stop_compose,
         files: staged_files,
         tmp,
         job_id,
@@ -476,6 +700,17 @@ async fn apply_update(
     let images_dir = state.paths.version_images(&project.id, &version_id);
     let jars_dir = state.paths.version_jars(&project.id, &version_id);
     let live = PathBuf::from(&project.directory);
+    let version_dir = state.paths.version_dir(&project.id, &version_id);
+
+    let stopped = compose_down_for_backup(&state, &live, job_id.as_deref(), stop_compose).await;
+    let stopped = match stopped {
+        Ok(v) => v,
+        Err(err) => {
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            job_err(&state, job_id.as_deref(), &err.to_string());
+            return Err(err);
+        }
+    };
 
     let tree_clone = tree.clone();
     let live_clone = live.clone();
@@ -490,13 +725,20 @@ async fn apply_update(
     .and_then(|r| r.map_err(AppError::from))
     {
         job_err(&state, job_id.as_deref(), &err.to_string());
+        let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
+        if stopped {
+            compose_up_best_effort(&state, &live, job_id.as_deref(), "备份失败，正在重新启动 Compose…").await;
+        }
         return Err(err);
     }
 
     if let Err(err) = tokio::fs::create_dir_all(&images_dir).await {
-        let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
+        let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
+        if stopped {
+            compose_up_best_effort(&state, &live, job_id.as_deref(), "发布失败，正在重新启动 Compose…").await;
+        }
         return Err(err.into());
     }
 
@@ -522,8 +764,11 @@ async fn apply_update(
     }
     if let Err(err) = load_and_retag(&state, &archives, &images_dir, &mut loaded, job_id.as_deref()).await {
         job_err(&state, job_id.as_deref(), &err.to_string());
-        let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
+        let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
+        if stopped {
+            compose_up_best_effort(&state, &live, job_id.as_deref(), "发布失败，正在重新启动 Compose…").await;
+        }
         return Err(err);
     }
 
@@ -541,8 +786,11 @@ async fn apply_update(
     }
     if let Err(err) = deploy_jars(&jar_files, &jars_dir, &live, &mounts, &mut deployed_jars).await {
         job_err(&state, job_id.as_deref(), &err.to_string());
-        let _ = remove_dir_if_exists(&state.paths.version_dir(&project.id, &version_id));
+        let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
+        if stopped {
+            compose_up_best_effort(&state, &live, job_id.as_deref(), "发布失败，正在重新启动 Compose…").await;
+        }
         return Err(err);
     }
     let _ = tokio::fs::remove_dir_all(&tmp).await;
@@ -562,10 +810,29 @@ async fn apply_update(
         created_at: now,
     };
 
-    {
+    let db_err = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        db::insert_version(&conn, &version)?;
-        db::mark_current(&conn, &project.id, &version_id)?;
+        match db::insert_version(&conn, &version) {
+            Ok(()) => {
+                db::mark_current(&conn, &project.id, &version_id)?;
+                None
+            }
+            Err(err) => Some(err),
+        }
+    };
+    if let Some(err) = db_err {
+        let _ = remove_dir_if_exists(&version_dir);
+        if stopped {
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "写入失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
+        job_err(&state, job_id.as_deref(), &err.to_string());
+        return Err(err.into());
     }
 
     if restart {
@@ -771,7 +1038,15 @@ async fn rollback(
         db::next_version_no(&conn, &id)?
     };
     let safety_tree = state.paths.version_tree(&id, &safety_id);
+    let safety_dir = state.paths.version_dir(&id, &safety_id);
     let live = PathBuf::from(&project.directory);
+    let stopped = compose_down_for_backup(
+        &state,
+        &live,
+        body.job_id.as_deref(),
+        body.stop_compose,
+    )
+    .await?;
     let safety_tree_clone = safety_tree.clone();
     let live_clone = live.clone();
     let jobs = state.jobs.clone();
@@ -785,6 +1060,16 @@ async fn rollback(
     .and_then(|r| r.map_err(AppError::from))
     {
         job_err(&state, body.job_id.as_deref(), &err.to_string());
+        let _ = remove_dir_if_exists(&safety_dir);
+        if stopped {
+            compose_up_best_effort(
+                &state,
+                &live,
+                body.job_id.as_deref(),
+                "备份失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
         return Err(err);
     }
 
@@ -821,6 +1106,15 @@ async fn rollback(
     .and_then(|r| r.map_err(AppError::from))
     {
         job_err(&state, body.job_id.as_deref(), &err.to_string());
+        if stopped {
+            compose_up_best_effort(
+                &state,
+                &live,
+                body.job_id.as_deref(),
+                "恢复失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
         return Err(err);
     }
 
@@ -1016,4 +1310,58 @@ async fn compose_logs(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Json(LogsResult { logs }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+
+    fn temp_root() -> PathBuf {
+        let p = std::env::temp_dir().join(format!(
+            "cangling-orphan-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn lists_failed_first_backup_dir() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("leftover-id").join("repo.git")).unwrap();
+        fs::write(root.join("leftover-id").join("repo.git").join("HEAD"), b"ref").unwrap();
+        let items = collect_orphans(&root, &HashSet::new(), &HashMap::new());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "leftover-id");
+        assert!(items[0].bytes > 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_leftover_version_under_known_project() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("proj").join("repo.git")).unwrap();
+        fs::create_dir_all(root.join("proj").join("good-ver")).unwrap();
+        fs::create_dir_all(root.join("proj").join("ghost-ver")).unwrap();
+        fs::write(root.join("proj").join("ghost-ver").join("tree.gitref"), b"dead").unwrap();
+        let known = HashSet::from(["proj".into()]);
+        let versions = HashMap::from([("proj".into(), HashSet::from(["good-ver".into()]))]);
+        let items = collect_orphans(&root, &known, &versions);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, "proj/ghost-ver");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn valid_backup_id_rejects_traversal() {
+        assert!(valid_backup_id("a1b2-c3"));
+        assert!(!valid_backup_id(".."));
+        assert!(!valid_backup_id("a/b"));
+        assert!(!valid_backup_id(""));
+    }
 }
