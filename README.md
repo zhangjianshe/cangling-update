@@ -43,8 +43,8 @@ make arm64
 | `cangling-update-linux-arm64` | ARM64 |
 | 对应的 `.sha256` | 校验和 |
 
-- 推送 `main` / 开 PR / 手动 Run workflow：在 Actions 里下载构建产物
-- 打标签并推送后，自动发布到 GitHub Releases。也可以直接执行：
+- 开 PR 或手动 Run workflow：在 Actions 里下载构建产物
+- `./release.sh` 推送 `v*` 标签后，自动发布到 GitHub Releases（同一 commit 不会因再推 main 编第二次）：
 
 ```bash
 ./release.sh          # 0.1.0 -> 0.1.1，提交并推送 tag

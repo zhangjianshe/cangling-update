@@ -1,11 +1,16 @@
 name: Build and release
 
 on:
+  # Only tags (from ./release.sh) and manual runs publish binaries.
+  # A release.sh push also updates main; do not build again on that branch push.
   push:
-    branches: [main, master]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
