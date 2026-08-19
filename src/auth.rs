@@ -219,7 +219,7 @@ fn normalize_username(raw: &str) -> Result<String, AppError> {
     Ok(name.to_string())
 }
 
-fn validate_password(password: &str) -> Result<(), AppError> {
+pub fn validate_password(password: &str) -> Result<(), AppError> {
     if password.len() < 8 {
         return Err(AppError::bad("密码至少 8 位"));
     }
@@ -235,7 +235,7 @@ async fn hash_password_async(password: String) -> Result<String, AppError> {
         .map_err(|e| AppError::internal(e.to_string()))?
 }
 
-fn hash_password(password: &str) -> Result<String, AppError> {
+pub fn hash_password(password: &str) -> Result<String, AppError> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)

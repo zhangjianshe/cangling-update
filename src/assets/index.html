@@ -207,7 +207,7 @@
   <div class="gate" id="gate">
     <div class="card">
       <h3 id="gate-title">登录</h3>
-      <p class="hint" id="gate-hint">2 小时无操作将自动退出。</p>
+      <p class="hint" id="gate-hint">2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。</p>
       <div id="gate-flash" hidden></div>
       <div class="field"><label>用户名</label><input id="gate-user" type="text" autocomplete="username" /></div>
       <div class="field"><label>密码</label><input id="gate-pass" type="password" autocomplete="current-password" /></div>
@@ -309,9 +309,9 @@
     function renderGate() {
       const setup = state.needsSetup;
       $("#gate-title").textContent = setup ? "初始化管理员" : "登录";
-      $("#gate-hint").textContent = setup
+      $("#gate-hint").innerHTML = setup
         ? "首次使用请设置管理员账号。之后 2 小时无操作将自动退出。"
-        : "2 小时无操作将自动退出。";
+        : "2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。";
       $("#gate-pass2-wrap").hidden = !setup;
       $("#gate-submit").textContent = setup ? "创建并进入" : "登录";
       $("#gate-pass").autocomplete = setup ? "new-password" : "current-password";

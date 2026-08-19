@@ -284,4 +284,23 @@ pub fn delete_session(conn: &Connection, token: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn list_usernames(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT username FROM users ORDER BY username")?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn update_password_hash(conn: &Connection, user_id: &str, password_hash: &str) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+        params![password_hash, user_id],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn delete_sessions_for_user(conn: &Connection, user_id: &str) -> Result<()> {
+    conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])?;
+    Ok(())
+}
+
 
