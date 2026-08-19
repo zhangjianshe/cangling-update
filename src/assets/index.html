@@ -118,8 +118,19 @@
       border: 1px solid var(--line); background: var(--bg-3); color: var(--muted);
       font-size: 16px; font-weight: 500; vertical-align: middle;
     }
-    .header-right { display: flex; align-items: center; gap: 14px; min-width: 0; }
-    .meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+    .header-right { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+    header .btn {
+      height: 34px; display: inline-flex; align-items: center; box-sizing: border-box;
+    }
+    .meta {
+      color: var(--muted); display: flex; align-items: center; gap: 8px;
+      flex-wrap: wrap; justify-content: flex-end;
+    }
+    .meta > span, #who {
+      display: inline-flex; align-items: center; height: 34px; padding: 0 10px;
+      border: 1px solid var(--line); background: var(--bg-3); line-height: 1;
+      box-sizing: border-box;
+    }
     .meta b { color: var(--text); font-weight: 600; }
     .ok { color: var(--success); }
     .bad { color: var(--danger); }
@@ -165,7 +176,7 @@
     input[type=text]:focus, input[type=password]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
-    .title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+    .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
     .title-row h2 { margin: 0 0 4px; font-size: 26px; font-weight: 650; }
     .path { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); }
     .pill {
@@ -610,7 +621,7 @@
             <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}</div>
           </div>
           <div class="row">
-            <span class="pill">${p.current_version_no ? "v" + p.current_version_no : "无版本"} 当前</span>
+            <span class="pill latest">${p.current_version_no ? "v" + p.current_version_no + " 当前" : "无版本"}</span>
             <button class="btn" id="btn-refresh" ${state.busy ? "disabled" : ""}>刷新</button>
             <button class="btn danger" id="btn-del" ${state.busy ? "disabled" : ""}>删除项目</button>
           </div>

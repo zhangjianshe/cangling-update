@@ -5,9 +5,9 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tar::{Archive, Builder, EntryType, Header};
 use walkdir::WalkDir;
 
@@ -173,17 +173,53 @@ fn snapshot_git(
         }
     }
 
-    on_progress(0, total.max(1), "正在写入 Git 对象…");
-    git_run(&repo, Some(src), &["add", "-A"])?;
-    let dirty = git_run(&repo, Some(src), &["status", "--porcelain"])?;
-    if dirty.trim().is_empty() && git_has_head(&repo) {
-        let sha = git_run(&repo, None, &["rev-parse", "HEAD"])?;
-        let sha = sha.trim().to_string();
-        write_gitref(gitref, &sha)?;
-        write_git_attrs(&repo, &sha, &attrs)?;
-        on_progress(total, total.max(1), "备份完成（内容无变化）");
-        return Ok(files);
+    let total = total.max(1);
+    on_progress(0, total, "开始写入 Git 对象");
+
+    let mut file_entries: Vec<(String, PathBuf, u64, u32)> = Vec::new();
+    let mut symlink_entries: Vec<(String, String)> = Vec::new();
+    for attr in &attrs {
+        match attr.kind.as_str() {
+            "file" => {
+                file_entries.push((
+                    attr.path.clone(),
+                    src.join(&attr.path),
+                    fs::metadata(src.join(&attr.path))
+                        .map(|m| m.len())
+                        .unwrap_or(0),
+                    attr.mode,
+                ));
+            }
+            "symlink" => {
+                if let Some(t) = &attr.target {
+                    symlink_entries.push((attr.path.clone(), t.clone()));
+                }
+            }
+            _ => {}
+        }
     }
+
+    let mut index_info = String::new();
+    let mut done = 0u64;
+    let mut current_paths = HashSet::new();
+    for (rel, abs, len, mode) in &file_entries {
+        current_paths.insert(rel.clone());
+        let sha = git_hash_object_file(&repo, abs, rel, done, total, on_progress)?;
+        let git_mode = if mode & 0o111 != 0 { "100755" } else { "100644" };
+        index_info.push_str(&format!("{git_mode} blob {sha}\t{rel}\n"));
+        done = done.saturating_add(*len);
+        on_progress(done, total, rel);
+    }
+    for (rel, target) in &symlink_entries {
+        current_paths.insert(rel.clone());
+        let sha = git_hash_object_bytes(&repo, target.as_bytes())?;
+        index_info.push_str(&format!("120000 blob {sha}\t{rel}\n"));
+    }
+
+    on_progress(done, total, "正在更新 Git 索引…");
+    git_update_index(&repo, &index_info)?;
+    prune_index(&repo, &current_paths)?;
+
     git_run(
         &repo,
         Some(src),
@@ -193,9 +229,114 @@ fn snapshot_git(
     let sha = sha.trim().to_string();
     write_gitref(gitref, &sha)?;
     write_git_attrs(&repo, &sha, &attrs)?;
-    let _ = git_run(&repo, None, &["gc", "--auto"]);
-    on_progress(total, total.max(1), "备份完成");
+    on_progress(total, total, "备份完成");
     Ok(files)
+}
+
+fn git_hash_object_file(
+    repo: &Path,
+    file: &Path,
+    rel: &str,
+    start: u64,
+    total: u64,
+    on_progress: &mut impl FnMut(u64, u64, &str),
+) -> Result<String> {
+    let mut child = git_base(repo, None)
+        .args(["hash-object", "-w", "--stdin", "--path", rel])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("启动 git hash-object")?;
+    let mut stdin = child.stdin.take().context("git hash-object stdin")?;
+    let mut f = File::open(file).with_context(|| format!("open {}", file.display()))?;
+    let mut buf = vec![0u8; 1024 * 1024];
+    let mut copied = 0u64;
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        stdin
+            .write_all(&buf[..n])
+            .context("写入 git hash-object")?;
+        copied += n as u64;
+        on_progress(start.saturating_add(copied), total, rel);
+    }
+    drop(stdin);
+    let output = child
+        .wait_with_output()
+        .context("等待 git hash-object")?;
+    if !output.status.success() {
+        bail!(
+            "git hash-object {} 失败：{}",
+            rel,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_hash_object_bytes(repo: &Path, data: &[u8]) -> Result<String> {
+    let mut child = git_base(repo, None)
+        .args(["hash-object", "-w", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("启动 git hash-object")?;
+    {
+        let mut stdin = child.stdin.take().context("git hash-object stdin")?;
+        stdin.write_all(data)?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        bail!(
+            "git hash-object 失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_update_index(repo: &Path, info: &str) -> Result<()> {
+    if info.is_empty() {
+        return Ok(());
+    }
+    let mut child = git_base(repo, None)
+        .args(["update-index", "--add", "--index-info"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("启动 git update-index")?;
+    {
+        let mut stdin = child.stdin.take().context("git update-index stdin")?;
+        stdin.write_all(info.as_bytes())?;
+    }
+    let output = child.wait_with_output()?;
+    if !output.status.success() {
+        bail!(
+            "git update-index 失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn prune_index(repo: &Path, keep: &HashSet<String>) -> Result<()> {
+    let listed = match git_run(repo, None, &["ls-files"]) {
+        Ok(s) => s,
+        Err(_) => return Ok(()),
+    };
+    for line in listed.lines() {
+        let path = line.trim();
+        if path.is_empty() || keep.contains(path) {
+            continue;
+        }
+        let _ = git_run(repo, None, &["rm", "--cached", "-f", "--", path]);
+    }
+    Ok(())
 }
 
 fn restore_gitref(
@@ -284,11 +425,7 @@ fn ensure_git_repo(repo: &Path) -> Result<()> {
     Ok(())
 }
 
-fn git_has_head(repo: &Path) -> bool {
-    git_run(repo, None, &["rev-parse", "--verify", "HEAD"]).is_ok()
-}
-
-fn git_run(repo: &Path, work: Option<&Path>, args: &[&str]) -> Result<String> {
+fn git_base(repo: &Path, work: Option<&Path>) -> Command {
     let mut cmd = Command::new("git");
     cmd.arg("-c").arg("user.name=cangling-update");
     cmd.arg("-c").arg("user.email=cangling-update@localhost");
@@ -298,8 +435,12 @@ fn git_run(repo: &Path, work: Option<&Path>, args: &[&str]) -> Result<String> {
     if let Some(w) = work {
         cmd.arg("--work-tree").arg(w);
     }
-    cmd.args(args);
-    let output = cmd
+    cmd
+}
+
+fn git_run(repo: &Path, work: Option<&Path>, args: &[&str]) -> Result<String> {
+    let output = git_base(repo, work)
+        .args(args)
         .output()
         .with_context(|| format!("执行 git {}", args.join(" ")))?;
     if !output.status.success() {
