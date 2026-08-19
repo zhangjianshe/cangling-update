@@ -205,10 +205,12 @@
       border-bottom: 1px solid var(--line); margin: 0 0 16px; padding: 0;
     }
     .tab {
+      display: inline-flex; align-items: center; gap: 8px;
       border: 0; border-bottom: 2px solid transparent; border-radius: 0;
       background: transparent; color: var(--muted);
       padding: 10px 16px; margin-bottom: -1px; font-weight: 600;
     }
+    .tab-ico { flex: 0 0 auto; display: block; }
     .tab:hover { color: var(--text); background: var(--bg-3); }
     .tab.active {
       color: var(--text); border-bottom-color: var(--accent-emphasis);
@@ -525,9 +527,21 @@
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers" };
     const PROJECT_TABS = [
-      { id: "import", label: "导入数据" },
-      { id: "containers", label: "应用容器" },
-      { id: "versions", label: "版本" },
+      {
+        id: "import",
+        label: "导入数据",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Zm5.03-3.47 3.25-3.25a.75.75 0 0 0-1.06-1.06L8.75 8.19V2a.75.75 0 0 0-1.5 0v6.19L5.03 6.22a.75.75 0 0 0-1.06 1.06l3.25 3.25a.75.75 0 0 0 1.06 0Z"/></svg>',
+      },
+      {
+        id: "containers",
+        label: "应用容器",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M7.998 1.02c.31 0 .614.08.884.232l5.522 3.213a1.75 1.75 0 0 1 .876 1.518v6.034a1.75 1.75 0 0 1-.876 1.518l-5.522 3.213a1.75 1.75 0 0 1-1.768 0L1.592 13.535a1.75 1.75 0 0 1-.876-1.518V5.983a1.75 1.75 0 0 1 .876-1.518L7.114 1.252A1.75 1.75 0 0 1 7.998 1.02M8 2.5 2.75 5.55v5.9L8 14.5l5.25-3.05v-5.9Z"/></svg>',
+      },
+      {
+        id: "versions",
+        label: "版本切换",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.22 14.78a.75.75 0 0 0 1.06-1.06L4.56 12h8.69a.75.75 0 0 0 0-1.5H4.56l1.72-1.72a.75.75 0 0 0-1.06-1.06l-3 3a.75.75 0 0 0 0 1.06Zm5.56-6.5a.75.75 0 1 1-1.06-1.06l1.72-1.72H2.75a.75.75 0 0 1 0-1.5h8.69L9.72 2.28a.75.75 0 0 1 1.06-1.06l3 3a.75.75 0 0 1 0 1.06Z"/></svg>',
+      },
     ];
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, confirmClose: null };
     const composePoll = { timer: null, inflight: false };
@@ -1227,7 +1241,7 @@
           <div class="progress-sub" id="op-prog-sub"></div>
         </div>
         <div class="tabs" role="tablist" aria-label="项目面板">
-          ${PROJECT_TABS.map(t => `<button type="button" class="tab" role="tab" id="tab-${t.id}" data-tab="${t.id}" aria-controls="panel-${t.id}">${t.label}</button>`).join("")}
+          ${PROJECT_TABS.map(t => `<button type="button" class="tab" role="tab" id="tab-${t.id}" data-tab="${t.id}" aria-controls="panel-${t.id}">${t.icon}<span>${t.label}</span></button>`).join("")}
         </div>
         <div class="card tab-panel" id="panel-import" data-panel="import" role="tabpanel" aria-labelledby="tab-import">
           <p class="hint">可上传 <code>docker save</code> 镜像包，或直接上传 <code>.jar</code>（文件名需与 compose 挂载一致，例如 <code>cis-server-1.0.0.jar</code>）。发布前会<b>全量备份</b>目录（含数据库数据），请先停止应用。</p>
