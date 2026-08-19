@@ -120,7 +120,13 @@ impl Docker {
     }
 
     pub async fn compose_restart(&self, dir: &Path) -> Result<String> {
-        self.compose_run(dir, &["restart"]).await
+        // `compose restart` does not take --remove-orphans and will not pick up
+        // compose-file edits. Recreate the stack instead.
+        self.compose_run(
+            dir,
+            &["up", "-d", "--force-recreate", "--remove-orphans"],
+        )
+        .await
     }
 
     pub async fn compose_restart_service(&self, dir: &Path, service: &str) -> Result<String> {

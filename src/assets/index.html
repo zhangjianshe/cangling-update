@@ -1107,8 +1107,8 @@
         <div class="card">
           <h3>Compose</h3>
           <div class="row" style="margin-bottom:12px">
-            <button class="btn" id="btn-up" ${state.busy ? "disabled" : ""}>启动</button>
-            <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""}>重启</button>
+            <button class="btn" id="btn-up" ${state.busy ? "disabled" : ""} title="docker compose up -d --remove-orphans">启动</button>
+            <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""} title="docker compose up -d --force-recreate --remove-orphans">重启</button>
             <button class="btn" id="btn-down" ${state.busy ? "disabled" : ""}>停止</button>
             <button class="btn" id="btn-logs" ${state.busy ? "disabled" : ""}>日志</button>
             <button class="btn" id="btn-edit-compose" ${state.busy ? "disabled" : ""}>编辑</button>

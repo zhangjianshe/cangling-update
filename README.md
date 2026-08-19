@@ -129,7 +129,7 @@ sudo ./cangling-update update --proxy http://10.1.1.2:7890
 1. 在构建机：`docker save 镜像:标签 | gzip > app.tar.gz`
 2. 在页面上传一个或多个 `.tar` / `.tar.gz` / `.tgz`
 3. 服务端 `docker load`，再把载入的镜像打成同名 `:latest`
-4. 勾选「导入成功后重启 Compose」则执行 `docker compose up -d`
+4. 勾选「导入成功后重启 Compose」则执行 `docker compose up -d --remove-orphans`
 
 compose 里请写 `:latest`（或升级后会打上的那个名字），这样新镜像才会被用到。
 
@@ -148,8 +148,8 @@ cis-server:
 上传的文件名必须与挂载文件名一致（如 `cis-server-1.0.0.jar`）。系统会覆盖该路径，然后：
 
 ```bash
-docker compose up -d --force-recreate <用到该 JAR 的服务>
-docker compose up -d
+docker compose up -d --force-recreate --remove-orphans <用到该 JAR 的服务>
+docker compose up -d --remove-orphans
 ```
 
 先强制重建 JAR 服务，再把整个 Compose 栈拉起来。备份前若执行了 Compose Down，PostGIS、broker 等其它容器也会一并启动。
@@ -183,7 +183,7 @@ Git 对象在项目级的 `repo.git` 里跨版本去重，体积单独标在标�
 
 - **日志**：打开该服务最近约 500 行日志（`docker compose logs`），可刷新。支持 ANSI 颜色、粗体、斜体、暗色（如 tracing / mqtt 日志）。日志字体与终端相同，为 **Iosevka Term**。
 - **终端**：仅运行中的服务可点。弹出 xterm.js 窗口，通过 WebSocket 进入容器（默认 `/bin/sh`）。可在里面执行命令；关闭窗口即断开。没有 shell 的镜像会失败。终端字体为 **Iosevka Term**（已内置 Regular/Bold；本机若已安装同名字体则优先用本机的）。
-- **重启**：只重启这一行对应的服务（`docker compose restart <服务>`），其它容器不动。顶部「重启」仍会重启整个 Compose 项目。
+- **重启**：只重启这一行对应的服务（`docker compose restart <服务>`），其它容器不动。顶部「启动」执行 `docker compose up -d --remove-orphans`；顶部「重启」执行 `docker compose up -d --force-recreate --remove-orphans`，会清掉 compose 文件里已经不存在的服务。
 
 Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打断正在编辑的升级表单、已打开的终端或 Compose 文件编辑窗口。
 
