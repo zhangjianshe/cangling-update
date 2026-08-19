@@ -94,6 +94,13 @@
       --shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
     }
     * { box-sizing: border-box; border-radius: 4px; }
+    * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 0; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--line-hover); }
+    ::-webkit-scrollbar-corner { background: transparent; }
     html { font-size: 16px; }
     html, body {
       margin: 0; height: 100%; background: var(--bg); color: var(--text); font-size: 16px;
@@ -296,7 +303,7 @@
            url("/vendor/iosevka-term-bold.woff2") format("woff2");
     }
     .modal-body .term {
-      flex: 1; min-height: 0; padding: 8px; background: var(--log-bg);
+      flex: 1; min-height: 0; padding: 0; background: var(--log-bg);
     }
     .modal-body .term .xterm, .modal-body .term .xterm-viewport { height: 100%; }
     .modal-body pre.logs {
