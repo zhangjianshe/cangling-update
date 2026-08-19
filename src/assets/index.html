@@ -241,6 +241,7 @@
     .ansi-bg-8{background:var(--ansi-8)} .ansi-bg-9{background:var(--ansi-9)} .ansi-bg-10{background:var(--ansi-10)} .ansi-bg-11{background:var(--ansi-11)}
     .ansi-bg-12{background:var(--ansi-12)} .ansi-bg-13{background:var(--ansi-13)} .ansi-bg-14{background:var(--ansi-14)} .ansi-bg-15{background:var(--ansi-15)}
     .hint { color: var(--muted); line-height: 1.5; }
+    .hint-soft { color: var(--subtle); font-size: 14px; word-break: break-all; }
     label.check {
       display: flex; align-items: flex-start; gap: 8px;
       margin: 10px 0 0; cursor: pointer; color: var(--muted); line-height: 1.45;
@@ -1022,7 +1023,7 @@
             <button class="btn" id="btn-logs" ${state.busy ? "disabled" : ""}>日志</button>
           </div>
           <div class="flash err" id="compose-err" ${c.error ? "" : "hidden"}>${esc(c.error || "")}</div>
-          <div class="hint" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
+          <div class="hint hint-soft" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
           <div class="hint" style="margin-bottom:8px">JAR 挂载：${c.jar_mounts && c.jar_mounts.length ? c.jar_mounts.map(j => esc(j.service) + " ← " + esc(j.host_path)).join("；") : "—"}</div>
           <table>
             <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>操作</th></tr></thead>
