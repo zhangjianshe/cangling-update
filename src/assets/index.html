@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cangling Update</title>
+  <style>
+    :root {
+      --bg: #111318;
+      --bg-2: #181b22;
+      --bg-3: #1f2430;
+      --line: #2c3240;
+      --text: #ece7dc;
+      --muted: #8d93a5;
+      --amber: #e2a03a;
+      --amber-dim: #8a6118;
+      --green: #5dbe8a;
+      --red: #e06c75;
+      --blue: #7eb6ff;
+      --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+      --sans: "Segoe UI", "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+      --mono: "IBM Plex Mono", "ui-monospace", "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); }
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; }
+    a { color: var(--amber); }
+    .app { display: grid; grid-template-rows: 64px 1fr; height: 100%; }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 22px; border-bottom: 1px solid var(--line); background: #0e1015;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .mark {
+      width: 28px; height: 28px; border-radius: 7px;
+      background: linear-gradient(145deg, #f0b95a, #b56a12);
+      box-shadow: 0 0 0 1px #0008, inset 0 1px 0 #fff4;
+    }
+    .brand h1 { margin: 0; font-size: 16px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 650; }
+    .brand small { display: block; color: var(--muted); letter-spacing: 0.04em; font-size: 11px; text-transform: none; margin-top: 1px; }
+    .meta { color: var(--muted); font-size: 12px; font-family: var(--mono); display: flex; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+    .meta b { color: var(--text); font-weight: 500; }
+    .ok { color: var(--green); }
+    .bad { color: var(--red); }
+    .shell { display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
+    aside {
+      border-right: 1px solid var(--line); background: var(--bg-2);
+      display: flex; flex-direction: column; min-height: 0;
+    }
+    .aside-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 10px; }
+    .aside-head h2 { margin: 0; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); }
+    .plist { overflow: auto; padding: 6px 10px 18px; }
+    .pitem {
+      width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
+      color: var(--text); border-radius: 10px; padding: 10px 12px; margin-bottom: 6px;
+    }
+    .pitem:hover { background: var(--bg-3); }
+    .pitem.active { background: #262113; border-color: var(--amber-dim); }
+    .pitem .n { font-weight: 600; display: block; }
+    .pitem .d { color: var(--muted); font-size: 12px; font-family: var(--mono); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main { min-width: 0; overflow: auto; padding: 22px 26px 40px; }
+    .btn {
+      border: 1px solid var(--line); background: var(--bg-3); color: var(--text);
+      border-radius: 8px; padding: 7px 12px; font-size: 13px;
+    }
+    .btn:hover { border-color: #4a5164; }
+    .btn.primary { background: var(--amber); color: #1a1204; border-color: #c48a22; font-weight: 650; }
+    .btn.primary:hover { filter: brightness(1.05); }
+    .btn.danger { color: #ffd4d7; border-color: #6a3036; background: #3a1d21; }
+    .btn.ghost { background: transparent; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .card {
+      background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px;
+      padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
+    }
+    .card h3 { margin: 0 0 12px; font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+    input[type=text], textarea {
+      width: 100%; background: #12151c; color: var(--text); border: 1px solid var(--line);
+      border-radius: 8px; padding: 9px 11px; outline: none;
+    }
+    input[type=text]:focus, textarea:focus { border-color: var(--amber-dim); }
+    textarea { min-height: 72px; resize: vertical; }
+    .field { margin-bottom: 12px; }
+    .title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+    .title-row h2 { margin: 0 0 4px; font-size: 26px; font-weight: 650; }
+    .path { font-family: var(--mono); color: var(--muted); font-size: 13px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px;
+      font-size: 12px; color: var(--muted); background: #12151c;
+    }
+    .pill.latest { color: #1a1204; background: var(--amber); border-color: #c48a22; font-weight: 650; }
+    .drop {
+      border: 1.5px dashed #3b4254; border-radius: 12px; padding: 28px 16px; text-align: center;
+      color: var(--muted); background: #141821;
+    }
+    .drop.over { border-color: var(--amber); color: var(--text); background: #231c10; }
+    .filelist { margin: 12px 0 0; padding: 0; list-style: none; font-family: var(--mono); font-size: 12px; }
+    .filelist li { padding: 4px 0; color: var(--text); }
+    .progress { height: 6px; background: #0d0f14; border-radius: 99px; overflow: hidden; margin-top: 12px; display: none; }
+    .progress > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #b56a12, var(--amber)); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
+    .flash { margin: 0 0 14px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+    .flash.err { background: #3a1d21; color: #ffd4d7; border: 1px solid #6a3036; }
+    .flash.ok { background: #163024; color: #c8f0da; border: 1px solid #2d6a4a; }
+    pre.logs {
+      margin: 0; max-height: 280px; overflow: auto; background: #0c0e13; border-radius: 8px;
+      padding: 12px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; color: #d7d3c8;
+    }
+    .hint { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="mark"></div>
+        <div>
+          <h1>Cangling Update</h1>
+          <small>docker-compose host updater</small>
+        </div>
+      </div>
+      <div class="meta" id="meta">loading…</div>
+    </header>
+    <div class="shell">
+      <aside>
+        <div class="aside-head">
+          <h2>Projects</h2>
+          <button class="btn primary" id="btn-new">New</button>
+        </div>
+        <div class="plist" id="plist"><div class="empty">No projects yet</div></div>
+      </aside>
+      <main id="main"></main>
+    </div>
+  </div>
+  <script>
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [] };
+
+    const $ = (sel, el = document) => el.querySelector(sel);
+    const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content; };
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, opts);
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+      if (!res.ok) throw new Error((data && data.error) || res.statusText);
+      return data;
+    }
+
+    function flash(kind, msg) {
+      const box = $("#flash");
+      if (!box) return;
+      box.className = "flash " + kind;
+      box.textContent = msg;
+      box.hidden = false;
+    }
+
+    async function boot() {
+      try {
+        state.meta = await api("/api/meta");
+        const m = state.meta;
+        const dockerOk = m.docker.available;
+        $("#meta").innerHTML =
+          `<span>${esc(m.os)} / <b>${esc(m.arch)}</b></span>` +
+          `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerOk ? esc(m.docker.version || "ok") : "missing"}</b> · compose ${esc(m.docker.compose)}</span>` +
+          `<span>db <b>${esc(m.db_path)}</b></span>`;
+      } catch (e) {
+        $("#meta").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+      }
+      await refreshProjects();
+      route();
+    }
+
+    async function refreshProjects() {
+      state.projects = await api("/api/projects");
+      renderList();
+    }
+
+    function renderList() {
+      const root = $("#plist");
+      if (!state.projects.length) {
+        root.innerHTML = `<div class="empty">No projects yet</div>`;
+        return;
+      }
+      root.innerHTML = "";
+      for (const p of state.projects) {
+        const b = document.createElement("button");
+        b.className = "pitem" + (state.current && state.current.id === p.id ? " active" : "");
+        b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="d">${esc(p.directory)}</span>`;
+        b.onclick = () => { location.hash = "#/p/" + p.id; };
+        root.appendChild(b);
+      }
+    }
+
+    function route() {
+      const hash = location.hash || "#/";
+      if (hash === "#/new") return renderNew();
+      const m = hash.match(/^#\/p\/([^/]+)$/);
+      if (m) return openProject(m[1]);
+      renderHome();
+    }
+
+    function renderHome() {
+      state.current = null;
+      renderList();
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div>
+            <h2>Host updates</h2>
+            <div class="path">Attach a docker-compose directory, load image archives, keep rollback points.</div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>How it works</h3>
+          <p class="hint">
+            1. Create a project pointing at an absolute host directory that contains compose.yaml / docker-compose.yml.<br/>
+            2. Upload one or more <code>.tar.gz</code> image archives. The server runs <code>docker load</code>, retags each image to <code>:latest</code>, and snapshots the directory first.<br/>
+            3. Restore any previous snapshot from the version list. Image archives from that version are loaded again.
+          </p>
+          <button class="btn primary" onclick="location.hash='#/new'">Create project</button>
+        </div>`;
+    }
+
+    function renderNew() {
+      state.current = null;
+      renderList();
+      $("#main").innerHTML = `
+        <div class="title-row"><div><h2>New project</h2><div class="path">Bind a compose application directory</div></div></div>
+        <div id="flash" hidden></div>
+        <div class="card">
+          <div class="field"><label>Name</label><input id="f-name" type="text" placeholder="edge-gateway" /></div>
+          <div class="field"><label>Description</label><textarea id="f-desc" placeholder="optional"></textarea></div>
+          <div class="field"><label>Host directory (absolute)</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" /></div>
+          <div class="hint" id="dir-hint">The directory must already exist on this host and contain a compose file.</div>
+          <div class="row" style="margin-top:14px">
+            <button class="btn" id="btn-check">Check directory</button>
+            <button class="btn primary" id="btn-create">Create</button>
+          </div>
+        </div>`;
+      $("#btn-check").onclick = checkDir;
+      $("#btn-create").onclick = createProject;
+    }
+
+    async function checkDir() {
+      try {
+        const directory = $("#f-dir").value.trim();
+        const r = await api("/api/validate-directory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ directory }),
+        });
+        $("#dir-hint").innerHTML = r.ok
+          ? `Found <b>${esc(r.compose_file)}</b> · images: ${r.images.length ? r.images.map(esc).join(", ") : "(none declared)"}`
+          : `<span class="bad">${esc(r.warning || "not a compose directory")}</span>`;
+      } catch (e) {
+        $("#dir-hint").innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+      }
+    }
+
+    async function createProject() {
+      try {
+        const body = {
+          name: $("#f-name").value,
+          description: $("#f-desc").value,
+          directory: $("#f-dir").value,
+        };
+        const p = await api("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        await refreshProjects();
+        location.hash = "#/p/" + p.id;
+      } catch (e) {
+        flash("err", e.message);
+      }
+    }
+
+    async function openProject(id) {
+      try {
+        state.current = await api("/api/projects/" + id);
+        const [versions, compose] = await Promise.all([
+          api("/api/projects/" + id + "/versions"),
+          api("/api/projects/" + id + "/compose").catch(e => ({ error: e.message, services: [], images: [] })),
+        ]);
+        state.versions = versions;
+        state.compose = compose;
+        state.files = [];
+        renderList();
+        renderProject();
+      } catch (e) {
+        $("#main").innerHTML = `<div class="flash err">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderProject() {
+      const p = state.current;
+      const c = state.compose || {};
+      const services = (c.services || []).map(s =>
+        `<tr><td>${esc(s.name)}</td><td>${esc(s.image)}</td><td>${esc(s.state)}</td><td>${esc(s.status)}</td></tr>`
+      ).join("");
+      const versions = state.versions.map(v => `
+        <tr>
+          <td><span class="pill ${v.is_current ? "latest" : ""}">${esc(v.label)}${v.is_current ? " latest" : ""}</span></td>
+          <td>${esc(v.kind)}</td>
+          <td>${esc(v.note || "—")}</td>
+          <td>${(v.images || []).map(i => esc(i.file) + (i.latest_tags && i.latest_tags.length ? " → " + i.latest_tags.map(esc).join(", ") : "")).join("<br/>") || "—"}</td>
+          <td>${esc((v.created_at || "").replace("T", " ").slice(0, 19))}</td>
+          <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}">Restore</button>`}</td>
+        </tr>`).join("");
+
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div>
+            <h2>${esc(p.name)}</h2>
+            <div class="path">${esc(p.directory)} · ${esc(c.compose_file || "compose file missing")}</div>
+          </div>
+          <div class="row">
+            <span class="pill">${p.current_version_no ? "v" + p.current_version_no : "no version"} current</span>
+            <button class="btn" id="btn-refresh">Refresh</button>
+            <button class="btn danger" id="btn-del">Delete project</button>
+          </div>
+        </div>
+        <div id="flash" hidden></div>
+        <div class="card">
+          <h3>Load images / new version</h3>
+          <p class="hint">Upload one or more docker <code>save</code> archives. The live directory is snapshotted first, then each archive is imported with <code>docker load</code> and retagged to <code>:latest</code>.</p>
+          <div class="drop" id="drop">Drop .tar.gz / .tgz / .tar files here, or click to choose
+            <input id="file" type="file" accept=".tar,.tar.gz,.tgz,application/gzip" multiple hidden />
+          </div>
+          <ul class="filelist" id="filelist"></ul>
+          <div class="field" style="margin-top:12px"><label>Note</label><input id="note" type="text" placeholder="what changed in this release" /></div>
+          <label class="hint"><input type="checkbox" id="restart" checked /> Restart compose after a successful load</label>
+          <div class="progress" id="prog"><span></span></div>
+          <div class="row" style="margin-top:14px">
+            <button class="btn primary" id="btn-update">Load & publish as latest</button>
+            <button class="btn" id="btn-snap">Snapshot directory only</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Compose</h3>
+          <div class="row" style="margin-bottom:12px">
+            <button class="btn" id="btn-up">Up</button>
+            <button class="btn" id="btn-restart">Restart</button>
+            <button class="btn" id="btn-down">Down</button>
+            <button class="btn" id="btn-logs">Logs</button>
+          </div>
+          ${c.error ? `<div class="flash err">${esc(c.error)}</div>` : ""}
+          <div class="hint" style="margin-bottom:8px">Declared images: ${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
+          <table>
+            <thead><tr><th>Service</th><th>Image</th><th>State</th><th>Status</th></tr></thead>
+            <tbody>${services || `<tr><td colspan="4" class="empty">No running services reported</td></tr>`}</tbody>
+          </table>
+          <pre class="logs" id="logs" hidden></pre>
+        </div>
+        <div class="card">
+          <h3>Versions</h3>
+          <table>
+            <thead><tr><th>Version</th><th>Kind</th><th>Note</th><th>Images</th><th>When</th><th></th></tr></thead>
+            <tbody>${versions || `<tr><td colspan="6" class="empty">No versions</td></tr>`}</tbody>
+          </table>
+        </div>`;
+
+      const drop = $("#drop");
+      const file = $("#file");
+      drop.onclick = () => file.click();
+      drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+      drop.ondragleave = () => drop.classList.remove("over");
+      drop.ondrop = (e) => {
+        e.preventDefault();
+        drop.classList.remove("over");
+        addFiles(e.dataTransfer.files);
+      };
+      file.onchange = () => addFiles(file.files);
+      $("#btn-update").onclick = () => runUpdate(false);
+      $("#btn-snap").onclick = () => runUpdate(true);
+      $("#btn-refresh").onclick = () => openProject(p.id);
+      $("#btn-del").onclick = deleteProject;
+      $("#btn-up").onclick = () => compose("up");
+      $("#btn-down").onclick = () => compose("down");
+      $("#btn-restart").onclick = () => compose("restart");
+      $("#btn-logs").onclick = loadLogs;
+      for (const b of document.querySelectorAll("[data-restore]")) {
+        b.onclick = () => restore(b.getAttribute("data-restore"));
+      }
+    }
+
+    function addFiles(list) {
+      for (const f of list) state.files.push(f);
+      const ul = $("#filelist");
+      ul.innerHTML = state.files.map(f => `<li>${esc(f.name)} · ${(f.size / 1048576).toFixed(1)} MB</li>`).join("");
+    }
+
+    function runUpdate(snapshotOnly) {
+      if (!snapshotOnly && !state.files.length) {
+        flash("err", "Choose at least one image archive, or use Snapshot directory only.");
+        return;
+      }
+      const fd = new FormData();
+      fd.append("note", $("#note").value || (snapshotOnly ? "directory snapshot" : ""));
+      fd.append("restart", snapshotOnly ? "false" : ($("#restart").checked ? "true" : "false"));
+      if (!snapshotOnly) for (const f of state.files) fd.append("files", f, f.name);
+
+      const xhr = new XMLHttpRequest();
+      const prog = $("#prog");
+      const bar = $("#prog > span");
+      prog.style.display = "block";
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) bar.style.width = Math.round(e.loaded / e.total * 100) + "%";
+      };
+      xhr.onload = async () => {
+        try {
+          const data = JSON.parse(xhr.responseText || "{}");
+          if (xhr.status >= 400) throw new Error(data.error || xhr.statusText);
+          flash("ok", `Published ${data.version.label} as latest.`);
+          state.files = [];
+          await openProject(state.current.id);
+          flash("ok", `Published ${data.version.label} as latest.`);
+        } catch (e) {
+          flash("err", e.message);
+        }
+      };
+      xhr.onerror = () => flash("err", "upload failed");
+      xhr.open("POST", "/api/projects/" + state.current.id + "/updates");
+      xhr.send(fd);
+    }
+
+    async function restore(versionId) {
+      if (!confirm("Restore this version? The current directory will be snapshotted first.")) return;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/rollback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ version_id: versionId, restart: $("#restart") ? $("#restart").checked : true }),
+        });
+        await openProject(state.current.id);
+        flash("ok", "Restored " + data.version.label + " and marked it latest.");
+      } catch (e) {
+        flash("err", e.message);
+      }
+    }
+
+    async function compose(action) {
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/compose/" + action, { method: "POST" });
+        const logs = $("#logs");
+        logs.hidden = false;
+        logs.textContent = data.logs || "(no output)";
+        await openProject(state.current.id);
+      } catch (e) {
+        flash("err", e.message);
+      }
+    }
+
+    async function loadLogs() {
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/compose/logs?tail=200");
+        const logs = $("#logs");
+        logs.hidden = false;
+        logs.textContent = data.logs || "(no output)";
+      } catch (e) {
+        flash("err", e.message);
+      }
+    }
+
+    async function deleteProject() {
+      if (!confirm("Delete this project and its version backups? The live compose directory is not deleted.")) return;
+      try {
+        await api("/api/projects/" + state.current.id, { method: "DELETE" });
+        location.hash = "#/";
+        await refreshProjects();
+        renderHome();
+      } catch (e) {
+        flash("err", e.message);
+      }
+    }
+
+    $("#btn-new").onclick = () => location.hash = "#/new";
+    window.addEventListener("hashchange", route);
+    boot();
+  </script>
+</body>
+</html>
