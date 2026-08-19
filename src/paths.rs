@@ -110,6 +110,92 @@ pub fn find_compose_file(dir: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+pub const COMPOSE_MAX_BYTES: usize = 1024 * 1024;
+
+pub fn compose_live_path(dir: &Path) -> (PathBuf, String, bool) {
+    match find_compose_file(dir) {
+        Some(path) => {
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "docker-compose.yml".into());
+            (path, name, true)
+        }
+        None => (
+            dir.join("docker-compose.yml"),
+            "docker-compose.yml".into(),
+            false,
+        ),
+    }
+}
+
+pub fn compose_etag(content: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in content.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}-{}", h, content.len())
+}
+
+pub fn validate_compose_text(content: &str) -> Result<()> {
+    if content.len() > COMPOSE_MAX_BYTES {
+        bail!("Compose 文件不能超过 1 MB");
+    }
+    if content.trim().is_empty() {
+        bail!("Compose 文件不能为空");
+    }
+    if content.as_bytes().contains(&0) {
+        bail!("Compose 文件不能包含空字节");
+    }
+    match serde_yaml::from_str::<serde_yaml::Value>(content) {
+        Ok(serde_yaml::Value::Mapping(map)) => {
+            if map.is_empty() {
+                bail!("Compose 文件不能是空的 YAML 对象");
+            }
+            Ok(())
+        }
+        Ok(_) => bail!("Compose 文件必须是 YAML 映射（例如包含 services:）"),
+        Err(err) => bail!("YAML 无法解析：{err}"),
+    }
+}
+
+pub fn compose_draft_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "docker-compose.yml".into());
+    path.with_file_name(format!("{name}.cangling-draft"))
+}
+
+pub fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
+    let draft = compose_draft_path(path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+    std::fs::write(&draft, content).with_context(|| format!("write {}", draft.display()))?;
+    commit_compose_draft(path, &draft)
+}
+
+pub fn commit_compose_draft(dest: &Path, draft: &Path) -> Result<()> {
+    if dest.exists() {
+        copy_file_meta(dest, draft)?;
+    }
+    std::fs::rename(draft, dest).with_context(|| format!("replace {}", dest.display()))
+}
+
+fn copy_file_meta(from: &Path, to: &Path) -> Result<()> {
+    let meta = std::fs::metadata(from)?;
+    std::fs::set_permissions(to, meta.permissions())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = std::os::unix::fs::chown(to, Some(meta.uid()), Some(meta.gid()));
+    }
+    Ok(())
+}
+
 pub fn parse_compose_images(compose_text: &str) -> Vec<String> {
     let mut images = Vec::new();
     for raw in compose_text.lines() {
@@ -267,5 +353,42 @@ services:
         assert_eq!(mounts[0].service, "cis-server");
         assert_eq!(mounts[0].basename, "cis-server-1.0.0.jar");
         assert_eq!(mounts[1].service, "cis-k8s");
+    }
+
+    #[test]
+    fn compose_etag_stable_and_size_sensitive() {
+        assert_eq!(compose_etag("a"), compose_etag("a"));
+        assert_ne!(compose_etag("a"), compose_etag("b"));
+        assert_ne!(compose_etag("ab"), compose_etag("a"));
+        assert!(compose_etag("hello").contains("-5"));
+    }
+
+    #[test]
+    fn validate_compose_text_rejects_empty_and_nul() {
+        assert!(validate_compose_text("").is_err());
+        assert!(validate_compose_text("   \n").is_err());
+        assert!(validate_compose_text("services:\n  web:\n    image: n\0ginx\n").is_err());
+        assert!(validate_compose_text("not: [ yaml").is_err());
+        assert!(validate_compose_text("- just a list\n").is_err());
+        assert!(validate_compose_text("services:\n  web:\n    image: nginx\n").is_ok());
+    }
+
+    #[test]
+    fn write_text_atomic_replaces_and_cleans_draft() {
+        let dir = std::env::temp_dir().join(format!(
+            "cangling-compose-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("docker-compose.yml");
+        std::fs::write(&path, "old:\n  x: 1\n").unwrap();
+        write_text_atomic(&path, "services:\n  web:\n    image: nginx\n").unwrap();
+        let got = std::fs::read_to_string(&path).unwrap();
+        assert!(got.contains("nginx"));
+        assert!(!compose_draft_path(&path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

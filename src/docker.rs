@@ -128,6 +128,17 @@ impl Docker {
         self.compose_run(dir, &["restart", "--", service]).await
     }
 
+    pub async fn compose_config_file(&self, dir: &Path, file_name: &str) -> Result<String> {
+        if file_name.is_empty()
+            || file_name.contains('/')
+            || file_name.contains('\\')
+            || file_name.contains("..")
+        {
+            bail!("无效的 Compose 文件名");
+        }
+        self.compose_run(dir, &["-f", file_name, "config"]).await
+    }
+
     pub async fn compose_ps_raw(&self, dir: &Path) -> Result<String> {
         match self.compose_run(dir, &["ps", "--format", "json"]).await {
             Ok(s) => Ok(s),

@@ -1,4 +1,4 @@
-use crate::models::{DeployedJar, LoadedImage, Project, Version};
+use crate::models::{ComposeRevision, DeployedJar, LoadedImage, Project, Version};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -57,6 +57,25 @@ pub fn open(path: &Path) -> Result<Connection> {
         "ALTER TABLE versions ADD COLUMN jars_json TEXT NOT NULL DEFAULT '[]'",
         [],
     );
+    conn.execute_batch(
+        r#"
+CREATE TABLE IF NOT EXISTS compose_revisions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    rev_no INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'save',
+    etag TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    UNIQUE(project_id, rev_no)
+);
+CREATE INDEX IF NOT EXISTS idx_compose_revisions_project
+    ON compose_revisions(project_id, rev_no);
+"#,
+    )?;
     Ok(conn)
 }
 
@@ -312,6 +331,165 @@ pub fn update_password_hash(conn: &Connection, user_id: &str, password_hash: &st
 pub fn delete_sessions_for_user(conn: &Connection, user_id: &str) -> Result<()> {
     conn.execute("DELETE FROM sessions WHERE user_id = ?1", params![user_id])?;
     Ok(())
+}
+
+pub fn next_compose_rev_no(conn: &Connection, project_id: &str) -> Result<i64> {
+    let n: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(rev_no), 0) FROM compose_revisions WHERE project_id = ?1",
+        params![project_id],
+        |r| r.get(0),
+    )?;
+    Ok(n + 1)
+}
+
+pub fn insert_compose_revision(conn: &Connection, r: &ComposeRevision) -> Result<()> {
+    conn.execute(
+        "INSERT INTO compose_revisions
+            (id, project_id, rev_no, filename, content, note, kind, etag, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            r.id,
+            r.project_id,
+            r.rev_no,
+            r.filename,
+            r.content,
+            r.note,
+            r.kind,
+            r.etag,
+            r.created_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_compose_revisions(conn: &Connection, project_id: &str) -> Result<Vec<ComposeRevision>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, octet_length(content)
+         FROM compose_revisions WHERE project_id = ?1 ORDER BY rev_no DESC",
+    )?;
+    let rows = stmt.query_map(params![project_id], map_compose_revision_meta)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn get_compose_revision(
+    conn: &Connection,
+    project_id: &str,
+    rev_id: &str,
+) -> Result<Option<ComposeRevision>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, content
+         FROM compose_revisions WHERE project_id = ?1 AND id = ?2",
+    )?;
+    stmt.query_row(params![project_id, rev_id], map_compose_revision)
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn latest_compose_revision(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Option<ComposeRevision>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, content
+         FROM compose_revisions WHERE project_id = ?1 ORDER BY rev_no DESC LIMIT 1",
+    )?;
+    stmt.query_row(params![project_id], map_compose_revision)
+        .optional()
+        .map_err(Into::into)
+}
+
+fn map_compose_revision_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ComposeRevision> {
+    let bytes: i64 = row.get(8)?;
+    Ok(ComposeRevision {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        rev_no: row.get(2)?,
+        filename: row.get(3)?,
+        note: row.get(4)?,
+        kind: row.get(5)?,
+        etag: row.get(6)?,
+        created_at: row.get(7)?,
+        content: String::new(),
+        bytes: bytes.max(0) as u64,
+    })
+}
+
+fn map_compose_revision(row: &rusqlite::Row<'_>) -> rusqlite::Result<ComposeRevision> {
+    let content: String = row.get(8)?;
+    let bytes = content.len() as u64;
+    Ok(ComposeRevision {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        rev_no: row.get(2)?,
+        filename: row.get(3)?,
+        note: row.get(4)?,
+        kind: row.get(5)?,
+        etag: row.get(6)?,
+        created_at: row.get(7)?,
+        content,
+        bytes,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Project;
+
+    fn temp_conn() -> (Connection, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "cangling-db-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = open(&dir.join("t.db")).unwrap();
+        (conn, dir)
+    }
+
+    #[test]
+    fn compose_revisions_roundtrip_and_cascade() {
+        let (conn, dir) = temp_conn();
+        let p = Project {
+            id: "p1".into(),
+            name: "demo".into(),
+            description: String::new(),
+            directory: "/tmp/demo".into(),
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            current_version_no: None,
+            current_version_id: None,
+            version_count: 0,
+        };
+        insert_project(&conn, &p).unwrap();
+        let r = ComposeRevision {
+            id: "r1".into(),
+            project_id: "p1".into(),
+            rev_no: next_compose_rev_no(&conn, "p1").unwrap(),
+            filename: "docker-compose.yml".into(),
+            content: "services:\n  web:\n    image: nginx\n".into(),
+            note: "基线".into(),
+            kind: "baseline".into(),
+            etag: "abc-12".into(),
+            created_at: now_rfc3339(),
+            bytes: 0,
+        };
+        insert_compose_revision(&conn, &r).unwrap();
+        let listed = list_compose_revisions(&conn, "p1").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].rev_no, 1);
+        assert!(listed[0].content.is_empty());
+        assert!(listed[0].bytes > 0);
+        let got = get_compose_revision(&conn, "p1", "r1").unwrap().unwrap();
+        assert!(got.content.contains("nginx"));
+        let latest = latest_compose_revision(&conn, "p1").unwrap().unwrap();
+        assert_eq!(latest.id, "r1");
+        delete_project(&conn, "p1").unwrap();
+        assert!(list_compose_revisions(&conn, "p1").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 

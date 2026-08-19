@@ -144,6 +144,55 @@ pub struct LogsResult {
     pub logs: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComposeRevision {
+    pub id: String,
+    pub project_id: String,
+    pub rev_no: i64,
+    pub filename: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content: String,
+    pub note: String,
+    pub kind: String,
+    pub etag: String,
+    pub created_at: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ComposeFileView {
+    pub filename: String,
+    pub path: String,
+    pub exists: bool,
+    pub content: String,
+    pub etag: String,
+    pub bytes: u64,
+    pub matches_latest: bool,
+    pub current_rev_id: Option<String>,
+    pub current_rev_no: Option<i64>,
+    pub revisions: Vec<ComposeRevision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recreate_log: Option<String>,
+    #[serde(default)]
+    pub unchanged: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveComposeBody {
+    pub content: String,
+    pub note: Option<String>,
+    #[serde(default)]
+    pub recreate: bool,
+    pub expected_etag: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreComposeBody {
+    pub note: Option<String>,
+    #[serde(default)]
+    pub recreate: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct OrphanBackup {
     pub id: String,

@@ -8,9 +8,10 @@ use crate::docker::{parse_compose_ps, to_latest_tag};
 use crate::error::AppError;
 use crate::models::*;
 use crate::paths::{
-    find_compose_file, is_image_archive_name, is_uploadable_name,
-    parse_compose_images, parse_compose_jar_mounts, require_absolute_dir, resolve_host_path,
-    safe_filename, JarMount,
+    commit_compose_draft, compose_draft_path, compose_etag, compose_live_path, find_compose_file,
+    is_image_archive_name, is_uploadable_name, parse_compose_images, parse_compose_jar_mounts,
+    require_absolute_dir, resolve_host_path, safe_filename, validate_compose_text,
+    write_text_atomic, JarMount,
 };
 use crate::state::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
@@ -45,6 +46,22 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/updates", post(create_update))
         .route("/api/projects/{id}/rollback", post(rollback))
         .route("/api/projects/{id}/compose", get(compose_status))
+        .route(
+            "/api/projects/{id}/compose/file",
+            get(compose_file_get).put(compose_file_put),
+        )
+        .route(
+            "/api/projects/{id}/compose/revisions",
+            get(compose_revisions_list),
+        )
+        .route(
+            "/api/projects/{id}/compose/revisions/{rev_id}",
+            get(compose_revision_get),
+        )
+        .route(
+            "/api/projects/{id}/compose/revisions/{rev_id}/restore",
+            post(compose_revision_restore),
+        )
         .route("/api/projects/{id}/compose/up", post(compose_up))
         .route("/api/projects/{id}/compose/down", post(compose_down))
         .route(
@@ -1306,6 +1323,309 @@ async fn compose_status(
         raw,
         error,
     }))
+}
+
+fn read_compose_disk(path: &std::path::Path, exists: bool) -> Result<(String, String), AppError> {
+    if !exists {
+        return Ok((String::new(), compose_etag("")));
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        AppError::internal(format!("读取 Compose 文件失败：{}：{e}", path.display()))
+    })?;
+    let etag = compose_etag(&content);
+    Ok((content, etag))
+}
+
+fn compose_file_view(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    path: &std::path::Path,
+    filename: &str,
+    exists: bool,
+    content: &str,
+    etag: &str,
+    recreate_log: Option<String>,
+    unchanged: bool,
+) -> Result<ComposeFileView, AppError> {
+    let revisions = db::list_compose_revisions(conn, project_id)?;
+    let latest = revisions.first();
+    Ok(ComposeFileView {
+        filename: filename.to_string(),
+        path: path.display().to_string(),
+        exists,
+        bytes: content.len() as u64,
+        matches_latest: latest.map(|r| r.etag.as_str()) == Some(etag),
+        current_rev_id: latest.map(|r| r.id.clone()),
+        current_rev_no: latest.map(|r| r.rev_no),
+        revisions,
+        content: content.to_string(),
+        etag: etag.to_string(),
+        recreate_log,
+        unchanged,
+    })
+}
+
+fn record_compose_revision(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    filename: &str,
+    content: &str,
+    note: &str,
+    kind: &str,
+) -> Result<ComposeRevision, AppError> {
+    let rev = ComposeRevision {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.to_string(),
+        rev_no: db::next_compose_rev_no(conn, project_id)?,
+        filename: filename.to_string(),
+        etag: compose_etag(content),
+        bytes: content.len() as u64,
+        content: content.to_string(),
+        note: note.to_string(),
+        kind: kind.to_string(),
+        created_at: db::now_rfc3339(),
+    };
+    db::insert_compose_revision(conn, &rev)?;
+    Ok(rev)
+}
+
+fn snapshot_disk_if_needed(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    filename: &str,
+    disk: &str,
+    disk_etag: &str,
+) -> Result<(), AppError> {
+    if disk.is_empty() {
+        return Ok(());
+    }
+    let latest = db::latest_compose_revision(conn, project_id)?;
+    match latest {
+        Some(r) if r.etag == disk_etag => Ok(()),
+        Some(_) => {
+            record_compose_revision(conn, project_id, filename, disk, "磁盘上的未记录内容", "external")?;
+            Ok(())
+        }
+        None => {
+            record_compose_revision(conn, project_id, filename, disk, "打开编辑器时的线上文件", "baseline")?;
+            Ok(())
+        }
+    }
+}
+
+async fn install_compose_file(
+    state: &AppState,
+    dir: &std::path::Path,
+    dest: &std::path::Path,
+    content: &str,
+) -> Result<(), AppError> {
+    if matches!(state.docker.compose, crate::docker::ComposeKind::Missing) {
+        write_text_atomic(dest, content)?;
+        return Ok(());
+    }
+    let draft = compose_draft_path(dest);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&draft, content)
+        .map_err(|e| AppError::internal(format!("写入草稿失败：{e}")))?;
+    let draft_name = draft
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if let Err(err) = state.docker.compose_config_file(dir, &draft_name).await {
+        let _ = std::fs::remove_file(&draft);
+        return Err(AppError::bad(format!("Compose 文件校验失败：{err}")));
+    }
+    if let Err(err) = commit_compose_draft(dest, &draft) {
+        let _ = std::fs::remove_file(&draft);
+        return Err(AppError::internal(err.to_string()));
+    }
+    Ok(())
+}
+
+async fn save_compose_content(
+    state: &AppState,
+    project: &Project,
+    content: String,
+    note: String,
+    kind: &str,
+    recreate: bool,
+    expected_etag: Option<&str>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    validate_compose_text(&content).map_err(|e| AppError::bad(e.to_string()))?;
+    let dir = PathBuf::from(&project.directory);
+    let (dest, filename, exists) = compose_live_path(&dir);
+    let (_disk, disk_etag) = read_compose_disk(&dest, exists)?;
+    if let Some(expected) = expected_etag {
+        if expected != disk_etag {
+            return Err(AppError::conflict(
+                "磁盘上的 Compose 文件已变化，请关闭后重新打开再保存",
+            ));
+        }
+    }
+
+    let gate = state.lock_project(&project.id);
+    let _guard = gate.lock().await;
+
+    let (disk, disk_etag, exists) = {
+        let (dest2, _, exists2) = compose_live_path(&dir);
+        read_compose_disk(&dest2, exists2).map(|(c, e)| (c, e, exists2))?
+    };
+    if let Some(expected) = expected_etag {
+        if expected != disk_etag {
+            return Err(AppError::conflict(
+                "磁盘上的 Compose 文件已变化，请关闭后重新打开再保存",
+            ));
+        }
+    }
+
+    if content == disk {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        snapshot_disk_if_needed(&conn, &project.id, &filename, &disk, &disk_etag)?;
+        let view = compose_file_view(
+            &conn,
+            &project.id,
+            &dest,
+            &filename,
+            exists,
+            &disk,
+            &disk_etag,
+            None,
+            true,
+        )?;
+        return Ok(Json(view));
+    }
+
+    install_compose_file(state, &dir, &dest, &content).await?;
+    let etag = compose_etag(&content);
+    let default_note = if kind == "restore" {
+        "恢复历史版本"
+    } else {
+        ""
+    };
+    let note = if note.trim().is_empty() {
+        default_note.to_string()
+    } else {
+        note
+    };
+
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        snapshot_disk_if_needed(&conn, &project.id, &filename, &disk, &disk_etag)?;
+        record_compose_revision(&conn, &project.id, &filename, &content, &note, kind)?;
+    }
+
+    let recreate_log = if recreate {
+        match state.docker.compose_up(&dir).await {
+            Ok(logs) => Some(logs),
+            Err(err) => Some(format!("Compose 文件已保存，但启动失败：{err}")),
+        }
+    } else {
+        None
+    };
+
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let view = compose_file_view(
+        &conn,
+        &project.id,
+        &dest,
+        &filename,
+        true,
+        &content,
+        &etag,
+        recreate_log,
+        false,
+    )?;
+    Ok(Json(view))
+}
+
+async fn compose_file_get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    let dir = PathBuf::from(&project.directory);
+    let (path, filename, exists) = compose_live_path(&dir);
+    let (content, etag) = read_compose_disk(&path, exists)?;
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    Ok(Json(compose_file_view(
+        &conn, &id, &path, &filename, exists, &content, &etag, None, false,
+    )?))
+}
+
+async fn compose_file_put(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SaveComposeBody>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    save_compose_content(
+        &state,
+        &project,
+        body.content,
+        body.note.unwrap_or_default(),
+        "save",
+        body.recreate,
+        body.expected_etag.as_deref(),
+    )
+    .await
+}
+
+async fn compose_revisions_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ComposeRevision>>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    if db::get_project(&conn, &id)?.is_none() {
+        return Err(AppError::not_found("项目不存在"));
+    }
+    Ok(Json(db::list_compose_revisions(&conn, &id)?))
+}
+
+async fn compose_revision_get(
+    State(state): State<AppState>,
+    Path((id, rev_id)): Path<(String, String)>,
+) -> Result<Json<ComposeRevision>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    db::get_compose_revision(&conn, &id, &rev_id)?
+        .map(Json)
+        .ok_or_else(|| AppError::not_found("该 Compose 版本不存在"))
+}
+
+async fn compose_revision_restore(
+    State(state): State<AppState>,
+    Path((id, rev_id)): Path<(String, String)>,
+    Json(body): Json<RestoreComposeBody>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    let (project, rev) = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        let project = db::get_project(&conn, &id)?
+            .ok_or_else(|| AppError::not_found("项目不存在"))?;
+        let rev = db::get_compose_revision(&conn, &id, &rev_id)?
+            .ok_or_else(|| AppError::not_found("该 Compose 版本不存在"))?;
+        (project, rev)
+    };
+    let note = body
+        .note
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("恢复 r{}", rev.rev_no));
+    save_compose_content(
+        &state,
+        &project,
+        rev.content,
+        note,
+        "restore",
+        body.recreate,
+        None,
+    )
+    .await
 }
 
 async fn compose_up(

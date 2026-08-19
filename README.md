@@ -14,6 +14,7 @@
 4. 每次升级前用 **Git 全量备份** 项目目录（含 PostGIS 等数据目录；相同文件只存一份，并单独记下权限/属主），可回滚。备份前请先停止应用，页面会提示并默认先 `compose down`
 5. 登录保护；2 小时无操作自动退出
 6. 对正在运行的容器打开 **xterm 终端**（`docker compose exec`），并按容器查看日志
+7. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本
 
 ## 编译
 
@@ -184,11 +185,23 @@ Git 对象在项目级的 `repo.git` 里跨版本去重，体积单独标在标�
 - **终端**：仅运行中的服务可点。弹出 xterm.js 窗口，通过 WebSocket 进入容器（默认 `/bin/sh`）。可在里面执行命令；关闭窗口即断开。没有 shell 的镜像会失败。终端字体为 **Iosevka Term**（已内置 Regular/Bold；本机若已安装同名字体则优先用本机的）。
 - **重启**：只重启这一行对应的服务（`docker compose restart <服务>`），其它容器不动。顶部「重启」仍会重启整个 Compose 项目。
 
-Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打断正在编辑的升级表单或已打开的终端。
+Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打断正在编辑的升级表单、已打开的终端或 Compose 文件编辑窗口。
 
 顶部「日志」按钮仍查看整个 Compose 项目的日志。
 
 终端需要本机 `docker compose exec` 可用，浏览器会自动带上登录 Cookie。
+
+### 编辑 Compose 文件
+
+Compose 面板的 **编辑** 会打开当前目录里的 `docker-compose.yml` / `docker-compose.yaml` / `compose.yml` / `compose.yaml`（没有文件时保存会创建 `docker-compose.yml`）。
+
+- 编辑器用 **Iosevka Term**，Tab 插入两个空格，`Ctrl+S` / `⌘S` 保存
+- 保存前会先按 YAML 解析。本机有 Compose 时还会把草稿交给 `docker compose -f <草稿> config`；任一校验失败都不会改线上文件
+- 每次真正写入都会留下完整文件内容，可在右侧历史里点开预览，或 **恢复此版本**（恢复本身也会再记一条历史，因此还能再改回去）
+- 这是 **Compose 文件自己的版本**，和页面下方「版本」里的全量目录备份（镜像 / JAR / 数据）不是一回事
+- 默认只改文件。勾选「保存后执行 Compose Up」才会 `docker compose up -d --remove-orphans`
+- 磁盘文件若被外部改过，历史里会先补记一条「外部变更」，避免覆盖时丢掉那段内容
+- 保存时若文件已在别处被改，会提示冲突，需关闭后重新打开再保存
 
 ## 数据目录
 
@@ -197,7 +210,7 @@ Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打�
 ```
 cangling-update                 # 程序
 config/
-  cangling.db                   # SQLite（项目、版本、用户、会话）
+  cangling.db                   # SQLite（项目、版本、Compose 文件历史、用户、会话）
   backups/<项目ID>/<版本ID>/
     repo.git/                   # 项目级 Git 仓库（跨版本去重）
     <版本ID>/tree.gitref        # 指向某次 commit

@@ -284,7 +284,53 @@
       padding: 10px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
     }
     .modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
-    .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    .modal.compose-modal { width: min(1180px, 100%); height: min(88vh, 940px); }
+    .compose-edit {
+      flex: 1; min-height: 0; display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .compose-edit-top {
+      grid-column: 1 / -1; grid-row: 1;
+      padding: 8px 14px; border-bottom: 1px solid var(--line);
+    }
+    .compose-edit-top .path { font-size: 14px; }
+    .compose-edit-flash { margin: 8px 0 0; }
+    .compose-edit-flash[hidden] { display: none !important; }
+    .compose-edit-main {
+      grid-column: 1; grid-row: 2;
+      min-width: 0; min-height: 0; display: flex; flex-direction: column;
+      border-right: 1px solid var(--line);
+    }
+    .compose-edit-main textarea {
+      flex: 1; min-height: 0; width: 100%; resize: none; border: 0; border-radius: 0;
+      padding: 12px 14px; font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
+      font-size: 14px; line-height: 1.5; tab-size: 2; white-space: pre;
+      overflow: auto; background: var(--log-bg); color: var(--log-text);
+    }
+    .compose-edit-main textarea:focus { box-shadow: none; border-color: transparent; }
+    .compose-edit-actions {
+      grid-column: 1; grid-row: 3;
+      padding: 10px 12px; border-top: 1px solid var(--line);
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    }
+    .compose-edit-actions .field { margin: 0; flex: 1 1 180px; }
+    .compose-edit-hist {
+      grid-column: 2; grid-row: 2 / span 2;
+      min-height: 0; overflow: auto; padding: 10px 10px 12px;
+      background: var(--bg-2);
+    }
+    .compose-edit-hist h4 { margin: 0 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
+    .rev-item {
+      width: 100%; text-align: left; border: 1px solid transparent;
+      background: transparent; color: var(--text); padding: 8px; margin-bottom: 6px;
+    }
+    .rev-item:hover { background: var(--bg-3); }
+    .rev-item.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
+    .rev-item .rev-h { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-weight: 600; flex-wrap: wrap; }
+    .rev-item .rev-n { display: block; color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rev-item .rev-t { display: block; color: var(--subtle); margin-top: 2px; font-size: 13px; }
     @font-face {
       font-family: "Iosevka Term";
       font-style: normal;
@@ -313,6 +359,12 @@
       .shell { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
       .modal { height: min(90vh, 820px); }
+      .compose-edit {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 1fr) auto minmax(160px, 28%);
+      }
+      .compose-edit-main { border-right: 0; border-bottom: 1px solid var(--line); }
+      .compose-edit-hist { grid-column: 1; grid-row: 4; }
     }
   </style>
 </head>
@@ -378,7 +430,7 @@
     </div>
   </div>
   <div class="overlay" id="dialog" hidden>
-    <div class="modal">
+    <div class="modal" id="dialog-modal">
       <div class="modal-head">
         <h3 id="dialog-title">窗口</h3>
         <div class="row">
@@ -391,9 +443,11 @@
   </div>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false };
-    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null };
+    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, confirmClose: null };
     const composePoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
+    const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
+    const composeEdit = { etag: "", disk: "", filename: "", selected: null, busy: false };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
     const IDLE_MS = 2 * 60 * 60 * 1000;
     let lastActivity = Date.now();
@@ -1057,6 +1111,7 @@
             <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""}>重启</button>
             <button class="btn" id="btn-down" ${state.busy ? "disabled" : ""}>停止</button>
             <button class="btn" id="btn-logs" ${state.busy ? "disabled" : ""}>日志</button>
+            <button class="btn" id="btn-edit-compose" ${state.busy ? "disabled" : ""}>编辑</button>
           </div>
           <div class="flash err" id="compose-err" ${c.error ? "" : "hidden"}>${esc(c.error || "")}</div>
           <div class="hint hint-soft" style="margin-bottom:8px">声明镜像：${c.images && c.images.length ? c.images.map(esc).join(", ") : "—"}</div>
@@ -1095,6 +1150,7 @@
       $("#btn-down").onclick = () => compose("down");
       $("#btn-restart").onclick = () => compose("restart");
       $("#btn-logs").onclick = loadLogs;
+      $("#btn-edit-compose").onclick = openComposeEditor;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
@@ -1111,7 +1167,7 @@
 
     function setBusy(kind) {
       state.busy = kind;
-      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-logs", "btn-del", "btn-refresh"];
+      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-logs", "btn-edit-compose", "btn-del", "btn-refresh"];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.disabled = true;
@@ -1357,15 +1413,236 @@
         dialog.term = null;
         dialog.fit = null;
       }
+      dialog.confirmClose = null;
+      composeEdit.etag = "";
+      composeEdit.disk = "";
+      composeEdit.filename = "";
+      composeEdit.selected = null;
+      composeEdit.busy = false;
       const extra = $("#dialog-extra");
       if (extra) {
         extra.hidden = true;
         extra.onclick = null;
       }
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.remove("compose-modal");
       const box = $("#dialog");
       if (box) box.hidden = true;
       const body = $("#dialog-body");
       if (body) body.innerHTML = "";
+    }
+
+    function composeEditFlash(kind, msg) {
+      const box = $("#compose-edit-flash");
+      if (!box) return;
+      if (!msg) {
+        box.hidden = true;
+        box.textContent = "";
+        return;
+      }
+      box.className = "flash compose-edit-flash " + kind;
+      box.textContent = msg;
+      box.hidden = false;
+    }
+
+    function composeDirty() {
+      const ta = $("#compose-src");
+      return !!(ta && ta.value !== composeEdit.disk);
+    }
+
+    function applyComposeFile(data, selectedId) {
+      composeEdit.etag = data.etag || "";
+      composeEdit.disk = data.content || "";
+      composeEdit.filename = data.filename || "docker-compose.yml";
+      composeEdit.selected = selectedId || null;
+      const ta = $("#compose-src");
+      if (ta && selectedId == null) ta.value = data.content || "";
+      const meta = $("#compose-edit-meta");
+      if (meta) {
+        const mismatch = data.exists && data.revisions && data.revisions.length && !data.matches_latest
+          ? " · 磁盘内容与最近一次保存不一致"
+          : "";
+        const rev = data.current_rev_no ? "r" + data.current_rev_no : "尚无历史";
+        meta.innerHTML = `<span class="path">${esc(data.path || composeEdit.filename)}</span>` +
+          `<span>${esc(rev)}</span>` +
+          (data.exists ? "" : "<span>文件还不存在，保存后将创建 docker-compose.yml</span>") +
+          (mismatch ? `<span class="bad">${esc(mismatch)}</span>` : "");
+      }
+      renderComposeRevisions(data, selectedId);
+    }
+
+    function renderComposeRevisions(data, selectedId) {
+      const box = $("#compose-rev-list");
+      if (!box) return;
+      const revs = data.revisions || [];
+      if (!revs.length) {
+        box.innerHTML = `<div class="empty">保存后会出现历史版本</div>`;
+        return;
+      }
+      box.innerHTML = revs.map((r) => {
+        const onDisk = r.etag === data.etag;
+        const active = selectedId ? r.id === selectedId : onDisk;
+        return `<button type="button" class="rev-item${active ? " active" : ""}" data-rev="${esc(r.id)}">
+          <span class="rev-h">r${r.rev_no} ${esc(COMPOSE_REV_KIND[r.kind] || r.kind)}${onDisk ? ` <span class="pill latest">当前</span>` : ""}</span>
+          <span class="rev-n">${esc(r.note || "（无备注）")}</span>
+          <span class="rev-t">${esc((r.created_at || "").replace("T", " ").slice(0, 19))} · ${fmtBytes(r.bytes || 0)}</span>
+          ${onDisk ? "" : `<span class="row" style="margin-top:6px;justify-content:flex-start"><span class="btn" data-restore-rev="${esc(r.id)}">恢复此版本</span></span>`}
+        </button>`;
+      }).join("");
+      for (const b of box.querySelectorAll("[data-rev]")) {
+        b.onclick = (e) => {
+          if (e.target.closest("[data-restore-rev]")) return;
+          loadComposeRevision(b.getAttribute("data-rev"));
+        };
+      }
+      for (const b of box.querySelectorAll("[data-restore-rev]")) {
+        b.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          restoreComposeRevision(b.getAttribute("data-restore-rev"));
+        };
+      }
+    }
+
+    async function openComposeEditor() {
+      if (!state.current) return;
+      if (state.busy) {
+        flash("err", "正在处理中，请勿重复操作");
+        return;
+      }
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("compose-modal");
+      $("#dialog-title").textContent = "编辑 Compose 文件";
+      $("#dialog-extra").hidden = true;
+      $("#dialog-body").innerHTML = `
+        <div class="compose-edit">
+          <div class="compose-edit-top">
+            <div id="compose-edit-meta" class="hint">加载中…</div>
+            <div class="flash compose-edit-flash" id="compose-edit-flash" hidden></div>
+          </div>
+          <div class="compose-edit-main">
+            <textarea id="compose-src" spellcheck="false" wrap="off"></textarea>
+          </div>
+          <div class="compose-edit-actions">
+            <div class="field"><label>备注</label><input id="compose-note" type="text" placeholder="本次改了什么（可选）" /></div>
+            <label class="check"><input type="checkbox" id="compose-recreate" /> 保存后执行 Compose Up</label>
+            <button type="button" class="btn primary" id="btn-compose-save">保存</button>
+          </div>
+          <div class="compose-edit-hist">
+            <h4>文件版本</h4>
+            <div id="compose-rev-list"><div class="empty">加载中…</div></div>
+          </div>
+        </div>`;
+      $("#dialog").hidden = false;
+      dialog.confirmClose = () => {
+        if (!composeDirty()) return true;
+        return confirm("有未保存的修改，确定关闭？");
+      };
+      const ta = $("#compose-src");
+      ta.addEventListener("keydown", (e) => {
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const start = ta.selectionStart;
+          const end = ta.selectionEnd;
+          ta.setRangeText("  ", start, end, "end");
+        } else if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+          e.preventDefault();
+          saveComposeFile();
+        }
+      });
+      $("#btn-compose-save").onclick = saveComposeFile;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/compose/file");
+        applyComposeFile(data, null);
+        ta.focus();
+      } catch (e) {
+        composeEditFlash("err", e.message);
+      }
+    }
+
+    async function loadComposeRevision(revId) {
+      if (!state.current || !revId || composeEdit.busy) return;
+      if (composeDirty() && !confirm("编辑器里有未保存的修改，确定加载此版本到编辑器？")) return;
+      try {
+        const rev = await api("/api/projects/" + state.current.id + "/compose/revisions/" + encodeURIComponent(revId));
+        const ta = $("#compose-src");
+        if (ta) ta.value = rev.content || "";
+        composeEdit.selected = rev.id;
+        const items = document.querySelectorAll(".rev-item");
+        for (const el of items) {
+          el.classList.toggle("active", el.getAttribute("data-rev") === rev.id);
+        }
+        if (rev.etag === composeEdit.etag) {
+          composeEditFlash("", "");
+        } else {
+          composeEditFlash("ok", "已载入 r" + rev.rev_no + "，保存或点「恢复此版本」才会写入磁盘");
+        }
+      } catch (e) {
+        composeEditFlash("err", e.message);
+      }
+    }
+
+    async function saveComposeFile() {
+      if (!state.current || composeEdit.busy) return;
+      const ta = $("#compose-src");
+      if (!ta) return;
+      composeEdit.busy = true;
+      const btn = $("#btn-compose-save");
+      if (btn) btn.disabled = true;
+      composeEditFlash("ok", "正在保存…");
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/compose/file", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: ta.value,
+            note: ($("#compose-note") && $("#compose-note").value) || "",
+            recreate: $("#compose-recreate") ? $("#compose-recreate").checked : false,
+            expected_etag: composeEdit.etag,
+          }),
+        });
+        applyComposeFile(data, null);
+        if ($("#compose-note")) $("#compose-note").value = "";
+        let msg = data.unchanged ? "内容和磁盘一致，未写入新版本" : "已保存 r" + (data.current_rev_no || "");
+        if (data.recreate_log) msg += "。已尝试启动 Compose。";
+        composeEditFlash("ok", msg);
+        refreshComposeStatus();
+      } catch (e) {
+        composeEditFlash("err", e.message);
+      } finally {
+        composeEdit.busy = false;
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function restoreComposeRevision(revId) {
+      if (!state.current || !revId || composeEdit.busy) return;
+      if (composeDirty() && !confirm("编辑器里有未保存的修改，确定用此历史版本覆盖磁盘上的文件？")) return;
+      else if (!composeDirty() && !confirm("确定把此历史版本写回磁盘上的 Compose 文件？")) return;
+      composeEdit.busy = true;
+      composeEditFlash("ok", "正在恢复…");
+      try {
+        const data = await api(
+          "/api/projects/" + state.current.id + "/compose/revisions/" + encodeURIComponent(revId) + "/restore",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              recreate: $("#compose-recreate") ? $("#compose-recreate").checked : false,
+            }),
+          }
+        );
+        applyComposeFile(data, null);
+        const ta = $("#compose-src");
+        if (ta) ta.value = data.content || "";
+        composeEditFlash("ok", "已恢复并保存为 r" + (data.current_rev_no || "") + (data.recreate_log ? "。已尝试启动 Compose。" : ""));
+        refreshComposeStatus();
+      } catch (e) {
+        composeEditFlash("err", e.message);
+      } finally {
+        composeEdit.busy = false;
+      }
     }
 
     async function openServiceLogs(name) {
@@ -1491,7 +1768,10 @@
     $("#gate-theme").onclick = toggleTheme;
     renderTheme();
 
-    $("#dialog-close").onclick = closeDialog;
+    $("#dialog-close").onclick = () => {
+      if (dialog.confirmClose && !dialog.confirmClose()) return;
+      closeDialog();
+    };
     $("#btn-new").onclick = () => location.hash = "#/new";
     $("#btn-logout").onclick = () => logout();
     $("#gate-submit").onclick = submitGate;

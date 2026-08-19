@@ -30,6 +30,10 @@ impl AppError {
         Self::Unauthorized(msg.into())
     }
 
+    pub fn conflict(msg: impl Into<String>) -> Self {
+        Self::Conflict(msg.into())
+    }
+
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal(msg.into())
     }
