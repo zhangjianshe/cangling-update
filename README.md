@@ -44,11 +44,12 @@ make arm64
 | 对应的 `.sha256` | 校验和 |
 
 - 推送 `main` / 开 PR / 手动 Run workflow：在 Actions 里下载构建产物
-- 打标签并推送后，自动发布到 GitHub Releases：
+- 打标签并推送后，自动发布到 GitHub Releases。也可以直接执行：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+./release.sh          # 0.1.0 -> 0.1.1，提交并推送 tag
+./release.sh minor    # 0.1.3 -> 0.2.0
+./release.sh --dry-run
 ```
 
 ## 运行
