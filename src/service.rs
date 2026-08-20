@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub const SERVICE_NAME: &str = "cangling-update";
 const UNIT_PATH: &str = "/etc/systemd/system/cangling-update.service";
@@ -72,14 +72,19 @@ pub fn uninstall() -> Result<()> {
     require_root()?;
     require_systemd()?;
 
-    let _ = systemctl(&["stop", SERVICE_NAME]);
-    let _ = systemctl(&["disable", SERVICE_NAME]);
-    if Path::new(UNIT_PATH).exists() {
-        std::fs::remove_file(UNIT_PATH)
-            .with_context(|| format!("删除 {UNIT_PATH}"))?;
+    if !Path::new(UNIT_PATH).exists() {
+        eprintln!("服务未安装：{SERVICE_NAME}");
+        return Ok(());
     }
-    let _ = systemctl(&["daemon-reload"]);
-    let _ = systemctl(&["reset-failed", SERVICE_NAME]);
+
+    // Stop and clear failed state while the unit file still exists, then
+    // disable/remove. reset-failed after daemon-reload would print
+    // "Unit … not loaded" even though uninstall already succeeded.
+    systemctl_best_effort(&["stop", SERVICE_NAME]);
+    systemctl_best_effort(&["reset-failed", SERVICE_NAME]);
+    systemctl_best_effort(&["disable", SERVICE_NAME]);
+    std::fs::remove_file(UNIT_PATH).with_context(|| format!("删除 {UNIT_PATH}"))?;
+    systemctl_best_effort(&["daemon-reload"]);
     eprintln!("已卸载 systemd 服务：{SERVICE_NAME}");
     Ok(())
 }
@@ -333,6 +338,14 @@ fn systemctl(args: &[&str]) -> Result<()> {
         bail!("systemctl {} 失败，退出码 {:?}", args.join(" "), status.code());
     }
     Ok(())
+}
+
+fn systemctl_best_effort(args: &[&str]) {
+    let _ = Command::new("systemctl")
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 #[cfg(test)]
