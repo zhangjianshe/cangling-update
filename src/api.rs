@@ -26,7 +26,9 @@ use uuid::Uuid;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(index))
+        .route("/", get(crate::portal::page))
+        .route("/console", get(index))
+        .merge(crate::portal::routes())
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))

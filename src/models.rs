@@ -219,3 +219,56 @@ pub struct AuthStatus {
     pub user: Option<AuthUser>,
     pub idle_timeout_secs: u64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortalItem {
+    pub id: String,
+    pub icon: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon_url: Option<String>,
+    pub name: String,
+    pub summary: String,
+    pub url: String,
+    pub open_new: bool,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default, skip_serializing)]
+    pub icon_file: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortalBackground {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PortalPage {
+    pub title: String,
+    pub subtitle: String,
+    pub background: PortalBackground,
+    pub items: Vec<PortalItem>,
+    pub auth: AuthStatus,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SavePortal {
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SavePortalItem {
+    pub icon: Option<String>,
+    pub name: Option<String>,
+    pub summary: Option<String>,
+    pub url: Option<String>,
+    pub open_new: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReorderPortalItems {
+    pub ids: Vec<String>,
+}

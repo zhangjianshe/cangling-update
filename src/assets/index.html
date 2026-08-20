@@ -107,7 +107,7 @@
       --yml-p: #1f2328;
       --yml-var: #8250df;
     }
-    * { box-sizing: border-box; border-radius: 4px; }
+    * { box-sizing: border-box; border-radius: 6px; }
     * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
@@ -123,6 +123,7 @@
     button, input, textarea { font: inherit; }
     button { cursor: pointer; }
     a { color: var(--accent); }
+    a.brand { text-decoration: none; color: inherit; }
     .app { display: grid; grid-template-rows: 64px 1fr; height: 100%; }
     header {
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
@@ -481,7 +482,7 @@
   </div>
   <div class="app" id="app" hidden>
     <header>
-      <div class="brand">
+      <a class="brand" href="/" title="返回首页">
         <span class="mark" title="系统更新" aria-hidden="true">
           <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
             <rect width="32" height="32" rx="6" fill="currentColor"/>
@@ -492,9 +493,9 @@
         </span>
         <div>
           <h1>系统更新 <span class="app-ver">v__APP_VERSION__</span></h1>
-          <small>主机 Docker Compose 升级台</small>
+          <small>主机 Docker Compose 系统管理 · 返回首页</small>
         </div>
-      </div>
+      </a>
       <div class="header-right">
         <div class="meta" id="meta">加载中…</div>
         <span id="who"></span>

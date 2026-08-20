@@ -6,6 +6,7 @@ mod docker;
 mod error;
 mod models;
 mod paths;
+mod portal;
 mod progress;
 mod service;
 mod state;

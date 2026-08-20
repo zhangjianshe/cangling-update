@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 ///   cangling.db            # sqlite
 ///   backups/<project>/<version>/
 ///   uploads/               # in-flight multipart
+///   portal/                # homepage background and item icons
 /// ```
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -17,6 +18,7 @@ pub struct AppPaths {
     pub db_path: PathBuf,
     pub backups_dir: PathBuf,
     pub uploads_dir: PathBuf,
+    pub portal_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -40,10 +42,15 @@ impl AppPaths {
 
         let backups_dir = config_dir.join("backups");
         let uploads_dir = config_dir.join("uploads");
+        let portal_dir = config_dir.join("portal");
         std::fs::create_dir_all(&backups_dir)
             .with_context(|| format!("create backups dir {}", backups_dir.display()))?;
         std::fs::create_dir_all(&uploads_dir)
             .with_context(|| format!("create uploads dir {}", uploads_dir.display()))?;
+        std::fs::create_dir_all(&portal_dir)
+            .with_context(|| format!("create portal dir {}", portal_dir.display()))?;
+        std::fs::create_dir_all(portal_dir.join("icons"))
+            .with_context(|| format!("create portal icons dir {}", portal_dir.display()))?;
 
         Ok(Self {
             db_path: config_dir.join("cangling.db"),
@@ -51,7 +58,12 @@ impl AppPaths {
             config_dir,
             backups_dir,
             uploads_dir,
+            portal_dir,
         })
+    }
+
+    pub fn portal_icons_dir(&self) -> PathBuf {
+        self.portal_dir.join("icons")
     }
 
     pub fn version_dir(&self, project_id: &str, version_id: &str) -> PathBuf {

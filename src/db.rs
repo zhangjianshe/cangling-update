@@ -1,4 +1,4 @@
-use crate::models::{ComposeRevision, DeployedJar, LoadedImage, Project, Version};
+use crate::models::{ComposeRevision, DeployedJar, LoadedImage, PortalItem, Project, Version};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -74,8 +74,26 @@ CREATE TABLE IF NOT EXISTS compose_revisions (
 );
 CREATE INDEX IF NOT EXISTS idx_compose_revisions_project
     ON compose_revisions(project_id, rev_no);
+CREATE TABLE IF NOT EXISTS portal_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS portal_items (
+    id TEXT PRIMARY KEY,
+    icon TEXT NOT NULL DEFAULT '',
+    icon_file TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    url TEXT NOT NULL,
+    open_new INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_portal_items_sort ON portal_items(sort_order, created_at);
 "#,
     )?;
+    ensure_portal_seeded(&conn)?;
     Ok(conn)
 }
 
@@ -414,6 +432,175 @@ fn map_compose_revision_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<Compos
     })
 }
 
+pub fn portal_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM portal_settings WHERE key = ?1")?;
+    stmt.query_row(params![key], |r| r.get(0))
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn set_portal_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO portal_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+fn map_portal_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<PortalItem> {
+    let open_new: i64 = row.get(6)?;
+    let id: String = row.get(0)?;
+    let icon_file: String = row.get(2)?;
+    let updated_at: String = row.get(9)?;
+    let icon_url = if icon_file.is_empty() {
+        None
+    } else {
+        Some(format!("/media/portal/icon/{id}?v={updated_at}"))
+    };
+    Ok(PortalItem {
+        id,
+        icon: row.get(1)?,
+        icon_file,
+        icon_url,
+        name: row.get(3)?,
+        summary: row.get(4)?,
+        url: row.get(5)?,
+        open_new: open_new != 0,
+        sort_order: row.get(7)?,
+        created_at: row.get(8)?,
+        updated_at,
+    })
+}
+
+pub fn list_portal_items(conn: &Connection) -> Result<Vec<PortalItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, icon, icon_file, name, summary, url, open_new, sort_order, created_at, updated_at
+         FROM portal_items ORDER BY sort_order ASC, created_at ASC",
+    )?;
+    let rows = stmt.query_map([], map_portal_item)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn get_portal_item(conn: &Connection, id: &str) -> Result<Option<PortalItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, icon, icon_file, name, summary, url, open_new, sort_order, created_at, updated_at
+         FROM portal_items WHERE id = ?1",
+    )?;
+    stmt.query_row(params![id], map_portal_item)
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn next_portal_sort(conn: &Connection) -> Result<i64> {
+    let n: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(sort_order), -1) FROM portal_items",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n + 1)
+}
+
+pub fn insert_portal_item(conn: &Connection, item: &PortalItem) -> Result<()> {
+    conn.execute(
+        "INSERT INTO portal_items
+            (id, icon, icon_file, name, summary, url, open_new, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            item.id,
+            item.icon,
+            item.icon_file,
+            item.name,
+            item.summary,
+            item.url,
+            if item.open_new { 1 } else { 0 },
+            item.sort_order,
+            item.created_at,
+            item.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn update_portal_item(conn: &Connection, item: &PortalItem) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE portal_items SET
+            icon = ?1, icon_file = ?2, name = ?3, summary = ?4, url = ?5,
+            open_new = ?6, sort_order = ?7, updated_at = ?8
+         WHERE id = ?9",
+        params![
+            item.icon,
+            item.icon_file,
+            item.name,
+            item.summary,
+            item.url,
+            if item.open_new { 1 } else { 0 },
+            item.sort_order,
+            item.updated_at,
+            item.id,
+        ],
+    )?;
+    Ok(n > 0)
+}
+
+pub fn delete_portal_item(conn: &Connection, id: &str) -> Result<bool> {
+    let n = conn.execute("DELETE FROM portal_items WHERE id = ?1", params![id])?;
+    Ok(n > 0)
+}
+
+pub fn reorder_portal_items(conn: &Connection, ids: &[String]) -> Result<()> {
+    let now = now_rfc3339();
+    for (i, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE portal_items SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            params![i as i64, now, id],
+        )?;
+    }
+    Ok(())
+}
+
+pub const DEFAULT_PORTAL_TITLE: &str = "系统导航";
+const LEGACY_PORTAL_TITLE: &str = "苍灵";
+
+pub fn ensure_portal_seeded(conn: &Connection) -> Result<()> {
+    if portal_setting(conn, "seeded")?.as_deref() != Some("1") {
+        if portal_setting(conn, "title")?.is_none() {
+            set_portal_setting(conn, "title", DEFAULT_PORTAL_TITLE)?;
+        }
+        if portal_setting(conn, "subtitle")?.is_none() {
+            set_portal_setting(conn, "subtitle", "")?;
+        }
+        if portal_setting(conn, "background_kind")?.is_none() {
+            set_portal_setting(conn, "background_kind", "none")?;
+        }
+        if portal_setting(conn, "background_file")?.is_none() {
+            set_portal_setting(conn, "background_file", "")?;
+        }
+        set_portal_setting(conn, "seeded", "1")?;
+    }
+    if matches!(
+        portal_setting(conn, "title")?.as_deref(),
+        None | Some("") | Some(LEGACY_PORTAL_TITLE)
+    ) {
+        set_portal_setting(conn, "title", DEFAULT_PORTAL_TITLE)?;
+    }
+    retire_builtin_portal_items(conn)?;
+    Ok(())
+}
+
+/// 系统管理固定在首页底栏，不再作为中间卡片。
+pub fn is_builtin_portal_url(url: &str) -> bool {
+    matches!(url.trim().trim_end_matches('/'), "/console")
+}
+
+pub fn retire_builtin_portal_items(conn: &Connection) -> Result<usize> {
+    let n = conn.execute(
+        "DELETE FROM portal_items WHERE trim(url, '/') = 'console' OR url = '/console' OR url = '/console/'",
+        [],
+    )?;
+    Ok(n)
+}
+
 fn map_compose_revision(row: &rusqlite::Row<'_>) -> rusqlite::Result<ComposeRevision> {
     let content: String = row.get(8)?;
     let bytes = content.len() as u64;
@@ -488,6 +675,101 @@ mod tests {
         assert_eq!(latest.id, "r1");
         delete_project(&conn, "p1").unwrap();
         assert!(list_compose_revisions(&conn, "p1").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn portal_seed_and_item_roundtrip() {
+        let (conn, dir) = temp_conn();
+        let items = list_portal_items(&conn).unwrap();
+        assert!(items.is_empty());
+        assert_eq!(
+            portal_setting(&conn, "title").unwrap().as_deref(),
+            Some(DEFAULT_PORTAL_TITLE)
+        );
+
+        let now = now_rfc3339();
+        let item = PortalItem {
+            id: "it1".into(),
+            icon: "globe".into(),
+            icon_file: String::new(),
+            icon_url: None,
+            name: "监控".into(),
+            summary: "Grafana".into(),
+            url: "https://example.com/grafana".into(),
+            open_new: true,
+            sort_order: next_portal_sort(&conn).unwrap(),
+            created_at: now.clone(),
+            updated_at: now,
+        };
+        insert_portal_item(&conn, &item).unwrap();
+        let listed = list_portal_items(&conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].name, "监控");
+        assert!(listed[0].open_new);
+
+        let mut got = get_portal_item(&conn, "it1").unwrap().unwrap();
+        got.name = "观测".into();
+        got.updated_at = now_rfc3339();
+        assert!(update_portal_item(&conn, &got).unwrap());
+        assert_eq!(get_portal_item(&conn, "it1").unwrap().unwrap().name, "观测");
+
+        let other = PortalItem {
+            id: "it2".into(),
+            icon: "link".into(),
+            icon_file: String::new(),
+            icon_url: None,
+            name: "文档".into(),
+            summary: String::new(),
+            url: "https://example.com/docs".into(),
+            open_new: false,
+            sort_order: next_portal_sort(&conn).unwrap(),
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+        };
+        insert_portal_item(&conn, &other).unwrap();
+        reorder_portal_items(&conn, &["it2".into(), "it1".into()]).unwrap();
+        let listed = list_portal_items(&conn).unwrap();
+        assert_eq!(listed[0].id, "it2");
+
+        assert!(delete_portal_item(&conn, "it1").unwrap());
+        assert!(get_portal_item(&conn, "it1").unwrap().is_none());
+
+        insert_portal_item(
+            &conn,
+            &PortalItem {
+                id: "sys".into(),
+                icon: "update".into(),
+                icon_file: String::new(),
+                icon_url: None,
+                name: "系统更新".into(),
+                summary: String::new(),
+                url: "/console".into(),
+                open_new: false,
+                sort_order: 0,
+                created_at: now_rfc3339(),
+                updated_at: now_rfc3339(),
+            },
+        )
+        .unwrap();
+        assert_eq!(retire_builtin_portal_items(&conn).unwrap(), 1);
+        assert!(get_portal_item(&conn, "sys").unwrap().is_none());
+        assert!(is_builtin_portal_url("/console"));
+        assert!(is_builtin_portal_url(" /console/ "));
+        assert!(!is_builtin_portal_url("https://example.com/console"));
+
+        set_portal_setting(&conn, "title", "苍灵").unwrap();
+        ensure_portal_seeded(&conn).unwrap();
+        assert_eq!(
+            portal_setting(&conn, "title").unwrap().as_deref(),
+            Some(DEFAULT_PORTAL_TITLE)
+        );
+        set_portal_setting(&conn, "title", "机房门户").unwrap();
+        ensure_portal_seeded(&conn).unwrap();
+        assert_eq!(
+            portal_setting(&conn, "title").unwrap().as_deref(),
+            Some("机房门户")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

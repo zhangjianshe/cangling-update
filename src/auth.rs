@@ -5,7 +5,7 @@ use crate::state::AppState;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use axum::extract::State;
-use axum::http::{header, HeaderMap, HeaderValue, Request};
+use axum::http::{header, HeaderMap, HeaderValue, Method, Request};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -14,11 +14,20 @@ use uuid::Uuid;
 pub const IDLE_TIMEOUT_SECS: u64 = 2 * 60 * 60;
 const COOKIE_NAME: &str = "cangling_session";
 
-pub fn is_public(path: &str) -> bool {
-    matches!(
+pub fn is_public(method: &Method, path: &str) -> bool {
+    if path.starts_with("/vendor/") || path.starts_with("/media/portal/") {
+        return true;
+    }
+    if matches!(path, "/" | "/console") {
+        return true;
+    }
+    if matches!(
         path,
-        "/" | "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout"
-    ) || path.starts_with("/vendor/")
+        "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout"
+    ) {
+        return true;
+    }
+    method == Method::GET && path == "/api/portal"
 }
 
 pub async fn require_auth(
@@ -27,7 +36,7 @@ pub async fn require_auth(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = request.uri().path().to_string();
-    if is_public(&path) {
+    if is_public(request.method(), &path) {
         return Ok(next.run(request).await);
     }
 
@@ -45,21 +54,24 @@ pub async fn require_auth(
     }
 }
 
-pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<AuthStatus>, AppError> {
+pub fn auth_status(state: &AppState, headers: &HeaderMap) -> Result<AuthStatus, AppError> {
     let needs_setup = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         db::user_count(&conn)? == 0
     };
-    let user = current_user(&state, read_token(&headers).as_deref())?
-        .map(|u| AuthUser {
-            id: u.id,
-            username: u.username,
-        });
-    Ok(Json(AuthStatus {
+    let user = current_user(state, read_token(headers).as_deref())?.map(|u| AuthUser {
+        id: u.id,
+        username: u.username,
+    });
+    Ok(AuthStatus {
         needs_setup,
         user,
         idle_timeout_secs: IDLE_TIMEOUT_SECS,
-    }))
+    })
+}
+
+pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<AuthStatus>, AppError> {
+    Ok(Json(auth_status(&state, &headers)?))
 }
 
 pub async fn setup(
@@ -250,4 +262,23 @@ fn verify_password(password: &str, hash: &str) -> bool {
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_paths_allow_portal_read_but_not_write() {
+        assert!(is_public(&Method::GET, "/"));
+        assert!(is_public(&Method::GET, "/console"));
+        assert!(is_public(&Method::GET, "/api/portal"));
+        assert!(!is_public(&Method::PUT, "/api/portal"));
+        assert!(!is_public(&Method::POST, "/api/portal/items"));
+        assert!(is_public(&Method::GET, "/vendor/portal.jpg"));
+        assert!(is_public(&Method::GET, "/media/portal/background"));
+        assert!(is_public(&Method::GET, "/media/portal/icon/abc"));
+        assert!(is_public(&Method::GET, "/api/auth/status"));
+        assert!(!is_public(&Method::GET, "/api/projects"));
+    }
 }

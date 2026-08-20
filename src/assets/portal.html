@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>系统导航</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23238636'/%3E%3Cpath fill='%23fff' d='M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z'/%3E%3Crect x='8' y='21.4' width='16' height='2.5' rx='1.2' fill='%23fff'/%3E%3Crect x='10.4' y='24.8' width='11.2' height='2.2' rx='1.1' fill='%23fff' opacity='.72'/%3E%3C/svg%3E" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --glass: rgba(16, 20, 28, 0.52);
+      --glass-2: rgba(22, 28, 38, 0.72);
+      --line: rgba(255, 255, 255, 0.14);
+      --line-strong: rgba(255, 255, 255, 0.28);
+      --text: #f4f7fb;
+      --muted: rgba(244, 247, 251, 0.72);
+      --subtle: rgba(244, 247, 251, 0.5);
+      --accent: #7dd3a0;
+      --accent-2: #4ade80;
+      --danger: #fb7185;
+      --shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+      --radius: 6px;
+    }
+    * { box-sizing: border-box; border-radius: var(--radius); }
+    html, body {
+      margin: 0; min-height: 100%; color: var(--text);
+      font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Noto Sans CJK SC", Helvetica, Arial, sans-serif;
+    }
+    button, input, textarea, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 700px at 12% -10%, rgba(61, 139, 92, 0.38), transparent 55%),
+        radial-gradient(900px 600px at 92% 8%, rgba(56, 139, 253, 0.22), transparent 50%),
+        radial-gradient(800px 500px at 50% 110%, rgba(168, 85, 247, 0.16), transparent 45%),
+        #07090d;
+      overflow-x: hidden;
+    }
+    .bg { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+    .bg img, .bg video {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    .bg-dim {
+      position: fixed; inset: 0; z-index: 1; pointer-events: none;
+      background: linear-gradient(180deg, rgba(7, 9, 13, 0.28) 0%, rgba(7, 9, 13, 0.45) 45%, rgba(7, 9, 13, 0.72) 100%);
+    }
+    .wrap { position: relative; z-index: 2; min-height: 100vh; display: flex; flex-direction: column; }
+    footer {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      margin-top: auto;
+      padding: 12px 22px 16px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .sys-apps { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .sys-app {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--glass); color: var(--text); text-decoration: none;
+      backdrop-filter: blur(14px);
+    }
+    .sys-app:hover { border-color: var(--line-strong); background: rgba(255,255,255,0.1); }
+    .sys-app[hidden], .btn[hidden], .who[hidden] { display: none !important; }
+    .sys-app .mark { width: 22px; height: 22px; }
+    .mark { width: 32px; height: 32px; color: var(--accent-2); flex: 0 0 auto; }
+    .mark svg { width: 100%; height: 100%; display: block; }
+    .ver {
+      color: var(--subtle); font-size: 13px; padding: 2px 8px;
+      border: 1px solid var(--line); border-radius: var(--radius);
+    }
+    .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .who {
+      color: var(--muted); padding: 7px 10px; border: 1px solid var(--line);
+      background: var(--glass); border-radius: var(--radius);
+    }
+    a.btn { text-decoration: none; color: var(--text); }
+    .btn {
+      border: 1px solid var(--line); background: var(--glass); color: var(--text);
+      padding: 8px 12px; border-radius: var(--radius); backdrop-filter: blur(14px);
+    }
+    .btn:hover { border-color: var(--line-strong); background: rgba(255,255,255,0.1); }
+    .btn.primary { background: rgba(34, 197, 94, 0.92); border-color: transparent; color: #052e16; font-weight: 650; }
+    .btn.primary:hover { background: #4ade80; }
+    .btn.danger { color: #fecdd3; border-color: rgba(251, 113, 133, 0.45); background: rgba(251, 113, 133, 0.12); }
+    .btn.danger:hover { background: rgba(251, 113, 133, 0.24); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .clock {
+      position: fixed; top: 18px; right: 22px; z-index: 4;
+      text-align: right; pointer-events: none;
+      text-shadow: 0 6px 24px rgba(0,0,0,0.4);
+    }
+    .clock-time {
+      font-size: clamp(22px, 3.2vw, 34px); font-weight: 650;
+      font-variant-numeric: tabular-nums; letter-spacing: 0.06em; line-height: 1.1;
+    }
+    .clock-date { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .hero {
+      flex: 0 0 auto; text-align: center;
+      padding: 88px 24px 12px; width: 100%;
+      box-sizing: border-box;
+    }
+    .stage {
+      flex: 1; display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      min-height: 0; padding: 12px 18px 28px;
+    }
+    .hero h1 {
+      margin: 0 0 10px; font-size: clamp(36px, 6vw, 64px); font-weight: 720; letter-spacing: 0.02em;
+      text-shadow: 0 8px 30px rgba(0,0,0,0.35);
+    }
+    .hero p { margin: 0 auto; max-width: 640px; color: var(--muted); font-size: 18px; }
+    .grid {
+      width: min(1120px, 100%);
+      margin: 0;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 16px;
+    }
+    .card, .add-card {
+      display: flex; flex-direction: row; align-items: center; gap: 14px;
+      width: 300px; flex: 0 0 300px;
+      min-height: 96px; padding: 14px 16px; text-align: left;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--glass); backdrop-filter: blur(18px);
+      box-shadow: var(--shadow); color: inherit; text-decoration: none;
+      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+    }
+    .card:hover, .add-card:hover {
+      transform: translateY(-3px);
+      border-color: var(--line-strong);
+      background: rgba(22, 28, 38, 0.7);
+    }
+    .card.dragging { opacity: 0.55; }
+    .ico {
+      width: 52px; height: 52px; border-radius: var(--radius);
+      display: grid; place-items: center; overflow: hidden;
+      background: rgba(255,255,255,0.08); border: 1px solid var(--line);
+      flex: 0 0 auto;
+    }
+    .ico svg, .ico img { width: 28px; height: 28px; display: block; }
+    .ico img { width: 100%; height: 100%; object-fit: cover; }
+    .ico .emoji { font-size: 26px; line-height: 1; }
+    .card-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+    .card h3 { margin: 0; font-size: 18px; font-weight: 650; }
+    .card p { margin: 0; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .card-ops {
+      display: none; gap: 6px; margin-top: 8px; width: 100%;
+    }
+    .editing .card-ops { display: flex; flex-wrap: wrap; }
+    .editing .card { cursor: grab; }
+    .add-card {
+      align-items: center; justify-content: center; color: var(--muted);
+      border-style: dashed; box-shadow: none;
+    }
+    .empty {
+      width: 100%; text-align: center; color: var(--muted);
+      padding: 48px 16px; border: 1px dashed var(--line); border-radius: var(--radius);
+    }
+    .flash {
+      width: min(1120px, calc(100% - 36px)); margin: 0 auto 16px;
+      padding: 10px 12px; border-radius: var(--radius);
+    }
+    .flash.err { background: rgba(251,113,133,0.16); color: #fecdd3; border: 1px solid rgba(251,113,133,0.35); }
+    .flash.ok { background: rgba(74,222,128,0.14); color: #bbf7d0; border: 1px solid rgba(74,222,128,0.28); }
+    .flash[hidden] { display: none !important; }
+    .overlay {
+      position: fixed; inset: 0; z-index: 20;
+      background: rgba(4, 6, 10, 0.55);
+      display: grid; place-items: center; padding: 20px;
+    }
+    .overlay[hidden] { display: none !important; }
+    .panel {
+      width: min(460px, 100%);
+      background: var(--glass-2); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow);
+      backdrop-filter: blur(22px); max-height: min(92vh, 860px); overflow: auto;
+    }
+    .panel h2 { margin: 0 0 6px; font-size: 20px; }
+    .panel-login {
+      width: min(400px, 100%);
+      padding: 40px 40px 32px;
+    }
+    .panel-login h2 {
+      text-align: center;
+      margin: 0 0 28px;
+      font-size: 24px;
+      font-weight: 650;
+    }
+    .panel-login .hint {
+      text-align: center;
+      margin: -12px 0 24px;
+    }
+    .panel-login .hint[hidden] { display: none !important; }
+    .panel-login .field { margin-bottom: 20px; }
+    .panel-login .field:last-of-type { margin-bottom: 0; }
+    .panel-login input[type=text],
+    .panel-login input[type=password] { padding: 12px 14px; }
+    .panel-login .panel-actions { margin-top: 28px; }
+    .panel-login .flash { width: auto; margin: 0 0 18px; }
+    .hint { color: var(--muted); margin: 0 0 14px; }
+    .field { margin-bottom: 12px; }
+    label { display: block; color: var(--muted); margin: 0 0 6px; }
+    input[type=text], input[type=password], input[type=url], textarea, select {
+      width: 100%; background: rgba(7, 9, 13, 0.55); border: 1px solid var(--line);
+      border-radius: var(--radius); padding: 9px 11px; outline: none;
+    }
+    input:focus, textarea:focus, select:focus { border-color: rgba(74, 222, 128, 0.7); }
+    textarea { min-height: 72px; resize: vertical; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .panel-actions { justify-content: flex-end; margin-top: 8px; }
+    .icons { display: flex; flex-wrap: wrap; gap: 6px; }
+    .icon-pick {
+      width: 36px; height: 36px; border-radius: var(--radius); padding: 0;
+      border: 1px solid var(--line); background: rgba(255,255,255,0.06);
+      display: grid; place-items: center; color: var(--text);
+    }
+    .icon-pick svg { width: 18px; height: 18px; }
+    .icon-pick.active { border-color: var(--accent-2); background: rgba(74, 222, 128, 0.18); }
+    .check { display: flex; align-items: center; gap: 8px; color: var(--muted); cursor: pointer; }
+    .file-btn { position: relative; overflow: hidden; }
+    .file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .preview { width: 100%; max-height: 120px; object-fit: cover; border-radius: var(--radius); border: 1px solid var(--line); display: block; }
+    .preview[hidden] { display: none !important; }
+    @media (max-width: 640px) {
+      .clock { top: 10px; right: 12px; }
+      .clock-time { font-size: 20px; }
+      .hero { padding: 64px 12px 8px; }
+      .stage { padding: 8px 12px 20px; }
+      footer { padding: 10px 14px 14px; flex-wrap: wrap; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg" id="bg"><img src="/vendor/portal.jpg" alt="" /></div>
+  <div class="bg-dim"></div>
+  <div class="clock" id="clock" aria-live="polite">
+    <div class="clock-time" id="clock-time"></div>
+    <div class="clock-date" id="clock-date"></div>
+  </div>
+  <div class="wrap" id="wrap">
+    <section class="hero">
+      <h1 id="title">系统导航</h1>
+      <p id="subtitle"></p>
+    </section>
+    <div class="stage">
+      <div id="flash" class="flash" hidden></div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <footer>
+      <div class="brand">
+        <span class="mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <rect width="32" height="32" rx="6" fill="currentColor"/>
+            <path fill="#052e16" d="M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z"/>
+            <rect x="8" y="21.4" width="16" height="2.5" rx="1.2" fill="#052e16"/>
+            <rect x="10.4" y="24.8" width="11.2" height="2.2" rx="1.1" fill="#052e16" opacity=".72"/>
+          </svg>
+        </span>
+        <span class="ver">v__APP_VERSION__</span>
+      </div>
+      <div class="actions">
+        <a class="btn" href="/console" id="btn-console" hidden>系统管理</a>
+        <button type="button" class="btn" id="btn-edit" hidden>编辑首页</button>
+        <button type="button" class="btn" id="btn-login">登录</button>
+        <button type="button" class="btn" id="btn-logout" hidden>退出</button>
+      </div>
+    </footer>
+  </div>
+
+  <div class="overlay" id="login-box" hidden>
+    <div class="panel panel-login">
+      <h2 id="login-title">登录</h2>
+      <p class="hint" id="login-hint" hidden></p>
+      <div id="login-flash" class="flash" hidden></div>
+      <div class="field"><label>用户名</label><input id="login-user" type="text" autocomplete="username" /></div>
+      <div class="field"><label>密码</label><input id="login-pass" type="password" autocomplete="current-password" /></div>
+      <div class="field" id="login-pass2-wrap" hidden>
+        <label>确认密码</label><input id="login-pass2" type="password" autocomplete="new-password" />
+      </div>
+      <div class="row panel-actions">
+        <button type="button" class="btn" id="login-cancel">取消</button>
+        <button type="button" class="btn primary" id="login-submit">登录</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="edit-box" hidden>
+    <div class="panel">
+      <h2 id="edit-title">编辑入口</h2>
+      <p class="hint">图标、名称、简介和跳转地址。可上传图片作为图标。</p>
+      <div id="edit-flash" class="flash" hidden></div>
+      <div class="field">
+        <label>内置图标</label>
+        <div class="icons" id="icon-picks"></div>
+      </div>
+      <div class="field"><label>图标文字 / Emoji</label><input id="f-icon" type="text" maxlength="16" placeholder="🛠️ 或 update" /></div>
+      <div class="field"><label>名称</label><input id="f-name" type="text" maxlength="64" placeholder="监控" /></div>
+      <div class="field"><label>简介</label><textarea id="f-summary" maxlength="200" placeholder="简要说明这个入口"></textarea></div>
+      <div class="field"><label>跳转地址</label><input id="f-url" type="text" maxlength="1024" placeholder="https:// 或 /console" /></div>
+      <label class="check"><input id="f-newtab" type="checkbox" /> 在新标签页打开</label>
+      <div class="field" style="margin-top:12px">
+        <label>自定义图标图片</label>
+        <div class="row">
+          <label class="btn file-btn">选择图片<input id="f-icon-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" /></label>
+          <button type="button" class="btn" id="btn-clear-icon" hidden>清除图片</button>
+        </div>
+        <img class="preview" id="icon-preview" alt="" hidden />
+      </div>
+      <div class="row panel-actions">
+        <button type="button" class="btn primary" id="item-save">保存</button>
+        <button type="button" class="btn" id="item-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="settings-box" hidden>
+    <div class="panel">
+      <h2>首页设置</h2>
+      <p class="hint">修改标题，并上传图片或 MP4 作为背景。</p>
+      <div id="set-flash" class="flash" hidden></div>
+      <div class="field"><label>页面标题</label><input id="s-title" type="text" maxlength="64" /></div>
+      <div class="field"><label>副标题</label><input id="s-subtitle" type="text" maxlength="160" /></div>
+      <div class="field">
+        <label>背景</label>
+        <div class="row">
+          <label class="btn file-btn">上传图片或视频<input id="s-bg" type="file" accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,.mp4,.webm" /></label>
+          <button type="button" class="btn danger" id="s-bg-clear">清除背景</button>
+        </div>
+      </div>
+      <div class="row panel-actions">
+        <button type="button" class="btn primary" id="s-save">保存文字</button>
+        <button type="button" class="btn" id="s-close">完成</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const ICONS = {
+      update: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 1.5a6.5 6.5 0 1 0 6.33 8.12.75.75 0 0 0-1.46-.34A5 5 0 1 1 8 3v1.75a.75.75 0 0 0 1.28.53l2.25-2.25a.75.75 0 0 0 0-1.06L9.28.72A.75.75 0 0 0 8 1.25Z"/></svg>',
+      globe: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0m-.75 14.93A6.5 6.5 0 0 1 1.55 9h2.6c.14 2.1.66 3.99 1.4 5.37.24.45.5.82.76 1.1.18.2.34.32.44.39zm1.5 0c.1-.07.26-.2.44-.39.26-.28.52-.65.76-1.1.74-1.38 1.26-3.27 1.4-5.37h2.6a6.5 6.5 0 0 1-5.7 5.93zM14.45 7h-2.61c-.1-1.66-.4-3.18-.86-4.43A6.51 6.51 0 0 1 14.45 7M8.9 1.1c.5.36 1.05 1.16 1.5 2.32.4 1.05.68 2.36.79 3.58H8.9zm-1.8 0v5.9H4.81c.11-1.22.39-2.53.79-3.58.45-1.16 1-1.96 1.5-2.32M3.16 2.57C2.7 3.82 2.4 5.34 2.3 7H1.55a6.51 6.51 0 0 1 1.61-4.43"/></svg>',
+      server: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1.75 1h12.5c.97 0 1.75.78 1.75 1.75v3.5C16 7.22 15.22 8 14.25 8H1.75C.78 8 0 7.22 0 6.25v-3.5C0 1.78.78 1 1.75 1M1.5 6.25c0 .14.11.25.25.25h12.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25ZM1.75 8h12.5c.97 0 1.75.78 1.75 1.75v3.5c0 .97-.78 1.75-1.75 1.75H1.75C.78 15 0 14.22 0 13.25v-3.5C0 8.78.78 8 1.75 8M1.5 13.25c0 .14.11.25.25.25h12.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25ZM7 4.75A.75.75 0 0 1 7.75 4h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 7 4.75M7.75 11h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5"/></svg>',
+      database: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 0c2.2 0 4 .67 4 1.5v1C12 .67 10.2 0 8 0S4 .67 4 1.5v1C4 .67 5.8 0 8 0m4 4.5c0 .83-1.8 1.5-4 1.5s-4-.67-4-1.5v-1c0 .83 1.8 1.5 4 1.5s4-.67 4-1.5zm0 3c0 .83-1.8 1.5-4 1.5s-4-.67-4-1.5v-1c0 .83 1.8 1.5 4 1.5s4-.67 4-1.5zm0 3c0 .83-1.8 1.5-4 1.5s-4-.67-4-1.5v-1c0 .83 1.8 1.5 4 1.5s4-.67 4-1.5zM8 16c-2.2 0-4-.67-4-1.5v-1c0 .83 1.8 1.5 4 1.5s4-.67 4-1.5v1c0 .83-1.8 1.5-4 1.5"/></svg>',
+      terminal: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M0 2.75C0 1.78.78 1 1.75 1h12.5c.97 0 1.75.78 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .14.11.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 0 1.5h-3A.75.75 0 0 1 7.25 8m-1.5-2.47L3.28 8l2.47 2.47a.75.75 0 0 1-1.06 1.06L1.72 8.53a.75.75 0 0 1 0-1.06l2.97-2.97a.75.75 0 0 1 1.06 1.06"/></svg>',
+      folder: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.22.78 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.72l-.89-1.33A1.75 1.75 0 0 0 5.38 1ZM1.5 2.75a.25.25 0 0 1 .25-.25h3.63c.16 0 .31.07.41.2l.72 1.07H1.5Zm0 2.25h12.75a.25.25 0 0 1 .25.25v8.5a.25.25 0 0 1-.25.25H1.75a.25.25 0 0 1-.25-.25Z"/></svg>',
+      cloud: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 7.25A4.25 4.25 0 0 1 7.66 3.3a3.75 3.75 0 0 1 6.54 2.2A3.5 3.5 0 0 1 13.5 12.5h-9A4.25 4.25 0 0 1 2 7.25"/></svg>',
+      lock: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M4 4a4 4 0 1 1 8 0v2h.25c.97 0 1.75.78 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.78 2.78 6 3.75 6H4Zm1.5 2h5V4a2.5 2.5 0 0 0-5 0Z"/></svg>',
+      chart: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1.5 1.75a.75.75 0 0 0-1.5 0v12.5c0 .41.34.75.75.75h14.5a.75.75 0 0 0 0-1.5H1.5ZM3 11.25a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1-.75-.75Zm4-4a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75v5.5a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1-.75-.75Zm4-3a.75.75 0 0 1 .75-.75h1.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1-.75-.75Z"/></svg>',
+      camera: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M10.22 2.22A.75.75 0 0 1 10.75 2h3.5a.75.75 0 0 1 0 1.5h-2.69l-1.22 1.22A.75.75 0 0 1 9.28 3.66ZM1.75 4h4.94l1.22-1.22A.75.75 0 0 1 8.44 2H1.75A1.75 1.75 0 0 0 0 3.75v8.5C0 13.22.78 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-6.5A1.75 1.75 0 0 0 14.25 4H13.5v-.25A.75.75 0 0 0 12 4.5v.25h.25c.69 0 1.25.56 1.25 1.25v6.5c0 .69-.56 1.25-1.25 1.25H1.75c-.69 0-1.25-.56-1.25-1.25v-8.5c0-.69.56-1.25 1.25-1.25ZM8 6.5A2.75 2.75 0 1 1 8 12a2.75 2.75 0 0 1 0-5.5M6.75 9.25a1.25 1.25 0 1 0 2.5 0 1.25 1.25 0 0 0-2.5 0"/></svg>',
+      home: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M6.906.664a1.75 1.75 0 0 1 2.188 0l5.25 4.2c.415.332.656.84.656 1.375v7.01c0 .966-.784 1.75-1.75 1.75h-3.5a.75.75 0 0 1-.75-.75V10.5a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25v3.75a.75.75 0 0 1-.75.75h-3.5A1.75 1.75 0 0 1 0 13.25v-7.01c0-.535.241-1.043.656-1.375Z"/></svg>',
+      grid: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M1.75 1h3.5c.41 0 .75.34.75.75v3.5A.75.75 0 0 1 5.25 6h-3.5A.75.75 0 0 1 1 5.25v-3.5C1 1.34 1.34 1 1.75 1m9 0h3.5c.41 0 .75.34.75.75v3.5A.75.75 0 0 1 14.25 6h-3.5A.75.75 0 0 1 10 5.25v-3.5c0-.41.34-.75.75-.75m-9 9h3.5c.41 0 .75.34.75.75v3.5a.75.75 0 0 1-.75.75h-3.5A.75.75 0 0 1 1 14.25v-3.5c0-.41.34-.75.75-.75m9 0h3.5c.41 0 .75.34.75.75v3.5a.75.75 0 0 1-.75.75h-3.5a.75.75 0 0 1-.75-.75v-3.5c0-.41.34-.75.75-.75"/></svg>',
+      link: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 .75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Zm-4.69 9.64a2 2 0 0 1 0-2.83l2.5-2.5a2 2 0 0 1 2.83 0 .75.75 0 0 0 1.06-1.06 3.5 3.5 0 0 0-4.95 0l-2.5 2.5a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25a.75.75 0 0 0-1.06-1.06l-1.25 1.25a2 2 0 0 1-2.83 0Z"/></svg>',
+    };
+
+    const state = { page: null, editing: false, editId: null, dragId: null };
+    const IDLE_MS = 2 * 60 * 60 * 1000;
+    let lastActivity = Date.now();
+    ["click", "keydown", "mousemove", "scroll"].forEach((ev) => {
+      window.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true });
+    });
+    setInterval(() => {
+      if (loggedIn() && Date.now() - lastActivity >= IDLE_MS) logout();
+    }, 15000);
+    const $ = (sel, el = document) => el.querySelector(sel);
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
+    function pad2(n) { return String(n).padStart(2, "0"); }
+    function tickClock() {
+      const now = new Date();
+      const time = pad2(now.getHours()) + ":" + pad2(now.getMinutes()) + ":" + pad2(now.getSeconds());
+      const date = now.getFullYear() + "年" + (now.getMonth() + 1) + "月" + now.getDate() + "日 星期" + WEEKDAYS[now.getDay()];
+      const t = $("#clock-time");
+      const d = $("#clock-date");
+      if (t) t.textContent = time;
+      if (d) d.textContent = date;
+    }
+    tickClock();
+    setInterval(tickClock, 1000);
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, { credentials: "same-origin", ...opts });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
+      if (res.status === 401) {
+        openLogin((data && data.error) || "请先登录");
+        throw new Error((data && data.error) || "请先登录");
+      }
+      if (!res.ok) throw new Error((data && data.error) || res.statusText);
+      return data;
+    }
+
+    function flash(id, kind, msg) {
+      const box = $(id);
+      if (!box) return;
+      box.className = "flash " + kind;
+      box.textContent = msg || "";
+      box.hidden = !msg;
+    }
+
+    function loggedIn() {
+      return !!(state.page && state.page.auth && state.page.auth.user);
+    }
+
+    function applyPage(page) {
+      state.page = page;
+      document.title = page.title || "系统导航";
+      $("#title").textContent = page.title || "系统导航";
+      $("#subtitle").textContent = page.subtitle || "";
+      $("#subtitle").hidden = !(page.subtitle || "").trim();
+      if (loggedIn()) {
+        const name = page.auth.user.username;
+        $("#btn-login").hidden = true;
+        $("#btn-logout").hidden = false;
+        $("#btn-logout").textContent = "退出" + name;
+        $("#btn-console").hidden = false;
+        $("#btn-edit").hidden = false;
+        $("#btn-edit").textContent = state.editing ? "完成编辑" : "编辑首页";
+      } else {
+        $("#btn-login").hidden = false;
+        $("#btn-logout").hidden = true;
+        $("#btn-logout").textContent = "退出";
+        $("#btn-console").hidden = true;
+        $("#btn-edit").hidden = true;
+        $("#btn-login").textContent = page.auth && page.auth.needs_setup ? "初始化" : "登录";
+        state.editing = false;
+      }
+      renderBackground(page.background);
+      renderGrid();
+    }
+
+    function renderBackground(bg) {
+      const el = $("#bg");
+      if (!bg || bg.kind === "none" || !bg.url) {
+        el.hidden = true;
+        el.innerHTML = "";
+        return;
+      }
+      el.hidden = false;
+      if (bg.kind === "video") {
+        el.innerHTML = `<video autoplay muted loop playsinline src="${esc(bg.url)}"></video>`;
+      } else {
+        el.innerHTML = `<img src="${esc(bg.url)}" alt="" />`;
+      }
+    }
+
+    function iconHtml(item) {
+      if (item.icon_url) return `<img src="${esc(item.icon_url)}" alt="" />`;
+      if (ICONS[item.icon]) return ICONS[item.icon];
+      const t = (item.icon || "").trim();
+      if (t) return `<span class="emoji">${esc(t)}</span>`;
+      return ICONS.grid;
+    }
+
+    function renderGrid() {
+      const root = $("#grid");
+      const items = ((state.page && state.page.items) || []).filter((it) => {
+        const url = String(it.url || "").trim().replace(/\/+$/, "");
+        return url !== "/console";
+      });
+      root.classList.toggle("editing", state.editing);
+      root.innerHTML = "";
+      if (!items.length && !state.editing) {
+        root.innerHTML = `<div class="empty">还没有入口。登录后可以添加应用卡片，并设置首页背景。</div>`;
+        return;
+      }
+      for (const item of items) {
+        const a = document.createElement(state.editing ? "div" : "a");
+        a.className = "card";
+        a.dataset.id = item.id;
+        if (!state.editing) {
+          a.href = item.url;
+          if (item.open_new) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
+        } else {
+          a.draggable = true;
+        }
+        a.innerHTML =
+          `<span class="ico">${iconHtml(item)}</span>` +
+          `<div class="card-main">` +
+            `<h3>${esc(item.name)}</h3>` +
+            `<p>${esc(item.summary || "")}</p>` +
+            `<div class="card-ops">` +
+              `<button type="button" class="btn" data-act="edit">编辑</button>` +
+              `<button type="button" class="btn danger" data-act="del">删除</button>` +
+            `</div>` +
+          `</div>`;
+        if (state.editing) {
+          a.addEventListener("dragstart", onDragStart);
+          a.addEventListener("dragover", onDragOver);
+          a.addEventListener("drop", onDrop);
+          a.addEventListener("dragend", onDragEnd);
+          a.querySelector('[data-act="edit"]').onclick = (e) => { e.preventDefault(); openItem(item); };
+          a.querySelector('[data-act="del"]').onclick = (e) => { e.preventDefault(); removeItem(item); };
+        }
+        root.appendChild(a);
+      }
+      if (state.editing) {
+        const add = document.createElement("button");
+        add.type = "button";
+        add.className = "add-card";
+        add.textContent = "＋ 添加入口";
+        add.onclick = () => openItem(null);
+        root.appendChild(add);
+      }
+    }
+
+    function onDragStart(e) {
+      state.dragId = e.currentTarget.dataset.id;
+      e.currentTarget.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    }
+    function onDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+    }
+    function onDrop(e) {
+      e.preventDefault();
+      const to = e.currentTarget.dataset.id;
+      if (!state.dragId || !to || state.dragId === to) return;
+      const ids = state.page.items.map((it) => it.id);
+      const from = ids.indexOf(state.dragId);
+      const dest = ids.indexOf(to);
+      if (from < 0 || dest < 0) return;
+      ids.splice(from, 1);
+      ids.splice(dest, 0, state.dragId);
+      api("/api/portal/items/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }).then(applyPage).catch((err) => flash("#flash", "err", err.message));
+    }
+    function onDragEnd(e) {
+      e.currentTarget.classList.remove("dragging");
+      state.dragId = null;
+    }
+
+    function renderIconPicks(active) {
+      const box = $("#icon-picks");
+      box.innerHTML = "";
+      Object.keys(ICONS).forEach((name) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "icon-pick" + (active === name ? " active" : "");
+        b.innerHTML = ICONS[name];
+        b.title = name;
+        b.onclick = () => {
+          $("#f-icon").value = name;
+          renderIconPicks(name);
+        };
+        box.appendChild(b);
+      });
+    }
+
+    function openItem(item) {
+      state.editId = item ? item.id : null;
+      $("#edit-title").textContent = item ? "编辑入口" : "添加入口";
+      $("#f-icon").value = item ? item.icon : "grid";
+      $("#f-name").value = item ? item.name : "";
+      $("#f-summary").value = item ? item.summary : "";
+      $("#f-url").value = item ? item.url : "";
+      $("#f-newtab").checked = !!(item && item.open_new);
+      $("#f-icon-file").value = "";
+      const prev = $("#icon-preview");
+      if (item && item.icon_url) {
+        prev.src = item.icon_url;
+        prev.hidden = false;
+        $("#btn-clear-icon").hidden = false;
+      } else {
+        prev.removeAttribute("src");
+        prev.hidden = true;
+        $("#btn-clear-icon").hidden = !(item && item.icon_url);
+      }
+      renderIconPicks($("#f-icon").value);
+      flash("#edit-flash", "ok", "");
+      $("#edit-box").hidden = false;
+    }
+
+    async function saveItem() {
+      const body = {
+        icon: $("#f-icon").value.trim(),
+        name: $("#f-name").value.trim(),
+        summary: $("#f-summary").value.trim(),
+        url: $("#f-url").value.trim(),
+        open_new: $("#f-newtab").checked,
+      };
+      try {
+        let page;
+        if (state.editId) {
+          page = await api("/api/portal/items/" + state.editId, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+        } else {
+          const known = new Set(((state.page && state.page.items) || []).map((it) => it.id));
+          page = await api("/api/portal/items", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          });
+          const created = (page.items || []).find((it) => !known.has(it.id));
+          state.editId = created && created.id;
+        }
+        const file = $("#f-icon-file").files[0];
+        if (file && state.editId) {
+          const fd = new FormData();
+          fd.append("file", file);
+          page = await api("/api/portal/items/" + state.editId + "/icon", { method: "POST", body: fd });
+        }
+        applyPage(page);
+        $("#edit-box").hidden = true;
+        flash("#flash", "ok", "已保存");
+      } catch (e) {
+        flash("#edit-flash", "err", e.message);
+      }
+    }
+
+    async function removeItem(item) {
+      if (!confirm("删除入口「" + item.name + "」？")) return;
+      try {
+        applyPage(await api("/api/portal/items/" + item.id, { method: "DELETE" }));
+      } catch (e) {
+        flash("#flash", "err", e.message);
+      }
+    }
+
+    function openLogin(message) {
+      const setup = state.page && state.page.auth && state.page.auth.needs_setup;
+      $("#login-title").textContent = setup ? "初始化管理员" : "登录";
+      $("#login-hint").hidden = !setup;
+      $("#login-hint").textContent = setup ? "首次使用请设置管理员账号。" : "";
+      $("#login-pass2-wrap").hidden = !setup;
+      $("#login-submit").textContent = setup ? "创建并进入" : "登录";
+      flash("#login-flash", "err", message || "");
+      $("#login-box").hidden = false;
+      $("#login-user").focus();
+    }
+
+    async function submitLogin() {
+      const username = $("#login-user").value.trim();
+      const password = $("#login-pass").value;
+      try {
+        const setup = state.page && state.page.auth && state.page.auth.needs_setup;
+        if (setup) {
+          const again = $("#login-pass2").value;
+          if (password !== again) throw new Error("两次输入的密码不一致");
+          await api("/api/auth/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+        } else {
+          await api("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+        }
+        $("#login-box").hidden = true;
+        applyPage(await api("/api/portal"));
+      } catch (e) {
+        flash("#login-flash", "err", e.message);
+      }
+    }
+
+    function openSettings() {
+      if (!state.page) return;
+      $("#s-title").value = state.page.title || "";
+      $("#s-subtitle").value = state.page.subtitle || "";
+      flash("#set-flash", "ok", "");
+      $("#settings-box").hidden = false;
+    }
+
+    async function saveSettings() {
+      try {
+        applyPage(await api("/api/portal", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: $("#s-title").value,
+            subtitle: $("#s-subtitle").value,
+          }),
+        }));
+        flash("#set-flash", "ok", "标题已保存");
+      } catch (e) {
+        flash("#set-flash", "err", e.message);
+      }
+    }
+
+    async function uploadBackground(file) {
+      if (!file) return;
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        applyPage(await api("/api/portal/background", { method: "POST", body: fd }));
+        flash("#set-flash", "ok", "背景已更新");
+      } catch (e) {
+        flash("#set-flash", "err", e.message);
+      } finally {
+        $("#s-bg").value = "";
+      }
+    }
+
+    async function clearBackground() {
+      if (!confirm("清除首页背景？")) return;
+      try {
+        applyPage(await api("/api/portal/background", { method: "DELETE" }));
+        flash("#set-flash", "ok", "已恢复默认背景");
+      } catch (e) {
+        flash("#set-flash", "err", e.message);
+      }
+    }
+
+    async function toggleEdit() {
+      if (!loggedIn()) {
+        openLogin();
+        return;
+      }
+      state.editing = !state.editing;
+      $("#btn-edit").textContent = state.editing ? "完成编辑" : "编辑首页";
+      renderGrid();
+      if (state.editing) openSettings();
+    }
+
+    async function logout() {
+      try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
+      state.editing = false;
+      applyPage(await api("/api/portal"));
+    }
+
+    $("#btn-edit").onclick = toggleEdit;
+    $("#btn-login").onclick = () => openLogin();
+    $("#btn-logout").onclick = logout;
+    $("#login-submit").onclick = submitLogin;
+    $("#login-cancel").onclick = () => { $("#login-box").hidden = true; };
+    ["login-user", "login-pass", "login-pass2"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
+    });
+    $("#item-save").onclick = saveItem;
+    $("#item-cancel").onclick = () => { $("#edit-box").hidden = true; };
+    $("#s-save").onclick = saveSettings;
+    $("#s-close").onclick = () => { $("#settings-box").hidden = true; };
+    $("#s-bg").onchange = (e) => uploadBackground(e.target.files[0]);
+    $("#s-bg-clear").onclick = clearBackground;
+    $("#f-icon-file").onchange = (e) => {
+      const file = e.target.files[0];
+      const prev = $("#icon-preview");
+      if (!file) return;
+      prev.src = URL.createObjectURL(file);
+      prev.hidden = false;
+    };
+    $("#btn-clear-icon").onclick = async () => {
+      if (!state.editId) return;
+      try {
+        const page = await api("/api/portal/items/" + state.editId + "/icon", { method: "DELETE" });
+        applyPage(page);
+        $("#icon-preview").hidden = true;
+        $("#btn-clear-icon").hidden = true;
+        flash("#edit-flash", "ok", "已清除图片图标");
+      } catch (e) {
+        flash("#edit-flash", "err", e.message);
+      }
+    };
+
+    (async function boot() {
+      try {
+        applyPage(await api("/api/portal"));
+      } catch (e) {
+        flash("#flash", "err", e.message);
+      }
+    })();
+  </script>
+</body>
+</html>
