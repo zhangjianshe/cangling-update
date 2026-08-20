@@ -18,6 +18,16 @@
 7. 对正在运行的容器打开 **xterm 终端**（`docker compose exec`），并按容器查看日志
 8. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本
 
+## 安装
+```bash
+  mkdir update
+  cd update
+  curl https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.27/cangling-update-linux-amd64 -O cangling-update
+  chmod +x cangling-update
+  ./cangling-update install-service
+  # 访问地址 https://localhost:5400
+```
+
 ## 编译
 
 需要本机已安装 Rust，以及 `docker`（导入镜像、操作 compose 时使用）。
