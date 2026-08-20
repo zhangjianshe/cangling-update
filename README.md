@@ -222,6 +222,7 @@ Compose 面板的 **编辑** 会打开当前目录里的 `docker-compose.yml` / 
 
 ```
 cangling-update                 # 程序
+logs/cangling-update.log        # 运行日志（与程序同目录）
 config/
   cangling.db                   # SQLite（项目、版本、Compose 文件历史、用户、会话）
   backups/<项目ID>/<版本ID>/

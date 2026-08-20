@@ -18,9 +18,12 @@ use clap::{Parser, Subcommand};
 use docker::Docker;
 use paths::AppPaths;
 use state::AppState;
+use std::io::IsTerminal;
 use std::net::SocketAddr;
-use std::path::PathBuf;
-use tracing_subscriber::EnvFilter;
+use std::path::{Path, PathBuf};
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -80,12 +83,6 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -117,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let paths = AppPaths::resolve(cli.data_dir)?;
+    init_logging(&paths.log_file);
 
     let conn = db::open(&paths.db_path)?;
     let docker = Docker::detect().await;
@@ -126,6 +124,8 @@ async fn main() -> anyhow::Result<()> {
         exe_dir = %paths.exe_dir.display(),
         config = %paths.config_dir.display(),
         db = %paths.db_path.display(),
+        logs = %paths.logs_dir.display(),
+        log = %paths.log_file.display(),
         docker = ?docker_meta.version,
         compose = %docker_meta.compose,
         docker_available = docker_meta.available,
@@ -186,6 +186,40 @@ fn reset_password(
         eprintln!("请立即登录并自行改密。以上密码只显示一次。");
     }
     Ok(())
+}
+
+fn init_logging(log_file: &Path) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let stderr_layer = fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal());
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+    {
+        Ok(file) => {
+            let file_layer = fmt::layer()
+                .with_writer(std::sync::Mutex::new(file))
+                .with_ansi(false);
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(stderr_layer)
+                .with(file_layer)
+                .init();
+        }
+        Err(err) => {
+            eprintln!(
+                "无法写入日志文件 {}：{err}，仅输出到终端",
+                log_file.display()
+            );
+            tracing_subscriber::registry()
+                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(stderr_layer)
+                .init();
+        }
+    }
 }
 
 fn generate_password() -> String {

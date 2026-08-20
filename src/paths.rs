@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 ///
 /// ```text
 /// cangling-update          # this binary
+/// logs/cangling-update.log # application log
 /// config/
 ///   cangling.db            # sqlite
 ///   backups/<project>/<version>/
@@ -19,6 +20,8 @@ pub struct AppPaths {
     pub backups_dir: PathBuf,
     pub uploads_dir: PathBuf,
     pub portal_dir: PathBuf,
+    pub logs_dir: PathBuf,
+    pub log_file: PathBuf,
 }
 
 impl AppPaths {
@@ -52,6 +55,11 @@ impl AppPaths {
         std::fs::create_dir_all(portal_dir.join("icons"))
             .with_context(|| format!("create portal icons dir {}", portal_dir.display()))?;
 
+        let logs_dir = exe_dir.join("logs");
+        std::fs::create_dir_all(&logs_dir)
+            .with_context(|| format!("create log dir {}", logs_dir.display()))?;
+        let log_file = logs_dir.join("cangling-update.log");
+
         Ok(Self {
             db_path: config_dir.join("cangling.db"),
             exe_dir,
@@ -59,6 +67,8 @@ impl AppPaths {
             backups_dir,
             uploads_dir,
             portal_dir,
+            logs_dir,
+            log_file,
         })
     }
 
