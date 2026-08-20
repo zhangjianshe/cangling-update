@@ -22,34 +22,37 @@
 ```bash
   mkdir update
   cd update
-  curl https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.27/cangling-update-linux-amd64 -O cangling-update
+  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/latest/download/cangling-update-linux-amd64
   chmod +x cangling-update
   ./cangling-update install-service
-  # 访问地址 https://localhost:5400
+  # 访问地址 http://localhost:5400
 ```
+
+发布文件是 **musl 静态链接**，不依赖主机 glibc，可在 Ubuntu 20.04 / Debian 11 等老系统上运行。若出现 `GLIBC_2.39 not found`，说明这份二进制是在较新系统上动态链接的 gnu 构建，请改用上面的 Releases 文件，或在本仓库执行 `make x86` 后把产物拷过去。
 
 ## 编译
 
 需要本机已安装 Rust，以及 `docker`（导入镜像、操作 compose 时使用）。
 
 ```bash
-# 本机架构
+# 本机架构（动态链接当前系统 glibc，只能在同代或更新的 glibc 上跑）
 cargo build --release
 # 产物：target/release/cangling-update
 
-# x86_64
+# x86_64 静态 musl（推荐拷到其它机器；需 musl-tools）
+sudo apt install musl-tools
 make x86
+# 产物：target/x86_64-unknown-linux-musl/release/cangling-update
 
-# ARM64（需：rustup target add aarch64-unknown-linux-gnu
-#         以及 gcc-aarch64-linux-gnu）
+# ARM64 静态 musl（需 musl 交叉链接器；GitHub Actions 会编）
 make arm64
 ```
 
-建议把 `target/release/cangling-update` 拷到固定目录再运行或安装服务，不要长期用 `target/debug/`。
+建议把 musl 产物拷到固定目录再运行或安装服务，不要长期用 `target/debug/`，也不要把本机 `target/release/`（gnu）拷到 glibc 更旧的主机。
 
 ### GitHub Actions 发布
 
-仓库已配置 `.github/workflows/release.yml`，会同时编译：
+仓库已配置 `.github/workflows/release.yml`，用 musl 静态编译：
 
 | 文件 | 架构 |
 |---|---|

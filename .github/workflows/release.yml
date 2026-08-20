@@ -21,41 +21,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             asset: cangling-update-linux-amd64
-            extra_apt: ""
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             asset: cangling-update-linux-arm64
-            # 同时安装交叉编译器和 arm64 架构专属的 C 标准库头文件，解决 libsqlite3-sys 等依赖编译报错
-            extra_apt: gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install cross linker
-        if: matrix.extra_apt != ''
-        run: |
-          # 1. 彻底删除系统默认的所有 apt 源配置文件（包括 ubuntu.sources 等），防止 azure 源残留卡顿
-          sudo rm -f /etc/apt/sources.list.d/*.sources
-          sudo rm -f /etc/apt/sources.list.d/*.list
-          
-          # 2. 重新写入干净的主源
-          sudo tee /etc/apt/sources.list << 'EOF'
-          deb http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
-          deb http://archive.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          EOF
-          
-          # 3. 更新并安装
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ${{ matrix.extra_apt }}
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Install musl toolchain
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -66,9 +49,6 @@ jobs:
       - name: Build release
         env:
           CARGO_TERM_COLOR: always
-          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
-          # 显式告知交叉编译器 arm64 头文件的路径，确保内置 C 源码（如 sqlite3）能够正确编译
-          CFLAGS_aarch64_unknown_linux_gnu: "-I/usr/aarch64-linux-gnu/include"
         run: cargo build --locked --release --target ${{ matrix.target }}
 
       - name: Package
@@ -83,6 +63,11 @@ jobs:
           (cd dist && sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256")
           
           file "$dst"
+          ldd "$dst" 2>&1 || true
+          if ! file "$dst" | grep -Eq 'statically linked|static-pie'; then
+            echo "expected a static musl binary" >&2
+            exit 1
+          fi
           ls -lh dist
 
       - name: Upload workflow artifact
