@@ -65,7 +65,7 @@ fi
 echo "$old -> $ver  ($tag)"
 
 if [[ "$dry_run" -eq 1 ]]; then
-  echo "[dry-run] 将修改 Cargo.toml / Cargo.lock，提交，并 git push origin HEAD $tag"
+  echo "[dry-run] 将修改 Cargo.toml / Cargo.lock / README.md 下载地址，提交，并 git push origin HEAD $tag"
   exit 0
 fi
 
@@ -95,9 +95,24 @@ if [[ -f Cargo.lock ]]; then
   mv "$tmp" Cargo.lock
 fi
 
+if [[ -f README.md ]]; then
+  tmp="$(mktemp)"
+  awk -v tag="$tag" '
+    {
+      gsub(/\/releases\/latest\/download\//, "/releases/download/" tag "/")
+      gsub(/\/releases\/download\/v[0-9]+\.[0-9]+\.[0-9]+\//, "/releases/download/" tag "/")
+      print
+    }
+  ' README.md > "$tmp"
+  mv "$tmp" README.md
+fi
+
 git add Cargo.toml
 if [[ -f Cargo.lock ]]; then
   git add Cargo.lock
+fi
+if [[ -f README.md ]]; then
+  git add README.md
 fi
 
 if git diff --cached --quiet; then
