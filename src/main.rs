@@ -4,6 +4,7 @@ mod backup;
 mod db;
 mod docker;
 mod error;
+mod hostinfo;
 mod models;
 mod paths;
 mod portal;
@@ -79,6 +80,12 @@ enum Command {
         #[arg(long, env = "HTTPS_PROXY")]
         proxy: Option<String>,
     },
+    /// 采集主机信息，写入程序目录下的 info.md
+    Hostinfo {
+        /// 输出路径（默认：程序所在目录/info.md）
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -105,6 +112,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::Update { check, force, proxy }) => {
             return update::run(check, force, proxy);
+        }
+        Some(Command::Hostinfo { output }) => {
+            let paths = AppPaths::resolve(cli.data_dir)?;
+            return hostinfo::run(&paths, output);
         }
         None => {
             if service::is_installed() && !service::running_as_systemd_service() {

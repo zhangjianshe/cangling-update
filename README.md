@@ -75,6 +75,10 @@ make arm64
 ./cangling-update
 # 浏览器打开 http://<主机>:5400
 # 若已安装为系统服务，则只打印访问地址后退出
+
+./cangling-update hostinfo
+# 在程序目录写入 info.md（软件版本与路径、本机 IP、项目列表、磁盘、CPU/GPU）
+# 指定路径：./cangling-update hostinfo -o /tmp/info.md
 ```
 
 常用参数：
@@ -299,6 +303,7 @@ cangling-update [选项] [命令]
   uninstall-service    卸载 systemd 服务
   restart              重启本服务
   update               从 GitHub 下载新版本（不重启服务）
+  hostinfo             采集主机信息，写入程序目录下的 info.md
 
 选项：
   --bind               监听地址
