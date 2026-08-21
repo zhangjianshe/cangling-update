@@ -79,6 +79,11 @@ make arm64
 ./cangling-update hostinfo
 # 在程序目录写入 info.md（软件版本与路径、本机 IP、项目列表、磁盘、CPU/GPU）
 # 指定路径：./cangling-update hostinfo -o /tmp/info.md
+
+# 终端彩色查看（无需登录）
+curl -s http://<主机>:5400/hostinfo
+curl -s http://<主机>:5400/hostinfo.md | glow -
+curl -s 'http://<主机>:5400/hostinfo?color=0'   # 无颜色
 ```
 
 常用参数：
@@ -304,6 +309,7 @@ cangling-update [选项] [命令]
   restart              重启本服务
   update               从 GitHub 下载新版本（不重启服务）
   hostinfo             采集主机信息，写入程序目录下的 info.md
+                       网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md
 
 选项：
   --bind               监听地址

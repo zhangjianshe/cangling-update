@@ -6,6 +6,7 @@ use crate::backup::{
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
 use crate::error::AppError;
+use crate::hostinfo;
 use crate::models::*;
 use crate::paths::{
     commit_compose_draft, compose_draft_path, compose_etag, compose_live_path, find_compose_file,
@@ -15,9 +16,10 @@ use crate::paths::{
 };
 use crate::state::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
-use axum::http::header;
+use axum::http::{header, HeaderValue};
 use axum::middleware;
 use axum::response::IntoResponse;
+use serde::Deserialize;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use std::path::PathBuf;
@@ -28,6 +30,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(crate::portal::page))
         .route("/console", get(index))
+        .route("/hostinfo", get(hostinfo_term))
+        .route("/hostinfo.md", get(hostinfo_markdown))
         .merge(crate::portal::routes())
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/setup", post(auth::setup))
@@ -93,6 +97,58 @@ pub fn router(state: AppState) -> Router {
         ))
         .with_state(state)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024 * 1024))
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct HostinfoQuery {
+    color: Option<String>,
+}
+
+async fn hostinfo_term(
+    State(state): State<AppState>,
+    Query(q): Query<HostinfoQuery>,
+) -> Result<impl IntoResponse, AppError> {
+    let color = hostinfo::want_color(q.color.as_deref());
+    let snap = load_host_snapshot(&state).await?;
+    Ok(plain_text(hostinfo::render_ansi(&snap, color)))
+}
+
+async fn hostinfo_markdown(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let snap = load_host_snapshot(&state).await?;
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/markdown; charset=utf-8"),
+        )],
+        hostinfo::render_markdown(&snap),
+    ))
+}
+
+async fn load_host_snapshot(state: &AppState) -> Result<hostinfo::HostSnapshot, AppError> {
+    let projects = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::list_projects(&conn)?
+    };
+    let paths = state.paths.clone();
+    let port = state.port;
+    let mut snap = tokio::task::spawn_blocking(move || hostinfo::collect_with_projects(&paths, projects))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    snap.listen = Some(("0.0.0.0".into(), port));
+    Ok(snap)
+}
+
+fn plain_text(body: String) -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            ),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        body,
+    )
 }
 
 async fn create_job(State(state): State<AppState>) -> Json<crate::progress::JobProgress> {

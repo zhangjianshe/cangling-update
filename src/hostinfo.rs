@@ -79,7 +79,11 @@ pub fn collect(paths: &AppPaths) -> Result<HostSnapshot> {
         Ok(conn) => db::list_projects(&conn).unwrap_or_default(),
         Err(_) => Vec::new(),
     };
-    Ok(HostSnapshot {
+    Ok(collect_with_projects(paths, projects))
+}
+
+pub fn collect_with_projects(paths: &AppPaths, projects: Vec<Project>) -> HostSnapshot {
+    HostSnapshot {
         generated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z").to_string(),
         hostname: hostname(),
         primary_ip: primary_ip(),
@@ -92,7 +96,215 @@ pub fn collect(paths: &AppPaths) -> Result<HostSnapshot> {
         gpus: collect_gpus(),
         exe_dir: paths.exe_dir.display().to_string(),
         config_dir: paths.config_dir.display().to_string(),
-    })
+    }
+}
+
+/// `color` query: missing/`1`/`true`/`always` → ANSI; `0`/`false`/`never` → 纯文本。
+pub fn want_color(q: Option<&str>) -> bool {
+    match q.map(|s| s.trim().to_ascii_lowercase()) {
+        None => true,
+        Some(s) if s.is_empty() => true,
+        Some(s) => !matches!(s.as_str(), "0" | "false" | "no" | "never" | "off"),
+    }
+}
+
+struct Paint {
+    on: bool,
+}
+
+impl Paint {
+    fn wrap(&self, code: &str, s: &str) -> String {
+        if self.on {
+            format!("\x1b[{code}m{s}\x1b[0m")
+        } else {
+            s.to_string()
+        }
+    }
+    fn title(&self, s: &str) -> String {
+        self.wrap("1;96", s)
+    }
+    fn head(&self, s: &str) -> String {
+        self.wrap("1;36", s)
+    }
+    fn key(&self, s: &str) -> String {
+        self.wrap("2", s)
+    }
+    fn val(&self, s: &str) -> String {
+        self.wrap("32", s)
+    }
+    fn warn(&self, s: &str) -> String {
+        self.wrap("33", s)
+    }
+    fn bad(&self, s: &str) -> String {
+        self.wrap("31", s)
+    }
+    fn dim(&self, s: &str) -> String {
+        self.wrap("2", s)
+    }
+    fn rule(&self) -> String {
+        self.wrap("2", "────────────────────────────────────────")
+    }
+}
+
+/// Terminal document for `curl http://host/hostinfo` / `cat`.
+pub fn render_ansi(s: &HostSnapshot, color: bool) -> String {
+    let p = Paint { on: color };
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str(&format!("  {}\n", p.title("主机信息")));
+    out.push_str(&format!("  {}\n\n", p.dim(&format!("生成 {}", s.generated_at))));
+
+    out.push_str(&format!("  {}\n  {}\n", p.head("主机"), p.rule()));
+    kv(&mut out, &p, "主机名", &s.hostname);
+    kv(&mut out, &p, "主 IP", &dash(&s.primary_ip));
+    let ips = if s.ips.is_empty() {
+        "—".into()
+    } else {
+        s.ips.join(", ")
+    };
+    kv(&mut out, &p, "本机地址", &ips);
+    kv(&mut out, &p, "程序目录", &s.exe_dir);
+    kv(&mut out, &p, "数据目录", &s.config_dir);
+    if let Some((bind, port)) = &s.listen {
+        kv(&mut out, &p, "服务监听", &format!("{bind}:{port}"));
+    }
+    out.push('\n');
+
+    out.push_str(&format!("  {}\n  {}\n", p.head("已装软件"), p.rule()));
+    for sw in &s.software {
+        let ver = if sw.version.contains("未安装") {
+            p.warn(&sw.version)
+        } else {
+            p.val(&sw.version)
+        };
+        out.push_str(&format!(
+            "  {}  {}  {}\n",
+            p.key(&pad_display(&sw.name, 18)),
+            ver,
+            p.dim(&sw.path)
+        ));
+    }
+    out.push('\n');
+
+    out.push_str(&format!("  {}\n  {}\n", p.head("项目"), p.rule()));
+    if s.projects.is_empty() {
+        out.push_str(&format!("  {}\n\n", p.dim("暂无登记项目。")));
+    } else {
+        for proj in &s.projects {
+            let ver = match proj.current_version_no {
+                Some(n) => format!("v{n}"),
+                None => "—".into(),
+            };
+            out.push_str(&format!(
+                "  {}  {}  {}\n",
+                p.val(&pad_display(&proj.name, 16)),
+                p.key(&ver),
+                proj.directory
+            ));
+            if !proj.description.is_empty() {
+                out.push_str(&format!("    {}\n", p.dim(&proj.description)));
+            }
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&format!("  {}\n  {}\n", p.head("磁盘"), p.rule()));
+    if s.disks.is_empty() {
+        out.push_str(&format!("  {}\n\n", p.dim("未能读取磁盘用量。")));
+    } else {
+        for d in &s.disks {
+            let ratio = if d.total == 0 {
+                0.0
+            } else {
+                d.used as f64 / d.total as f64
+            };
+            let pct = format!("{:.0}%", ratio * 100.0);
+            let bar = usage_bar(ratio, 12);
+            let bar_c = if ratio >= 0.9 {
+                p.bad(&bar)
+            } else if ratio >= 0.7 {
+                p.warn(&bar)
+            } else {
+                p.val(&bar)
+            };
+            out.push_str(&format!(
+                "  {}  {}  {}  {} / {}\n",
+                p.key(&pad_display(&d.mount, 12)),
+                bar_c,
+                p.val(&pad_display(&pct, 4)),
+                human_bytes(d.avail),
+                human_bytes(d.total)
+            ));
+        }
+        out.push('\n');
+    }
+
+    out.push_str(&format!("  {}\n  {}\n", p.head("CPU"), p.rule()));
+    kv(&mut out, &p, "架构", &dash(&s.cpu.arch));
+    kv(&mut out, &p, "型号", &dash(&s.cpu.model));
+    kv(&mut out, &p, "逻辑核数", &s.cpu.logical_cpus.to_string());
+    if let Some(n) = s.cpu.sockets {
+        kv(&mut out, &p, "插槽数", &n.to_string());
+    }
+    out.push('\n');
+
+    out.push_str(&format!("  {}\n  {}\n", p.head("GPU"), p.rule()));
+    if s.gpus.is_empty() {
+        out.push_str(&format!("  {}\n", p.dim("未检测到 GPU / NPU。")));
+    } else {
+        for g in &s.gpus {
+            out.push_str(&format!(
+                "  {}  {}  ×{}  {}\n",
+                p.val(&g.name),
+                p.key(&dash(&g.arch)),
+                g.count,
+                p.dim(&g.source)
+            ));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn kv(out: &mut String, p: &Paint, k: &str, v: &str) {
+    out.push_str(&format!("  {}  {}\n", p.key(&pad_display(k, 10)), p.val(v)));
+}
+
+fn display_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            let u = c as u32;
+            if (0x2E80..=0x9FFF).contains(&u)
+                || (0xF900..=0xFAFF).contains(&u)
+                || (0xFF00..=0xFF60).contains(&u)
+                || (0x3400..=0x4DBF).contains(&u)
+                || u >= 0x20000
+            {
+                2
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+fn pad_display(s: &str, width: usize) -> String {
+    let w = display_width(s);
+    if w >= width {
+        s.to_string()
+    } else {
+        format!("{s}{}", " ".repeat(width - w))
+    }
+}
+
+fn usage_bar(ratio: f64, width: usize) -> String {
+    let ratio = ratio.clamp(0.0, 1.0);
+    let filled = ((ratio * width as f64).round() as usize).min(width);
+    format!(
+        "[{}{}]",
+        "█".repeat(filled),
+        "░".repeat(width.saturating_sub(filled))
+    )
 }
 
 pub fn render_markdown(s: &HostSnapshot) -> String {
@@ -830,6 +1042,62 @@ physical id\t: 1
             parse_exec_listen("/root/update/cangling-update --bind 0.0.0.0 --port 80"),
             ("0.0.0.0".into(), 80)
         );
+    }
+
+    fn sample_snap() -> HostSnapshot {
+        HostSnapshot {
+            generated_at: "2026-08-21 14:00:00 +0800".into(),
+            hostname: "hn".into(),
+            primary_ip: "10.141.8.61".into(),
+            ips: vec!["10.141.8.61".into()],
+            listen: Some(("0.0.0.0".into(), 80)),
+            software: vec![Software {
+                name: "git".into(),
+                version: "未安装".into(),
+                path: "—".into(),
+            }],
+            projects: vec![],
+            disks: vec![DiskMount {
+                mount: "/".into(),
+                filesystem: "xfs".into(),
+                total: 100,
+                used: 80,
+                avail: 20,
+            }],
+            cpu: CpuInfo {
+                arch: "aarch64".into(),
+                model: "Kunpeng-920".into(),
+                logical_cpus: 64,
+                sockets: Some(2),
+            },
+            gpus: vec![],
+            exe_dir: "/root/update".into(),
+            config_dir: "/root/update/config".into(),
+        }
+    }
+
+    #[test]
+    fn ansi_has_color_and_plain_does_not() {
+        let snap = sample_snap();
+        let color = render_ansi(&snap, true);
+        let plain = render_ansi(&snap, false);
+        assert!(color.contains("\x1b["));
+        assert!(!plain.contains("\x1b["));
+        assert!(plain.contains("主机信息"));
+        assert!(plain.contains("10.141.8.61"));
+        assert!(plain.contains("Kunpeng-920"));
+        assert!(plain.contains("暂无登记项目"));
+        assert!(color.contains("█") || color.contains("░"));
+    }
+
+    #[test]
+    fn color_query() {
+        assert!(want_color(None));
+        assert!(want_color(Some("1")));
+        assert!(want_color(Some("always")));
+        assert!(!want_color(Some("0")));
+        assert!(!want_color(Some("never")));
+        assert!(!want_color(Some("false")));
     }
 
     #[test]

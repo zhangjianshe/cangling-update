@@ -18,7 +18,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     if path.starts_with("/vendor/") || path.starts_with("/media/portal/") {
         return true;
     }
-    if matches!(path, "/" | "/console") {
+    if matches!(path, "/" | "/console" | "/hostinfo" | "/hostinfo.md") {
         return true;
     }
     if matches!(
@@ -279,6 +279,8 @@ mod tests {
         assert!(is_public(&Method::GET, "/media/portal/background"));
         assert!(is_public(&Method::GET, "/media/portal/icon/abc"));
         assert!(is_public(&Method::GET, "/api/auth/status"));
+        assert!(is_public(&Method::GET, "/hostinfo"));
+        assert!(is_public(&Method::GET, "/hostinfo.md"));
         assert!(!is_public(&Method::GET, "/api/projects"));
     }
 }
