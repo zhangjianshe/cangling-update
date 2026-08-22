@@ -5,6 +5,7 @@ mod db;
 mod docker;
 mod error;
 mod hostinfo;
+mod k3s;
 mod models;
 mod paths;
 mod portal;
@@ -86,6 +87,9 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// 检测 k3s 并写入 Traefik 入口端口配置（HTTP 8020 / HTTPS 8443）
+    #[command(name = "fix-k3s")]
+    FixK3s,
 }
 
 #[tokio::main]
@@ -116,6 +120,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Hostinfo { output }) => {
             let paths = AppPaths::resolve(cli.data_dir)?;
             return hostinfo::run(&paths, output);
+        }
+        Some(Command::FixK3s) => {
+            return k3s::fix();
         }
         None => {
             if service::is_installed() && !service::running_as_systemd_service() {

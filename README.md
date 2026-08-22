@@ -80,6 +80,10 @@ make arm64
 # 在程序目录写入 info.md（软件版本与路径、本机 IP、项目列表、磁盘、CPU/GPU）
 # 指定路径：./cangling-update hostinfo -o /tmp/info.md
 
+sudo ./cangling-update fix-k3s
+# 若已安装 k3s：在 /var/lib/rancher/k3s/server/manifests/ 写入 traefik-config.yaml
+# 把 Traefik HTTP/HTTPS 默认入口改为 8020 / 8443，然后重启 Traefik；未安装 k3s 时只打印提示
+
 # 终端彩色查看（无需登录）
 curl -s http://<主机>:5400/hostinfo
 curl -s http://<主机>:5400/hostinfo.md | glow -
