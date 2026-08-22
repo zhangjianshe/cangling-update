@@ -467,40 +467,72 @@ fn collect_software(paths: &AppPaths) -> Vec<Software> {
         &mut list,
         "docker",
         &["docker"],
-        &["version", "--format", "{{.Client.Version}}"],
+        &[&["version", "--format", "{{.Client.Version}}"], &["version"]],
     );
-    let compose = cmd_out("docker", &["compose", "version", "--short"]);
-    if let Some(p) = look_path("docker") {
-        list.push(Software {
-            name: "docker compose".into(),
-            version: compose.unwrap_or_else(|| "未检测到插件".into()),
-            path: p.display().to_string(),
-        });
-    } else {
-        probe(
-            &mut list,
-            "docker-compose",
-            &["docker-compose"],
-            &["version", "--short"],
-        );
-    }
-    probe(&mut list, "k3s", &["k3s"], &["--version"]);
-    probe(&mut list, "kubectl", &["kubectl"], &["version", "--client"]);
-    probe(&mut list, "k9s", &["k9s"], &["version", "--short"]);
-    if list.iter().all(|s| s.name != "k9s") {
-        probe(&mut list, "k9s", &["k9s"], &["version"]);
-    }
-    probe(&mut list, "glow", &["glow"], &["--version"]);
-    probe(&mut list, "git", &["git"], &["--version"]);
-    probe(&mut list, "containerd", &["containerd"], &["--version"]);
+    push_compose(&mut list);
+    probe(&mut list, "k3s", &["k3s"], &[&["--version"]]);
+    probe(
+        &mut list,
+        "kubectl",
+        &["kubectl"],
+        &[&["version", "--client", "--short"], &["version", "--client"]],
+    );
+    probe(
+        &mut list,
+        "k9s",
+        &["k9s"],
+        &[&["version", "--short"], &["version"]],
+    );
+    probe(&mut list, "glow", &["glow"], &[&["--version"]]);
+    probe(&mut list, "git", &["git"], &[&["--version"]]);
+    probe(&mut list, "containerd", &["containerd"], &[&["--version"]]);
     list
 }
 
-fn probe(list: &mut Vec<Software>, name: &str, bins: &[&str], ver_args: &[&str]) {
+fn push_compose(list: &mut Vec<Software>) {
+    if let Some(path) = look_path("docker") {
+        if let Some(version) = first_ok_version(
+            "docker",
+            &[&["compose", "version", "--short"], &["compose", "version"]],
+        ) {
+            list.push(Software {
+                name: "docker compose".into(),
+                version,
+                path: path.display().to_string(),
+            });
+            return;
+        }
+    }
+    if let Some(path) = look_path("docker-compose") {
+        let version = first_ok_version(
+            "docker-compose",
+            &[&["version", "--short"], &["version"], &["--version"]],
+        )
+        .unwrap_or_else(|| "已安装（版本未知）".into());
+        list.push(Software {
+            name: "docker-compose".into(),
+            version,
+            path: path.display().to_string(),
+        });
+        return;
+    }
+    list.push(Software {
+        name: "docker compose".into(),
+        version: if look_path("docker").is_some() {
+            "未检测到插件".into()
+        } else {
+            "未安装".into()
+        },
+        path: look_path("docker")
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "—".into()),
+    });
+}
+
+fn probe(list: &mut Vec<Software>, name: &str, bins: &[&str], attempts: &[&[&str]]) {
     for bin in bins {
         if let Some(path) = look_path(bin) {
-            let version = cmd_out(bin, ver_args)
-                .map(|s| first_line(&s))
+            let version = first_ok_version(bin, attempts)
                 .unwrap_or_else(|| "已安装（版本未知）".into());
             list.push(Software {
                 name: name.into(),
@@ -515,6 +547,55 @@ fn probe(list: &mut Vec<Software>, name: &str, bins: &[&str], ver_args: &[&str])
         version: "未安装".into(),
         path: "—".into(),
     });
+}
+
+fn first_ok_version(bin: &str, attempts: &[&[&str]]) -> Option<String> {
+    for args in attempts {
+        if let Some(v) = cmd_out(bin, args).and_then(|s| short_version(&s)) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Turn command output into a one-line version. Rejects CLI help / error dumps.
+fn short_version(raw: &str) -> Option<String> {
+    if looks_like_cli_help(raw) {
+        return None;
+    }
+    let line = first_line(raw);
+    if line.is_empty() || looks_like_cli_help(&line) {
+        return None;
+    }
+    if let Some(tok) = line
+        .split(|c: char| matches!(c, ',' | ' ' | '\t'))
+        .map(str::trim)
+        .find(|t| is_version_token(t))
+    {
+        return Some(tok.to_string());
+    }
+    if line.chars().count() <= 80 {
+        Some(line)
+    } else {
+        None
+    }
+}
+
+fn is_version_token(t: &str) -> bool {
+    let t = t.trim().trim_start_matches(['v', 'V']);
+    t.chars().next().is_some_and(|c| c.is_ascii_digit()) && t.contains('.')
+}
+
+fn looks_like_cli_help(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    lower.contains("unknown flag")
+        || lower.contains("unknown shorthand")
+        || lower.contains("is not a docker command")
+        || lower.contains("see 'docker")
+        || lower.contains("see \"docker")
+        || lower.contains("usage:  docker")
+        || lower.contains("usage: docker")
+        || lower.contains("a self-sufficient runtime")
 }
 
 fn look_path(name: &str) -> Option<PathBuf> {
@@ -1112,5 +1193,36 @@ physical id\t: 1
         let raw = "2: enp3s0    inet 10.141.8.61/24 brd 10.141.8.255 scope global\n8: docker0 inet 172.17.0.1/16\n";
         let ips = parse_ip_addr(raw);
         assert_eq!(ips, vec!["10.141.8.61", "172.17.0.1"]);
+    }
+
+    #[test]
+    fn short_version_parses_compose_and_rejects_docker_help() {
+        assert_eq!(short_version("v2.29.7\n").as_deref(), Some("v2.29.7"));
+        assert_eq!(
+            short_version("Docker Compose version v2.24.5\n").as_deref(),
+            Some("v2.24.5")
+        );
+        assert_eq!(
+            short_version("docker-compose version 1.29.2, build 5becea4c\n").as_deref(),
+            Some("1.29.2")
+        );
+        let help = "\
+unknown flag: --short
+See 'docker --help'.
+
+Usage:  docker [OPTIONS] COMMAND
+
+A self-sufficient runtime for containers
+
+Common Commands:
+  run         Create and run a new container from an image
+  exec        Execute a command in a running container
+";
+        assert_eq!(short_version(help), None);
+        assert_eq!(short_version("unknown flag: --short"), None);
+        assert_eq!(
+            short_version("docker: 'compose' is not a docker command.\nSee 'docker --help'\n"),
+            None
+        );
     }
 }
