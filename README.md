@@ -119,6 +119,7 @@ sudo ./cangling-update uninstall-service
 
 - 单元文件：`/etc/systemd/system/cangling-update.service`
 - 服务名：`cangling-update`
+- 命令链接：`/usr/local/bin/cangling-update` → 当前二进制（卸载服务时删除该符号链接）
 - 查看状态：`systemctl status cangling-update`
 
 安装后 `config/` 仍在程序旁边（除非指定了 `--data-dir`）。换新版本时：覆盖二进制，再执行 `restart`。
@@ -308,8 +309,8 @@ cangling-update [选项] [命令]
 命令：
   version              显示当前程序版本
   reset-password       重置登录密码
-  install-service      安装 systemd 服务
-  uninstall-service    卸载 systemd 服务
+  install-service      安装 systemd 服务，并在 /usr/local/bin 创建命令符号链接
+  uninstall-service    卸载 systemd 服务，并删除该符号链接
   restart              重启本服务
   update               从 GitHub 下载新版本（不重启服务）
   hostinfo             采集主机信息，写入程序目录下的 info.md

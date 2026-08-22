@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 
 pub const SERVICE_NAME: &str = "cangling-update";
 const UNIT_PATH: &str = "/etc/systemd/system/cangling-update.service";
+const BIN_LINK_DIR: &str = "/usr/local/bin";
 
 pub fn install(bind: &str, port: u16, data_dir: Option<&Path>) -> Result<()> {
     require_root()?;
@@ -62,6 +63,7 @@ WantedBy=multi-user.target
     eprintln!("  程序    {}", exe.display());
     eprintln!("  工作目录 {}", workdir.display());
     eprintln!("  单元文件 {UNIT_PATH}");
+    install_bin_link(&exe)?;
     eprintln!("  管理：systemctl status|restart|stop {SERVICE_NAME}");
     eprintln!();
     print_access_urls(bind, port);
@@ -85,6 +87,7 @@ pub fn uninstall() -> Result<()> {
     systemctl_best_effort(&["disable", SERVICE_NAME]);
     std::fs::remove_file(UNIT_PATH).with_context(|| format!("删除 {UNIT_PATH}"))?;
     systemctl_best_effort(&["daemon-reload"]);
+    uninstall_bin_link();
     eprintln!("已卸载 systemd 服务：{SERVICE_NAME}");
     Ok(())
 }
@@ -282,6 +285,99 @@ fn is_active() -> bool {
         .unwrap_or(false)
 }
 
+fn bin_link_path() -> PathBuf {
+    Path::new(BIN_LINK_DIR).join(SERVICE_NAME)
+}
+
+fn install_bin_link(exe: &Path) -> Result<()> {
+    let link = bin_link_path();
+    match ensure_bin_link(exe, &link)? {
+        BinLinkAction::Created => {
+            eprintln!("  命令    {} -> {}", link.display(), exe.display());
+        }
+        BinLinkAction::Updated => {
+            eprintln!("  命令    已更新 {} -> {}", link.display(), exe.display());
+        }
+        BinLinkAction::Unchanged => {
+            eprintln!("  命令    {} -> {}", link.display(), exe.display());
+        }
+        BinLinkAction::AlreadyOnPath => {
+            eprintln!("  命令    {}", link.display());
+        }
+    }
+    Ok(())
+}
+
+fn uninstall_bin_link() {
+    let link = bin_link_path();
+    match remove_bin_link(&link) {
+        Ok(true) => eprintln!("已删除符号链接 {}", link.display()),
+        Ok(false) => {}
+        Err(err) => eprintln!("删除符号链接 {} 失败：{err}", link.display()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BinLinkAction {
+    Created,
+    Updated,
+    Unchanged,
+    AlreadyOnPath,
+}
+
+fn ensure_bin_link(exe: &Path, link: &Path) -> Result<BinLinkAction> {
+    if let Some(dir) = link.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("创建 {}", dir.display()))?;
+    }
+
+    let exe_canon = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let meta = match link.symlink_metadata() {
+        Ok(m) => m,
+        Err(_) => {
+            unix_symlink(&exe_canon, link)?;
+            return Ok(BinLinkAction::Created);
+        }
+    };
+
+    if meta.file_type().is_symlink() {
+        if let Ok(target) = std::fs::canonicalize(link) {
+            if target == exe_canon {
+                return Ok(BinLinkAction::Unchanged);
+            }
+        }
+        std::fs::remove_file(link)
+            .with_context(|| format!("删除旧符号链接 {}", link.display()))?;
+        unix_symlink(&exe_canon, link)?;
+        return Ok(BinLinkAction::Updated);
+    }
+
+    if let Ok(existing) = std::fs::canonicalize(link) {
+        if existing == exe_canon {
+            return Ok(BinLinkAction::AlreadyOnPath);
+        }
+    }
+    bail!(
+        "{} 已存在且不是指向本程序的符号链接，未覆盖。请先处理该路径后再执行 install-service",
+        link.display()
+    );
+}
+
+fn remove_bin_link(link: &Path) -> Result<bool> {
+    let Ok(meta) = link.symlink_metadata() else {
+        return Ok(false);
+    };
+    if !meta.file_type().is_symlink() {
+        return Ok(false);
+    }
+    std::fs::remove_file(link).with_context(|| format!("删除 {}", link.display()))?;
+    Ok(true)
+}
+
+fn unix_symlink(target: &Path, link: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, link)
+        .with_context(|| format!("创建符号链接 {} -> {}", link.display(), target.display()))
+}
+
 fn current_exe() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("无法解析当前可执行文件")?;
     std::fs::canonicalize(&exe).or(Ok(exe))
@@ -388,5 +484,77 @@ mod tests {
     fn access_urls_unspecified_includes_localhost() {
         let urls = access_urls("0.0.0.0", 5400);
         assert_eq!(urls[0], "http://127.0.0.1:5400");
+    }
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cangling-link-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn ensure_bin_link_creates_and_is_idempotent() {
+        let dir = temp_dir();
+        let exe = dir.join("cangling-update");
+        std::fs::write(&exe, b"fake").unwrap();
+        let link = dir.join("bin").join("cangling-update");
+
+        assert_eq!(ensure_bin_link(&exe, &link).unwrap(), BinLinkAction::Created);
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::canonicalize(&link).unwrap(), std::fs::canonicalize(&exe).unwrap());
+
+        assert_eq!(
+            ensure_bin_link(&exe, &link).unwrap(),
+            BinLinkAction::Unchanged
+        );
+        assert!(remove_bin_link(&link).unwrap());
+        assert!(!link.symlink_metadata().is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_bin_link_replaces_stale_symlink() {
+        let dir = temp_dir();
+        let exe = dir.join("cangling-update");
+        let old = dir.join("old");
+        std::fs::write(&exe, b"new").unwrap();
+        std::fs::write(&old, b"old").unwrap();
+        let link = dir.join("cangling-update-link");
+        std::os::unix::fs::symlink(&old, &link).unwrap();
+
+        assert_eq!(ensure_bin_link(&exe, &link).unwrap(), BinLinkAction::Updated);
+        assert_eq!(std::fs::canonicalize(&link).unwrap(), std::fs::canonicalize(&exe).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_bin_link_skips_when_binary_already_there() {
+        let dir = temp_dir();
+        let exe = dir.join("cangling-update");
+        std::fs::write(&exe, b"fake").unwrap();
+        assert_eq!(
+            ensure_bin_link(&exe, &exe).unwrap(),
+            BinLinkAction::AlreadyOnPath
+        );
+        assert!(!exe.symlink_metadata().unwrap().file_type().is_symlink());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_bin_link_refuses_to_clobber_regular_file() {
+        let dir = temp_dir();
+        let exe = dir.join("cangling-update");
+        let other = dir.join("other");
+        std::fs::write(&exe, b"a").unwrap();
+        std::fs::write(&other, b"b").unwrap();
+        assert!(ensure_bin_link(&exe, &other).is_err());
+        assert_eq!(std::fs::read(&other).unwrap(), b"b");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
