@@ -330,15 +330,23 @@ cangling-update [选项] [命令]
 命令：
   version              显示当前程序版本
   reset-password       重置登录密码
+                       -u / --username   用户名；只有一个账号时可省略
+                       -p / --password   新密码；省略则自动生成并打印一次
   install-service      安装 systemd 服务，并在 /usr/local/bin 创建命令符号链接
   uninstall-service    卸载 systemd 服务，并删除该符号链接
   restart              重启本服务
   update               从 GitHub 下载新版本（不重启服务）
+                       --check           只检查是否有新版本
+                       --force           即使版本相同或更旧也强制下载替换
+                       --proxy URL       HTTP/HTTPS/SOCKS 代理（也可设 https_proxy）
   hostinfo             采集主机信息，写入程序目录下的 info.md
+                       -o / --output     输出路径（默认：程序目录/info.md）
                        网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md
+                       内容：软件版本与路径、本机 IP、项目列表、磁盘、内存、CPU/GPU
+  fix-k3s              若已安装 k3s：写入 Traefik 入口配置（HTTP 8020 / HTTPS 8443）并重启 Traefik
 
 选项：
-  --bind               监听地址
-  --port               监听端口
-  --data-dir           数据目录
+  --bind               监听地址（环境变量 CANGLING_BIND，默认 0.0.0.0）
+  --port               监听端口（环境变量 CANGLING_PORT，默认 5400）
+  --data-dir           数据目录（环境变量 CANGLING_HOME，默认 <程序目录>/config）
 ```
