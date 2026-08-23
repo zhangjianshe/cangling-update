@@ -17,6 +17,7 @@
 6. 登录保护；2 小时无操作自动退出
 7. 对正在运行的容器打开 **xterm 终端**（`docker compose exec`），并按容器查看日志
 8. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本；若项目目录有 `.env`，可同样编辑环境变量
+9. **数据库管理**：选择正在运行的容器（当前仅 postgres），浏览 schema / 表 / 视图，分页查看数据，或执行 SQL
 
 ## 安装
 ```bash
@@ -232,6 +233,17 @@ Git 对象在项目级的 `repo.git` 里跨版本去重，体积单独标在标�
 Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打断正在编辑的升级表单、已打开的终端或 Compose 文件编辑窗口。
 
 终端需要本机 `docker compose exec` 可用，浏览器会自动带上登录 Cookie。
+
+### 数据库管理
+
+项目页的 **数据库管理** 通过 `docker compose exec` 使用容器内的 `psql`（从环境变量读取 `POSTGRES_USER` / `POSTGRES_PASS` 或 `POSTGRES_PASSWORD`）。
+
+1. 选择正在运行的容器和数据库类型（目前只有 postgres）
+2. 选择数据库、schema，左侧列出表和视图
+3. 点击表或视图，右侧分页显示数据
+4. 底部可编写 SQL 并执行；`SELECT` / `WITH` 会以表格返回（最多 200 行），其它语句显示 `psql` 输出
+
+查询有 30 秒超时。这是运维操作，与在容器终端里跑 `psql` 权限相同。
 
 ### 编辑 Compose 文件
 

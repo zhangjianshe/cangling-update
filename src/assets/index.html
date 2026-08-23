@@ -248,6 +248,41 @@
     th:last-child, td:last-child:not(.empty) { text-align: right; }
     td:last-child .row { justify-content: flex-end; }
     .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
+    select {
+      background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
+      padding: 7px 10px; height: 34px; min-width: 140px;
+    }
+    select:focus { border-color: var(--accent-emphasis); outline: none; box-shadow: 0 0 0 3px var(--bg-active); }
+    .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; }
+    .db-toolbar .field { margin: 0; min-width: 140px; }
+    .db-toolbar label { margin-bottom: 4px; font-size: 13px; }
+    .db-split {
+      display: grid; grid-template-columns: 240px minmax(0, 1fr);
+      border: 1px solid var(--line); min-height: 320px; background: var(--bg-2);
+    }
+    .db-objects { overflow: auto; border-right: 1px solid var(--line); max-height: 420px; }
+    .db-obj {
+      display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
+      background: transparent; color: var(--text); padding: 8px 10px;
+      border-bottom: 1px solid var(--line-muted);
+    }
+    .db-obj:hover { background: var(--bg-3); }
+    .db-obj.active { background: var(--bg-active); }
+    .db-obj .k { color: var(--muted); font-size: 12px; margin-right: 6px; }
+    .db-data { overflow: auto; max-height: 420px; min-width: 0; }
+    .db-data table { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+    .db-data th, .db-data td { white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+    .db-data td:last-child, .db-data th:last-child { text-align: left; }
+    .db-pager { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid var(--line); }
+    .db-sql { margin-top: 14px; }
+    .db-sql textarea {
+      font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
+      min-height: 110px;
+    }
+    @media (max-width: 900px) {
+      .db-split { grid-template-columns: 1fr; }
+      .db-objects { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--line); }
+    }
     .flash { margin: 0 0 14px; padding: 10px 12px; }
     .flash.err { background: var(--flash-err-bg); color: var(--flash-err-text); border: 1px solid var(--flash-err-line); }
     .flash.ok { background: var(--flash-ok-bg); color: var(--flash-ok-text); border: 1px solid var(--flash-ok-line); }
@@ -509,6 +544,11 @@
         label: "版本切换",
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.22 14.78a.75.75 0 0 0 1.06-1.06L4.56 12h8.69a.75.75 0 0 0 0-1.5H4.56l1.72-1.72a.75.75 0 0 0-1.06-1.06l-3 3a.75.75 0 0 0 0 1.06Zm5.56-6.5a.75.75 0 1 1-1.06-1.06l1.72-1.72H2.75a.75.75 0 0 1 0-1.5h8.69L9.72 2.28a.75.75 0 0 1 1.06-1.06l3 3a.75.75 0 0 1 0 1.06Z"/></svg>',
       },
+      {
+        id: "db",
+        label: "数据库管理",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 1c3.5 0 6.5.9 6.5 2.2v9.6C14.5 14.1 11.5 15 8 15s-6.5-.9-6.5-2.2V3.2C1.5 1.9 4.5 1 8 1m0 1.2c-2.9 0-5.2.7-5.2 1.3S5.1 4.8 8 4.8s5.2-.7 5.2-1.3S10.9 2.2 8 2.2M2.8 6.1C3.9 6.7 5.8 7.1 8 7.1s4.1-.4 5.2-1v2.2c0 .6-2.3 1.3-5.2 1.3S2.8 8.9 2.8 8.3zm0 4.1c1.1.6 3 1 5.2 1s4.1-.4 5.2-1v2.1c0 .6-2.3 1.3-5.2 1.3s-5.2-.7-5.2-1.3z"/></svg>',
+      },
     ];
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null };
     const composePoll = { timer: null, inflight: false };
@@ -539,6 +579,26 @@
       },
     };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
+    const dbAdmin = {
+      projectId: "",
+      service: "",
+      engine: "postgres",
+      database: "",
+      schema: "",
+      databases: [],
+      schemas: [],
+      objects: [],
+      selected: null,
+      columns: [],
+      rows: [],
+      total: 0,
+      offset: 0,
+      limit: 50,
+      sql: "",
+      sqlResult: null,
+      error: "",
+      busy: false,
+    };
     const IDLE_MS = 2 * 60 * 60 * 1000;
     let lastActivity = Date.now();
 
@@ -1095,6 +1155,22 @@
           api("/api/projects/" + id + "/versions"),
           api("/api/projects/" + id + "/compose").catch(e => ({ error: e.message, services: [], images: [] })),
         ]);
+        if (dbAdmin.projectId !== id) {
+          dbAdmin.projectId = id;
+          dbAdmin.service = "";
+          dbAdmin.database = "";
+          dbAdmin.schema = "";
+          dbAdmin.databases = [];
+          dbAdmin.schemas = [];
+          dbAdmin.objects = [];
+          dbAdmin.selected = null;
+          dbAdmin.columns = [];
+          dbAdmin.rows = [];
+          dbAdmin.total = 0;
+          dbAdmin.offset = 0;
+          dbAdmin.sqlResult = null;
+          dbAdmin.error = "";
+        }
         state.versions = versions;
         state.compose = compose;
         state.files = [];
@@ -1301,6 +1377,31 @@
             <tbody>${versions || `<tr><td colspan="8" class="empty">暂无版本</td></tr>`}</tbody>
           </table>
         </div>
+        <div class="card tab-panel" id="panel-db" data-panel="db" role="tabpanel" aria-labelledby="tab-db">
+          <p class="hint" style="margin-top:0">选择正在运行的容器，连接其中的 PostgreSQL，浏览 schema / 表 / 视图，或执行 SQL。当前仅支持 postgres。</p>
+          <div class="flash err" id="db-err" hidden></div>
+          <div class="db-toolbar">
+            <div class="field"><label>容器</label><select id="db-service"></select></div>
+            <div class="field"><label>数据库类型</label><select id="db-engine"><option value="postgres">postgres</option></select></div>
+            <div class="field"><label>数据库</label><select id="db-database"></select></div>
+            <div class="field"><label>Schema</label><select id="db-schema"></select></div>
+          </div>
+          <div class="db-split">
+            <div class="db-objects" id="db-objects"><div class="empty">请选择容器和 schema</div></div>
+            <div>
+              <div class="db-data" id="db-data"><div class="empty">点击左侧表或视图查看数据</div></div>
+              <div class="db-pager" id="db-pager" hidden></div>
+            </div>
+          </div>
+          <div class="db-sql">
+            <div class="row" style="justify-content:space-between;margin-bottom:8px">
+              <label style="margin:0">SQL</label>
+              <button type="button" class="btn" id="btn-db-run">执行</button>
+            </div>
+            <textarea id="db-sql" spellcheck="false" placeholder="SELECT * FROM public.lin_user LIMIT 50"></textarea>
+            <div id="db-sql-out" style="margin-top:10px"></div>
+          </div>
+        </div>
         <div id="orphan-box"></div>`;
 
       const drop = $("#drop");
@@ -1333,6 +1434,7 @@
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
       bindComposeServiceButtons();
+      bindDbPanel();
       loadOrphans("orphan-box");
       startComposePoll();
     }
@@ -1353,6 +1455,294 @@
       for (const panel of document.querySelectorAll("[data-panel]")) {
         panel.hidden = panel.getAttribute("data-panel") !== cur;
       }
+      if (cur === "db") dbEnsureLoaded();
+    }
+
+    function dbRunningServices() {
+      return ((state.compose && state.compose.services) || []).filter((s) => /run/i.test(s.state || ""));
+    }
+
+    function dbFillSelect(el, items, current, placeholder) {
+      if (!el) return;
+      const opts = (items || []).map((n) => `<option value="${esc(n)}" ${n === current ? "selected" : ""}>${esc(n)}</option>`).join("");
+      el.innerHTML = (placeholder ? `<option value="">${esc(placeholder)}</option>` : "") + opts;
+      if (current && items && items.includes(current)) el.value = current;
+    }
+
+    function dbShowErr(msg) {
+      dbAdmin.error = msg || "";
+      const box = $("#db-err");
+      if (!box) return;
+      if (!msg) {
+        box.hidden = true;
+        box.textContent = "";
+        return;
+      }
+      box.hidden = false;
+      box.textContent = msg;
+    }
+
+    function bindDbPanel() {
+      const svc = $("#db-service");
+      const names = dbRunningServices().map((s) => s.name).filter(Boolean);
+      dbFillSelect(svc, names, dbAdmin.service, names.length ? "请选择容器" : "没有运行中的容器");
+      dbFillSelect($("#db-database"), dbAdmin.databases, dbAdmin.database, "请选择数据库");
+      dbFillSelect($("#db-schema"), dbAdmin.schemas, dbAdmin.schema, "请选择 schema");
+      if ($("#db-engine")) $("#db-engine").value = dbAdmin.engine || "postgres";
+      if ($("#db-sql") && !$("#db-sql").value) $("#db-sql").value = dbAdmin.sql || "";
+      if (svc) svc.onchange = () => dbOnService(svc.value);
+      const dbSel = $("#db-database");
+      if (dbSel) dbSel.onchange = () => dbOnDatabase(dbSel.value);
+      const sch = $("#db-schema");
+      if (sch) sch.onchange = () => dbOnSchema(sch.value);
+      const run = $("#btn-db-run");
+      if (run) run.onclick = dbRunSql;
+      dbRenderObjects();
+      dbRenderRows();
+      dbRenderSqlOut();
+      dbShowErr(dbAdmin.error);
+    }
+
+    function dbEnsureLoaded() {
+      bindDbPanel();
+      if (!dbAdmin.service) {
+        const names = dbRunningServices().map((s) => s.name);
+        const guess = names.find((n) => /postgis|postgres|pg/i.test(n)) || names[0] || "";
+        if (guess) dbOnService(guess);
+      }
+    }
+
+    function dbQs(extra) {
+      const q = new URLSearchParams();
+      q.set("service", dbAdmin.service);
+      q.set("engine", dbAdmin.engine || "postgres");
+      if (dbAdmin.database) q.set("database", dbAdmin.database);
+      if (dbAdmin.schema) q.set("schema", dbAdmin.schema);
+      if (extra) for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") q.set(k, v);
+      return q.toString();
+    }
+
+    async function dbOnService(name) {
+      dbAdmin.service = name || "";
+      dbAdmin.database = "";
+      dbAdmin.schema = "";
+      dbAdmin.databases = [];
+      dbAdmin.schemas = [];
+      dbAdmin.objects = [];
+      dbAdmin.selected = null;
+      dbAdmin.rows = [];
+      dbAdmin.columns = [];
+      dbAdmin.total = 0;
+      dbAdmin.sqlResult = null;
+      dbShowErr("");
+      bindDbPanel();
+      if (!dbAdmin.service) return;
+      try {
+        dbAdmin.busy = true;
+        const meta = await api("/api/projects/" + state.current.id + "/db/meta?" + dbQs());
+        if (!(meta.engines || []).includes("postgres")) {
+          dbShowErr("该容器未检测到 PostgreSQL / psql");
+          return;
+        }
+        const dbs = await api("/api/projects/" + state.current.id + "/db/databases?" + dbQs());
+        dbAdmin.databases = dbs.items || [];
+        const def = meta.default_database && dbAdmin.databases.includes(meta.default_database)
+          ? meta.default_database
+          : dbAdmin.databases[0] || "";
+        bindDbPanel();
+        if (def) await dbOnDatabase(def);
+      } catch (e) {
+        dbShowErr(e.message);
+        bindDbPanel();
+      } finally {
+        dbAdmin.busy = false;
+      }
+    }
+
+    async function dbOnDatabase(name) {
+      dbAdmin.database = name || "";
+      dbAdmin.schema = "";
+      dbAdmin.schemas = [];
+      dbAdmin.objects = [];
+      dbAdmin.selected = null;
+      dbAdmin.rows = [];
+      dbAdmin.columns = [];
+      dbAdmin.total = 0;
+      bindDbPanel();
+      if (!dbAdmin.database) return;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/db/schemas?" + dbQs());
+        dbAdmin.schemas = data.items || [];
+        const def = dbAdmin.schemas.includes("public") ? "public" : (dbAdmin.schemas[0] || "");
+        bindDbPanel();
+        if (def) await dbOnSchema(def);
+      } catch (e) {
+        dbShowErr(e.message);
+        bindDbPanel();
+      }
+    }
+
+    async function dbOnSchema(name) {
+      dbAdmin.schema = name || "";
+      dbAdmin.objects = [];
+      dbAdmin.selected = null;
+      dbAdmin.rows = [];
+      dbAdmin.columns = [];
+      dbAdmin.total = 0;
+      bindDbPanel();
+      if (!dbAdmin.schema) return;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/db/objects?" + dbQs());
+        dbAdmin.objects = data.items || [];
+        dbShowErr("");
+      } catch (e) {
+        dbShowErr(e.message);
+      }
+      bindDbPanel();
+    }
+
+    function dbRenderObjects() {
+      const box = $("#db-objects");
+      if (!box) return;
+      const items = dbAdmin.objects || [];
+      if (!items.length) {
+        box.innerHTML = `<div class="empty">${dbAdmin.schema ? "该 schema 下没有表或视图" : "请选择容器和 schema"}</div>`;
+        return;
+      }
+      box.innerHTML = items.map((o) => {
+        const on = dbAdmin.selected && dbAdmin.selected.name === o.name;
+        const kind = o.kind === "view" ? "视图" : "表";
+        return `<button type="button" class="db-obj${on ? " active" : ""}" data-db-obj="${esc(o.name)}" data-db-kind="${esc(o.kind)}"><span class="k">${kind}</span>${esc(o.name)}</button>`;
+      }).join("");
+      for (const b of box.querySelectorAll("[data-db-obj]")) {
+        b.onclick = () => dbOpenObject(b.getAttribute("data-db-obj"), b.getAttribute("data-db-kind"));
+      }
+    }
+
+    async function dbOpenObject(name, kind) {
+      dbAdmin.selected = { name, kind };
+      dbAdmin.offset = 0;
+      dbRenderObjects();
+      await dbLoadRows();
+    }
+
+    async function dbLoadRows() {
+      if (!dbAdmin.selected || !state.current) return;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/db/rows?" + dbQs({
+          name: dbAdmin.selected.name,
+          offset: String(dbAdmin.offset),
+          limit: String(dbAdmin.limit),
+        }));
+        dbAdmin.columns = data.columns || [];
+        dbAdmin.rows = data.rows || [];
+        dbAdmin.total = data.total || 0;
+        dbAdmin.offset = data.offset || 0;
+        dbAdmin.limit = data.limit || dbAdmin.limit;
+        dbShowErr("");
+      } catch (e) {
+        dbShowErr(e.message);
+      }
+      dbRenderRows();
+    }
+
+    function dbCell(v) {
+      if (v == null) return "";
+      if (typeof v === "object") return JSON.stringify(v);
+      return String(v);
+    }
+
+    function dbRenderRows() {
+      const box = $("#db-data");
+      const pager = $("#db-pager");
+      if (!box) return;
+      if (!dbAdmin.selected) {
+        box.innerHTML = `<div class="empty">点击左侧表或视图查看数据</div>`;
+        if (pager) pager.hidden = true;
+        return;
+      }
+      const cols = dbAdmin.columns || [];
+      const rows = dbAdmin.rows || [];
+      if (!cols.length) {
+        box.innerHTML = `<div class="empty">${esc(dbAdmin.selected.name)} 无数据</div>`;
+      } else {
+        box.innerHTML = `<table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+          rows.map((r) => `<tr>${cols.map((_, i) => {
+            const t = dbCell(r[i]);
+            return `<td title="${esc(t)}">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</td>`;
+          }).join("")}</tr>`).join("") || `<tr><td class="empty" colspan="${cols.length}">无行</td></tr>`
+        }</tbody></table>`;
+      }
+      if (pager) {
+        const from = dbAdmin.total ? dbAdmin.offset + 1 : 0;
+        const to = Math.min(dbAdmin.offset + (rows.length || 0), dbAdmin.total);
+        pager.hidden = false;
+        pager.innerHTML = `
+          <button type="button" class="btn" id="db-prev" ${dbAdmin.offset <= 0 ? "disabled" : ""}>上一页</button>
+          <span class="hint">${esc(dbAdmin.selected.name)} · ${from}-${to} / ${dbAdmin.total}</span>
+          <button type="button" class="btn" id="db-next" ${dbAdmin.offset + dbAdmin.limit >= dbAdmin.total ? "disabled" : ""}>下一页</button>`;
+        const prev = $("#db-prev");
+        const next = $("#db-next");
+        if (prev) prev.onclick = () => { dbAdmin.offset = Math.max(0, dbAdmin.offset - dbAdmin.limit); dbLoadRows(); };
+        if (next) next.onclick = () => { dbAdmin.offset += dbAdmin.limit; dbLoadRows(); };
+      }
+    }
+
+    async function dbRunSql() {
+      if (!state.current || !dbAdmin.service || !dbAdmin.database) {
+        dbShowErr("请先选择容器和数据库");
+        return;
+      }
+      const sql = ($("#db-sql") && $("#db-sql").value) || "";
+      dbAdmin.sql = sql;
+      const btn = $("#btn-db-run");
+      if (btn) btn.disabled = true;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/db/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            service: dbAdmin.service,
+            engine: dbAdmin.engine,
+            database: dbAdmin.database,
+            sql,
+          }),
+        });
+        dbAdmin.sqlResult = data;
+        dbShowErr("");
+      } catch (e) {
+        dbAdmin.sqlResult = null;
+        dbShowErr(e.message);
+      }
+      if (btn) btn.disabled = false;
+      dbRenderSqlOut();
+    }
+
+    function dbRenderSqlOut() {
+      const box = $("#db-sql-out");
+      if (!box) return;
+      const data = dbAdmin.sqlResult;
+      if (!data) {
+        box.innerHTML = "";
+        return;
+      }
+      const cols = data.columns || [];
+      const rows = data.rows || [];
+      let html = "";
+      if (data.truncated) html += `<p class="hint">结果已截断（最多 ${esc(String(200))} 行）</p>`;
+      if (cols.length) {
+        html += `<div class="db-data" style="max-height:240px;border:1px solid var(--line)"><table><thead><tr>${
+          cols.map((c) => `<th>${esc(c)}</th>`).join("")
+        }</tr></thead><tbody>${
+          rows.map((r) => `<tr>${cols.map((_, i) => {
+            const t = dbCell(r[i]);
+            return `<td title="${esc(t)}">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</td>`;
+          }).join("")}</tr>`).join("") || `<tr><td class="empty" colspan="${cols.length}">无行</td></tr>`
+        }</tbody></table></div>`;
+      } else if (data.command) {
+        html += `<pre class="logs">${esc(data.command)}</pre>`;
+      }
+      box.innerHTML = html;
     }
 
     function addFiles(list) {

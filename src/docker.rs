@@ -259,6 +259,85 @@ impl Docker {
         self.compose_run_owned(dir, &args).await
     }
 
+    pub async fn compose_exec_output(
+        &self,
+        dir: &Path,
+        service: &str,
+        user: Option<&str>,
+        env: &[(&str, &str)],
+        command: &[String],
+        timeout: Duration,
+    ) -> Result<String> {
+        self.ensure().await?;
+        validate_service_name(service)?;
+        if command.is_empty() {
+            bail!("exec 命令为空");
+        }
+        if let Some(u) = user {
+            if !is_safe_unix_user(u) {
+                bail!("无效的容器用户");
+            }
+        }
+        let compose = self.inner.read().await.compose.clone();
+        let mut args = vec!["exec".to_string(), "-T".to_string()];
+        if let Some(u) = user {
+            args.push("-u".into());
+            args.push(u.into());
+        }
+        for (k, v) in env {
+            if !is_safe_env_key(k) {
+                bail!("无效的环境变量名");
+            }
+            args.push("-e".into());
+            args.push(format!("{k}={v}"));
+        }
+        args.push(service.into());
+        args.extend(command.iter().cloned());
+
+        let mut cmd = match compose {
+            ComposeKind::Plugin => {
+                let mut cmd = Command::new("docker");
+                cmd.arg("compose");
+                cmd
+            }
+            ComposeKind::Standalone => Command::new("docker-compose"),
+            ComposeKind::Missing => bail!("本机未安装 docker compose"),
+        };
+        cmd.args(&args)
+            .current_dir(dir)
+            .kill_on_drop(true)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let output = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| anyhow::anyhow!("容器命令执行超时"))?
+            .context("failed to spawn docker compose exec")?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if !output.status.success() {
+            let shown: Vec<String> = args
+                .iter()
+                .map(|a| {
+                    if a.starts_with("PGPASSWORD=") {
+                        "PGPASSWORD=***".into()
+                    } else {
+                        a.clone()
+                    }
+                })
+                .collect();
+            bail!(
+                "compose {} 失败：{}",
+                shown.join(" "),
+                stderr.trim().if_empty(stdout.trim())
+            );
+        }
+        if stdout.trim().is_empty() {
+            Ok(stderr)
+        } else {
+            Ok(stdout)
+        }
+    }
+
     pub async fn compose_exec_argv(&self, service: &str) -> Result<(String, Vec<String>)> {
         self.ensure().await?;
         validate_service_name(service)?;
@@ -370,6 +449,26 @@ pub fn validate_service_name(name: &str) -> Result<()> {
         bail!("无效的服务名");
     }
     Ok(())
+}
+
+fn is_safe_unix_user(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 32
+        && bytes[0].is_ascii_alphabetic()
+        && bytes
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-')
+}
+
+fn is_safe_env_key(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphabetic()
+        && bytes
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || *c == b'_')
 }
 
 pub fn is_safe_service_name(name: &str) -> bool {

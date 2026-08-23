@@ -97,6 +97,12 @@ pub fn router(state: AppState) -> Router {
             "/api/projects/{id}/compose/exec/{service}",
             get(compose_exec),
         )
+        .route("/api/projects/{id}/db/meta", get(db_meta))
+        .route("/api/projects/{id}/db/databases", get(db_databases))
+        .route("/api/projects/{id}/db/schemas", get(db_schemas))
+        .route("/api/projects/{id}/db/objects", get(db_objects))
+        .route("/api/projects/{id}/db/rows", get(db_rows))
+        .route("/api/projects/{id}/db/query", post(db_query))
         .route("/vendor/xterm.css", get(vendor_xterm_css))
         .route("/vendor/xterm.js", get(vendor_xterm_js))
         .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
@@ -2196,6 +2202,117 @@ async fn compose_exec(
     }))
 }
 
+#[derive(Deserialize)]
+struct DbParams {
+    service: String,
+    engine: Option<String>,
+    database: Option<String>,
+    schema: Option<String>,
+    name: Option<String>,
+    offset: Option<u32>,
+    limit: Option<u32>,
+}
+
+fn db_project(state: &AppState, id: &str) -> Result<Project, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    db::get_project(&conn, id)?.ok_or_else(|| AppError::not_found("项目不存在"))
+}
+
+async fn db_meta(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DbParams>,
+) -> Result<Json<crate::dbadmin::DbMeta>, AppError> {
+    crate::dbadmin::require_engine(q.engine.as_deref())?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::meta(&state.docker, std::path::Path::new(&project.directory), &q.service).await?,
+    ))
+}
+
+async fn db_databases(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DbParams>,
+) -> Result<Json<crate::dbadmin::NameList>, AppError> {
+    crate::dbadmin::require_engine(q.engine.as_deref())?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::databases(&state.docker, std::path::Path::new(&project.directory), &q.service).await?,
+    ))
+}
+
+async fn db_schemas(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DbParams>,
+) -> Result<Json<crate::dbadmin::NameList>, AppError> {
+    crate::dbadmin::require_engine(q.engine.as_deref())?;
+    let database = q.database.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择数据库"))?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::schemas(&state.docker, std::path::Path::new(&project.directory), &q.service, database).await?,
+    ))
+}
+
+async fn db_objects(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DbParams>,
+) -> Result<Json<crate::dbadmin::ObjectList>, AppError> {
+    crate::dbadmin::require_engine(q.engine.as_deref())?;
+    let database = q.database.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择数据库"))?;
+    let schema = q.schema.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择 schema"))?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::objects(&state.docker, std::path::Path::new(&project.directory), &q.service, database, schema).await?,
+    ))
+}
+
+async fn db_rows(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DbParams>,
+) -> Result<Json<crate::dbadmin::RowPage>, AppError> {
+    crate::dbadmin::require_engine(q.engine.as_deref())?;
+    let database = q.database.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择数据库"))?;
+    let schema = q.schema.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择 schema"))?;
+    let name = q.name.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择表或视图"))?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::rows(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &q.service,
+            database,
+            schema,
+            name,
+            q.offset.unwrap_or(0),
+            crate::dbadmin::clamp_limit(q.limit),
+        )
+        .await?,
+    ))
+}
+
+async fn db_query(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<crate::dbadmin::QueryBody>,
+) -> Result<Json<crate::dbadmin::QueryResult>, AppError> {
+    crate::dbadmin::require_engine(body.engine.as_deref())?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::query(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &body.service,
+            &body.database,
+            &body.sql,
+        )
+        .await?,
+    ))
+}
+
 async fn vendor_xterm_css() -> impl IntoResponse {
     (
         [
@@ -2250,6 +2367,7 @@ async fn vendor_ace(Path(name): Path<String>) -> Result<impl IntoResponse, AppEr
         "ace.js" => include_bytes!("assets/vendor/ace/ace.js"),
         "mode-yaml.js" => include_bytes!("assets/vendor/ace/mode-yaml.js"),
         "mode-ini.js" => include_bytes!("assets/vendor/ace/mode-ini.js"),
+        "mode-sql.js" => include_bytes!("assets/vendor/ace/mode-sql.js"),
         "theme-github.js" => include_bytes!("assets/vendor/ace/theme-github.js"),
         "theme-github_dark.js" => include_bytes!("assets/vendor/ace/theme-github_dark.js"),
         "ext-searchbox.js" => include_bytes!("assets/vendor/ace/ext-searchbox.js"),

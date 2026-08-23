@@ -2,6 +2,7 @@ mod api;
 mod auth;
 mod backup;
 mod db;
+mod dbadmin;
 mod docker;
 mod error;
 mod hostinfo;
