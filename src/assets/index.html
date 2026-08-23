@@ -274,11 +274,15 @@
     .db-data th, .db-data td { white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
     .db-data td:last-child, .db-data th:last-child { text-align: left; }
     .db-pager { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid var(--line); }
-    .db-sql { margin-top: 14px; }
-    .db-sql textarea {
-      font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
-      min-height: 110px;
+    .db-sql-edit {
+      flex: 1; min-height: 0; display: flex; flex-direction: column;
     }
+    .db-sql-edit textarea {
+      font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
+      min-height: 180px; flex: 0 0 auto; border-radius: 0; border-left: 0; border-right: 0;
+    }
+    .db-sql-meta { padding: 8px 14px; color: var(--muted); border-bottom: 1px solid var(--line); }
+    .db-sql-out { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; }
     @media (max-width: 900px) {
       .db-split { grid-template-columns: 1fr; }
       .db-objects { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -596,6 +600,7 @@
       limit: 50,
       sql: "",
       sqlResult: null,
+      sqlError: "",
       error: "",
       busy: false,
     };
@@ -1169,6 +1174,7 @@
           dbAdmin.total = 0;
           dbAdmin.offset = 0;
           dbAdmin.sqlResult = null;
+          dbAdmin.sqlError = "";
           dbAdmin.error = "";
         }
         state.versions = versions;
@@ -1385,6 +1391,7 @@
             <div class="field"><label>数据库类型</label><select id="db-engine"><option value="postgres">postgres</option></select></div>
             <div class="field"><label>数据库</label><select id="db-database"></select></div>
             <div class="field"><label>Schema</label><select id="db-schema"></select></div>
+            <div class="field"><label>&nbsp;</label><button type="button" class="btn" id="btn-db-sql">执行 SQL</button></div>
           </div>
           <div class="db-split">
             <div class="db-objects" id="db-objects"><div class="empty">请选择容器和 schema</div></div>
@@ -1392,14 +1399,6 @@
               <div class="db-data" id="db-data"><div class="empty">点击左侧表或视图查看数据</div></div>
               <div class="db-pager" id="db-pager" hidden></div>
             </div>
-          </div>
-          <div class="db-sql">
-            <div class="row" style="justify-content:space-between;margin-bottom:8px">
-              <label style="margin:0">SQL</label>
-              <button type="button" class="btn" id="btn-db-run">执行</button>
-            </div>
-            <textarea id="db-sql" spellcheck="false" placeholder="SELECT * FROM public.lin_user LIMIT 50"></textarea>
-            <div id="db-sql-out" style="margin-top:10px"></div>
           </div>
         </div>
         <div id="orphan-box"></div>`;
@@ -1489,17 +1488,15 @@
       dbFillSelect($("#db-database"), dbAdmin.databases, dbAdmin.database, "请选择数据库");
       dbFillSelect($("#db-schema"), dbAdmin.schemas, dbAdmin.schema, "请选择 schema");
       if ($("#db-engine")) $("#db-engine").value = dbAdmin.engine || "postgres";
-      if ($("#db-sql") && !$("#db-sql").value) $("#db-sql").value = dbAdmin.sql || "";
       if (svc) svc.onchange = () => dbOnService(svc.value);
       const dbSel = $("#db-database");
       if (dbSel) dbSel.onchange = () => dbOnDatabase(dbSel.value);
       const sch = $("#db-schema");
       if (sch) sch.onchange = () => dbOnSchema(sch.value);
-      const run = $("#btn-db-run");
-      if (run) run.onclick = dbRunSql;
+      const sqlBtn = $("#btn-db-sql");
+      if (sqlBtn) sqlBtn.onclick = openDbSqlDialog;
       dbRenderObjects();
       dbRenderRows();
-      dbRenderSqlOut();
       dbShowErr(dbAdmin.error);
     }
 
@@ -1688,15 +1685,52 @@
       }
     }
 
+    function openDbSqlDialog() {
+      if (!state.current || !dbAdmin.service || !dbAdmin.database) {
+        dbShowErr("请先选择容器和数据库");
+        return;
+      }
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("compose-modal");
+      $("#dialog-title").textContent = "执行 SQL";
+      const extra = $("#dialog-extra");
+      extra.hidden = false;
+      extra.textContent = "执行";
+      extra.onclick = dbRunSql;
+      $("#dialog-body").innerHTML = `
+        <div class="db-sql-edit">
+          <div class="db-sql-meta">${esc(dbAdmin.service)} · ${esc(dbAdmin.engine)} · ${esc(dbAdmin.database)}${dbAdmin.schema ? " · " + esc(dbAdmin.schema) : ""}　Ctrl+Enter 执行</div>
+          <textarea id="db-sql" spellcheck="false" placeholder="SELECT * FROM public.lin_user LIMIT 50">${esc(dbAdmin.sql || "")}</textarea>
+          <div class="db-sql-out" id="db-sql-out"></div>
+        </div>`;
+      $("#dialog").hidden = false;
+      const ta = $("#db-sql");
+      if (ta) {
+        ta.focus();
+        ta.addEventListener("keydown", (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+            e.preventDefault();
+            dbRunSql();
+          }
+        });
+        ta.addEventListener("input", () => { dbAdmin.sql = ta.value; });
+      }
+      dbRenderSqlOut();
+    }
+
     async function dbRunSql() {
       if (!state.current || !dbAdmin.service || !dbAdmin.database) {
         dbShowErr("请先选择容器和数据库");
         return;
       }
-      const sql = ($("#db-sql") && $("#db-sql").value) || "";
+      const ta = $("#db-sql");
+      const sql = (ta && ta.value) || dbAdmin.sql || "";
       dbAdmin.sql = sql;
-      const btn = $("#btn-db-run");
+      const btn = $("#dialog-extra");
       if (btn) btn.disabled = true;
+      const out = $("#db-sql-out");
+      if (out) out.innerHTML = `<p class="hint">正在执行…</p>`;
       try {
         const data = await api("/api/projects/" + state.current.id + "/db/query", {
           method: "POST",
@@ -1709,10 +1743,10 @@
           }),
         });
         dbAdmin.sqlResult = data;
-        dbShowErr("");
+        dbAdmin.sqlError = "";
       } catch (e) {
         dbAdmin.sqlResult = null;
-        dbShowErr(e.message);
+        dbAdmin.sqlError = e.message;
       }
       if (btn) btn.disabled = false;
       dbRenderSqlOut();
@@ -1721,17 +1755,21 @@
     function dbRenderSqlOut() {
       const box = $("#db-sql-out");
       if (!box) return;
+      if (dbAdmin.sqlError) {
+        box.innerHTML = `<div class="flash err" style="margin:0">${esc(dbAdmin.sqlError)}</div>`;
+        return;
+      }
       const data = dbAdmin.sqlResult;
       if (!data) {
-        box.innerHTML = "";
+        box.innerHTML = `<p class="hint">输入 SQL 后点「执行」或 Ctrl+Enter</p>`;
         return;
       }
       const cols = data.columns || [];
       const rows = data.rows || [];
       let html = "";
-      if (data.truncated) html += `<p class="hint">结果已截断（最多 ${esc(String(200))} 行）</p>`;
+      if (data.truncated) html += `<p class="hint">结果已截断（最多 200 行）</p>`;
       if (cols.length) {
-        html += `<div class="db-data" style="max-height:240px;border:1px solid var(--line)"><table><thead><tr>${
+        html += `<div class="db-data" style="max-height:none;border:1px solid var(--line)"><table><thead><tr>${
           cols.map((c) => `<th>${esc(c)}</th>`).join("")
         }</tr></thead><tbody>${
           rows.map((r) => `<tr>${cols.map((_, i) => {
