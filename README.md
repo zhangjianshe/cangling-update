@@ -77,7 +77,7 @@ make arm64
 # 若已安装为系统服务，则只打印访问地址后退出
 
 ./cangling-update hostinfo
-# 在程序目录写入 info.md（软件版本与路径、本机 IP、项目列表、磁盘、CPU/GPU）
+# 在程序目录写入 info.md（软件版本与路径、本机 IP、项目列表、磁盘、内存、CPU/GPU）
 # 指定路径：./cangling-update hostinfo -o /tmp/info.md
 
 sudo ./cangling-update fix-k3s

@@ -26,6 +26,15 @@ pub struct DiskMount {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct MemInfo {
+    pub total: u64,
+    pub used: u64,
+    pub avail: u64,
+    pub swap_total: u64,
+    pub swap_used: u64,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct CpuInfo {
     pub arch: String,
     pub model: String,
@@ -51,6 +60,7 @@ pub struct HostSnapshot {
     pub software: Vec<Software>,
     pub projects: Vec<Project>,
     pub disks: Vec<DiskMount>,
+    pub mem: MemInfo,
     pub cpu: CpuInfo,
     pub gpus: Vec<GpuInfo>,
     pub exe_dir: String,
@@ -92,6 +102,7 @@ pub fn collect_with_projects(paths: &AppPaths, projects: Vec<Project>) -> HostSn
         software: collect_software(paths),
         projects,
         disks: collect_disks(),
+        mem: collect_mem(),
         cpu: collect_cpu(),
         gpus: collect_gpus(),
         exe_dir: paths.exe_dir.display().to_string(),
@@ -239,6 +250,34 @@ pub fn render_ansi(s: &HostSnapshot, color: bool) -> String {
         out.push('\n');
     }
 
+    out.push_str(&format!("  {}\n  {}\n", p.head("内存"), p.rule()));
+    if s.mem.total == 0 {
+        out.push_str(&format!("  {}\n\n", p.dim("未能读取内存用量。")));
+    } else {
+        ansi_mem_row(
+            &mut out,
+            &p,
+            "物理内存",
+            s.mem.used,
+            s.mem.avail,
+            s.mem.total,
+        );
+        if s.mem.swap_total == 0 {
+            kv(&mut out, &p, "交换分区", "未配置");
+        } else {
+            let swap_avail = s.mem.swap_total.saturating_sub(s.mem.swap_used);
+            ansi_mem_row(
+                &mut out,
+                &p,
+                "交换分区",
+                s.mem.swap_used,
+                swap_avail,
+                s.mem.swap_total,
+            );
+        }
+        out.push('\n');
+    }
+
     out.push_str(&format!("  {}\n  {}\n", p.head("CPU"), p.rule()));
     kv(&mut out, &p, "架构", &dash(&s.cpu.arch));
     kv(&mut out, &p, "型号", &dash(&s.cpu.model));
@@ -264,6 +303,32 @@ pub fn render_ansi(s: &HostSnapshot, color: bool) -> String {
     }
     out.push('\n');
     out
+}
+
+fn ansi_mem_row(out: &mut String, p: &Paint, label: &str, used: u64, avail: u64, total: u64) {
+    let ratio = if total == 0 {
+        0.0
+    } else {
+        used as f64 / total as f64
+    };
+    let pct = format!("{:.0}%", ratio * 100.0);
+    let bar = usage_bar(ratio, 12);
+    let bar_c = if ratio >= 0.9 {
+        p.bad(&bar)
+    } else if ratio >= 0.7 {
+        p.warn(&bar)
+    } else {
+        p.val(&bar)
+    };
+    out.push_str(&format!(
+        "  {}  {}  {}  {} / {}  可用 {}\n",
+        p.key(&pad_display(label, 8)),
+        bar_c,
+        p.val(&pad_display(&pct, 4)),
+        human_bytes(used),
+        human_bytes(total),
+        human_bytes(avail)
+    ));
 }
 
 fn kv(out: &mut String, p: &Paint, k: &str, v: &str) {
@@ -381,6 +446,38 @@ pub fn render_markdown(s: &HostSnapshot) -> String {
                 human_bytes(d.avail),
                 human_bytes(d.total),
                 pct
+            ));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("## 内存\n\n");
+    if s.mem.total == 0 {
+        out.push_str("未能读取内存用量。\n\n");
+    } else {
+        out.push_str("| 项 | 已用 | 可用 | 总计 | 使用率 |\n|---|---|---|---|---|\n");
+        let pct = format!("{:.0}%", (s.mem.used as f64 / s.mem.total as f64) * 100.0);
+        out.push_str(&format!(
+            "| 物理内存 | {} | {} | {} | {} |\n",
+            human_bytes(s.mem.used),
+            human_bytes(s.mem.avail),
+            human_bytes(s.mem.total),
+            pct
+        ));
+        if s.mem.swap_total == 0 {
+            out.push_str("| 交换分区 | — | — | 未配置 | — |\n");
+        } else {
+            let swap_avail = s.mem.swap_total.saturating_sub(s.mem.swap_used);
+            let spct = format!(
+                "{:.0}%",
+                (s.mem.swap_used as f64 / s.mem.swap_total as f64) * 100.0
+            );
+            out.push_str(&format!(
+                "| 交换分区 | {} | {} | {} | {} |\n",
+                human_bytes(s.mem.swap_used),
+                human_bytes(swap_avail),
+                human_bytes(s.mem.swap_total),
+                spct
             ));
         }
         out.push('\n');
@@ -745,6 +842,61 @@ fn collect_disks() -> Vec<DiskMount> {
         .unwrap_or_default()
 }
 
+fn parse_meminfo_kb(v: &str) -> Option<u64> {
+    v.split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()
+        .map(|n| n.saturating_mul(1024))
+}
+
+pub fn parse_meminfo(raw: &str) -> MemInfo {
+    let mut total = 0u64;
+    let mut avail = 0u64;
+    let mut free = 0u64;
+    let mut buffers = 0u64;
+    let mut cached = 0u64;
+    let mut swap_total = 0u64;
+    let mut swap_free = 0u64;
+    for line in raw.lines() {
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        let Some(bytes) = parse_meminfo_kb(v) else {
+            continue;
+        };
+        match k.trim() {
+            "MemTotal" => total = bytes,
+            "MemAvailable" => avail = bytes,
+            "MemFree" => free = bytes,
+            "Buffers" => buffers = bytes,
+            "Cached" => cached = bytes,
+            "SwapTotal" => swap_total = bytes,
+            "SwapFree" => swap_free = bytes,
+            _ => {}
+        }
+    }
+    if avail == 0 && total > 0 {
+        avail = free.saturating_add(buffers).saturating_add(cached).min(total);
+    }
+    if avail > total {
+        avail = total;
+    }
+    MemInfo {
+        total,
+        used: total.saturating_sub(avail),
+        avail,
+        swap_total,
+        swap_used: swap_total.saturating_sub(swap_free).min(swap_total),
+    }
+}
+
+fn collect_mem() -> MemInfo {
+    std::fs::read_to_string("/proc/meminfo")
+        .map(|s| parse_meminfo(&s))
+        .unwrap_or_default()
+}
+
 pub fn parse_cpuinfo(raw: &str, fallback_arch: &str, fallback_cpus: u32) -> CpuInfo {
     let mut model = String::new();
     let mut arch = fallback_arch.to_string();
@@ -1035,6 +1187,13 @@ mod tests {
                 used: 37 * 1024 * 1024 * 1024,
                 avail: 4 * 1024 * 1024 * 1024 * 1024 - 37 * 1024 * 1024 * 1024,
             }],
+            mem: MemInfo {
+                total: 32 * 1024 * 1024 * 1024,
+                used: 12 * 1024 * 1024 * 1024,
+                avail: 20 * 1024 * 1024 * 1024,
+                swap_total: 8 * 1024 * 1024 * 1024,
+                swap_used: 0,
+            },
             cpu: CpuInfo {
                 arch: "aarch64".into(),
                 model: "Kunpeng-920".into(),
@@ -1047,6 +1206,9 @@ mod tests {
         };
         let md = render_markdown(&snap);
         assert!(md.contains("# 主机信息"));
+        assert!(md.contains("## 内存"));
+        assert!(md.contains("物理内存"));
+        assert!(md.contains("交换分区"));
         assert!(md.contains("10.141.8.61"));
         assert!(md.contains("| cis | /data/cis | v3 | 业务 |"));
         assert!(md.contains("Kunpeng-920"));
@@ -1145,6 +1307,13 @@ physical id\t: 1
                 used: 80,
                 avail: 20,
             }],
+            mem: MemInfo {
+                total: 16 * 1024 * 1024 * 1024,
+                used: 8 * 1024 * 1024 * 1024,
+                avail: 8 * 1024 * 1024 * 1024,
+                swap_total: 0,
+                swap_used: 0,
+            },
             cpu: CpuInfo {
                 arch: "aarch64".into(),
                 model: "Kunpeng-920".into(),
@@ -1155,6 +1324,43 @@ physical id\t: 1
             exe_dir: "/root/update".into(),
             config_dir: "/root/update/config".into(),
         }
+    }
+
+    #[test]
+    fn parse_meminfo_uses_available() {
+        let raw = "\
+MemTotal:       32768000 kB
+MemFree:         1024000 kB
+MemAvailable:   20480000 kB
+Buffers:          512000 kB
+Cached:          4096000 kB
+SwapTotal:       8192000 kB
+SwapFree:        6144000 kB
+";
+        let m = parse_meminfo(raw);
+        assert_eq!(m.total, 32768000 * 1024);
+        assert_eq!(m.avail, 20480000 * 1024);
+        assert_eq!(m.used, (32768000 - 20480000) * 1024);
+        assert_eq!(m.swap_total, 8192000 * 1024);
+        assert_eq!(m.swap_used, (8192000 - 6144000) * 1024);
+    }
+
+    #[test]
+    fn parse_meminfo_falls_back_without_available() {
+        let raw = "\
+MemTotal:       1000 kB
+MemFree:         100 kB
+Buffers:          50 kB
+Cached:          150 kB
+SwapTotal:         0 kB
+SwapFree:          0 kB
+";
+        let m = parse_meminfo(raw);
+        assert_eq!(m.total, 1000 * 1024);
+        assert_eq!(m.avail, 300 * 1024);
+        assert_eq!(m.used, 700 * 1024);
+        assert_eq!(m.swap_total, 0);
+        assert_eq!(m.swap_used, 0);
     }
 
     #[test]
