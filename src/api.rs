@@ -50,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/projects/{id}/versions", get(list_versions))
         .route("/api/projects/{id}/updates", post(create_update))
+        .route("/api/projects/{id}/replace", post(create_replace))
         .route("/api/projects/{id}/rollback", post(rollback))
         .route("/api/projects/{id}/compose", get(compose_status))
         .route(
@@ -704,6 +705,23 @@ async fn create_update(
     apply_update(state, project, upload, "update").await
 }
 
+async fn create_replace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    multipart: Multipart,
+) -> Result<Json<ReplaceResult>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+
+    let gate = state.lock_project(&id);
+    let _guard = gate.lock().await;
+
+    let upload = receive_upload(&state, multipart).await?;
+    apply_replace(state, project, upload).await
+}
+
 struct IncomingUpload {
     note: String,
     restart: bool,
@@ -896,7 +914,9 @@ async fn apply_update(
             archives.len() as u64,
         );
     }
-    if let Err(err) = load_and_retag(&state, &archives, &images_dir, &mut loaded, job_id.as_deref()).await {
+    if let Err(err) =
+        load_and_retag(&state, &archives, Some(&images_dir), &mut loaded, job_id.as_deref()).await
+    {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
@@ -918,7 +938,9 @@ async fn apply_update(
             jar_files.len() as u64,
         );
     }
-    if let Err(err) = deploy_jars(&jar_files, &jars_dir, &live, &mounts, &mut deployed_jars).await {
+    if let Err(err) =
+        deploy_jars(&jar_files, Some(&jars_dir), &live, &mounts, &mut deployed_jars).await
+    {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
@@ -1000,6 +1022,94 @@ async fn apply_update(
     }))
 }
 
+async fn apply_replace(
+    state: AppState,
+    project: Project,
+    upload: IncomingUpload,
+) -> Result<Json<ReplaceResult>, AppError> {
+    let IncomingUpload {
+        restart,
+        files: staged_files,
+        tmp,
+        job_id,
+        ..
+    } = upload;
+    let live = PathBuf::from(&project.directory);
+
+    let (archives, jar_files): (Vec<PathBuf>, Vec<PathBuf>) = staged_files
+        .into_iter()
+        .partition(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .map(is_image_archive_name)
+                .unwrap_or(false)
+        });
+
+    if archives.is_empty() && jar_files.is_empty() {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Err(AppError::bad("请上传镜像包或 JAR"));
+    }
+
+    let mut loaded = Vec::new();
+    if !archives.is_empty() {
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "load",
+            "正在导入 Docker 镜像…",
+            0,
+            archives.len() as u64,
+        );
+    }
+    if let Err(err) =
+        load_and_retag(&state, &archives, None, &mut loaded, job_id.as_deref()).await
+    {
+        job_err(&state, job_id.as_deref(), &err.to_string());
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Err(err);
+    }
+
+    let mounts = read_jar_mounts(&live);
+    let mut deployed_jars = Vec::new();
+    if !jar_files.is_empty() {
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "deploy",
+            "正在写入 JAR…",
+            0,
+            jar_files.len() as u64,
+        );
+    }
+    if let Err(err) = deploy_jars(&jar_files, None, &live, &mounts, &mut deployed_jars).await {
+        job_err(&state, job_id.as_deref(), &err.to_string());
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Err(err);
+    }
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+
+    if restart {
+        job_set(&state, job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
+        let result = if !archives.is_empty() {
+            state.docker.compose_restart(&live).await
+        } else {
+            restart_after_update(&state, &live, &deployed_jars).await
+        };
+        if let Err(err) = result {
+            tracing::warn!("compose restart after replace failed: {err:#}");
+            let msg = format!("文件已替换，但 Compose 重启失败：{err}");
+            job_err(&state, job_id.as_deref(), &msg);
+            return Err(AppError::internal(msg));
+        }
+    }
+    job_ok(&state, job_id.as_deref(), "替换完成");
+
+    Ok(Json(ReplaceResult {
+        loaded,
+        jars: deployed_jars,
+    }))
+}
+
 fn read_jar_mounts(project_dir: &std::path::Path) -> Vec<JarMount> {
     match find_compose_file(project_dir) {
         Some(path) => {
@@ -1012,7 +1122,7 @@ fn read_jar_mounts(project_dir: &std::path::Path) -> Vec<JarMount> {
 
 async fn deploy_jars(
     jar_files: &[PathBuf],
-    archive_dir: &std::path::Path,
+    archive_dir: Option<&std::path::Path>,
     live: &std::path::Path,
     mounts: &[JarMount],
     deployed: &mut Vec<DeployedJar>,
@@ -1020,14 +1130,18 @@ async fn deploy_jars(
     if jar_files.is_empty() {
         return Ok(());
     }
-    tokio::fs::create_dir_all(archive_dir).await?;
+    if let Some(dir) = archive_dir {
+        tokio::fs::create_dir_all(dir).await?;
+    }
     for src in jar_files {
         let name = src
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("app.jar")
             .to_string();
-        tokio::fs::copy(src, archive_dir.join(&name)).await?;
+        if let Some(dir) = archive_dir {
+            tokio::fs::copy(src, dir.join(&name)).await?;
+        }
 
         let matches: Vec<&JarMount> = mounts.iter().filter(|m| m.basename == name).collect();
         let (dests, services) = if matches.is_empty() {
@@ -1095,7 +1209,7 @@ async fn restart_after_update(
 async fn load_and_retag(
     state: &AppState,
     staged_files: &[PathBuf],
-    images_dir: &std::path::Path,
+    images_dir: Option<&std::path::Path>,
     loaded: &mut Vec<LoadedImage>,
     job_id: Option<&str>,
 ) -> Result<(), AppError> {
@@ -1106,8 +1220,14 @@ async fn load_and_retag(
             .and_then(|s| s.to_str())
             .unwrap_or("image.tar.gz")
             .to_string();
-        let dest = images_dir.join(&name);
-        tokio::fs::copy(src, &dest).await?;
+        let load_from = if let Some(dir) = images_dir {
+            tokio::fs::create_dir_all(dir).await?;
+            let dest = dir.join(&name);
+            tokio::fs::copy(src, &dest).await?;
+            dest
+        } else {
+            src.clone()
+        };
         job_set(
             state,
             job_id,
@@ -1119,7 +1239,7 @@ async fn load_and_retag(
 
         let images = state
             .docker
-            .load_archive(&dest)
+            .load_archive(&load_from)
             .await
             .map_err(|e| AppError::internal(e.to_string()))?;
 

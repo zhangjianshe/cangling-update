@@ -12,7 +12,7 @@
 1. 首页添加入口卡片（图标、名称、简介），点击跳转到对应地址；可上传图片或 MP4 作为背景
 2. 把本机某个 Compose 目录登记为「项目」
 3. 上传 `docker save` 出来的 `.tar` / `.tar.gz` / `.tgz`，执行 `docker load`，并把镜像打成 `:latest`
-4. 上传 `.jar`，按 compose 里的挂载文件名覆盖（例如 `./jars/cis-server-1.0.0.jar`），再强制重建对应服务
+4. 上传 `.jar`，按 compose 里的挂载文件名覆盖（例如 `./jars/cis-server-1.0.0.jar`），再强制重建对应服务；也可「替换并重启」只覆盖文件不备份
 5. 每次升级前用 **Git 全量备份** 项目目录（含 PostGIS 等数据目录；相同文件只存一份，并单独记下权限/属主），可回滚。备份前请先停止应用，页面会提示并默认先 `compose down`
 6. 登录保护；2 小时无操作自动退出
 7. 对正在运行的容器打开 **xterm 终端**（`docker compose exec`），并按容器查看日志
@@ -171,9 +171,11 @@ sudo ./cangling-update update --proxy http://10.1.1.2:7890
 1. 在构建机：`docker save 镜像:标签 | gzip > app.tar.gz`
 2. 在页面上传一个或多个 `.tar` / `.tar.gz` / `.tgz`
 3. 服务端 `docker load`，再把载入的镜像打成同名 `:latest`
-4. 勾选「导入成功后重启 Compose」则执行 `docker compose up -d --remove-orphans`
+4. 勾选「完成后启动整个 Compose」则执行 `docker compose up -d --remove-orphans`
 
 compose 里请写 `:latest`（或升级后会打上的那个名字），这样新镜像才会被用到。
+
+**替换并重启**（不备份）：同样上传镜像包或 JAR，只 `docker load` / 覆盖挂载文件并重启容器，不打目录快照、不写入版本列表。有镜像包时执行 `docker compose up -d --force-recreate --remove-orphans`，只有 JAR 时只强制重建用到该 JAR 的服务再 `compose up`。
 
 ### JAR 包
 

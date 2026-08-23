@@ -142,6 +142,12 @@ pub struct UpdateResult {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ReplaceResult {
+    pub loaded: Vec<LoadedImage>,
+    pub jars: Vec<DeployedJar>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct LogsResult {
     pub logs: String,
 }
