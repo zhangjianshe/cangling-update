@@ -235,7 +235,7 @@ Compose 面板里的容器状态、详情每 **2 秒**自动刷新，不会打�
 
 Compose 面板的 **编辑** 会打开当前目录里的 `docker-compose.yml` / `docker-compose.yaml` / `compose.yml` / `compose.yaml`（没有文件时保存会创建 `docker-compose.yml`）。
 
-- 编辑器用 **Iosevka Term**，按 YAML 高亮（键、字符串、注释、布尔值、`${VAR}`）；Tab 插入两个空格，`Ctrl+S` / `⌘S` 保存
+- 编辑器是内置的 **Ace**（字体 **Iosevka Term**）：YAML / `.env` 高亮、折叠、`Ctrl+F` 查找、Tab 两个空格、`Ctrl+S` / `⌘S` 保存。资源打在程序里，离线可用
 - 保存前会先按 YAML 解析。本机有 Compose 时还会把草稿交给 `docker compose -f <草稿> config`；任一校验失败都不会改线上文件
 - 每次真正写入都会留下完整文件内容，可在右侧历史里点开预览，或 **恢复此版本**（恢复本身也会再记一条历史，因此还能再改回去）
 - 这是 **Compose 文件自己的版本**，和页面「版本切换」里的全量目录备份（镜像 / JAR / 数据）不是一回事

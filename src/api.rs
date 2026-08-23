@@ -99,6 +99,7 @@ pub fn router(state: AppState) -> Router {
         .route("/vendor/xterm.css", get(vendor_xterm_css))
         .route("/vendor/xterm.js", get(vendor_xterm_js))
         .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
+        .route("/vendor/ace/{*name}", get(vendor_ace))
         .route(
             "/vendor/iosevka-term-regular.woff2",
             get(vendor_iosevka_regular),
@@ -2121,6 +2122,26 @@ async fn vendor_iosevka_regular() -> impl IntoResponse {
 
 async fn vendor_iosevka_bold() -> impl IntoResponse {
     vendor_font(include_bytes!("assets/vendor/iosevka-term-bold.woff2"))
+}
+
+async fn vendor_ace(Path(name): Path<String>) -> Result<impl IntoResponse, AppError> {
+    let file = name.rsplit('/').next().unwrap_or(name.as_str());
+    let bytes: &'static [u8] = match file {
+        "ace.js" => include_bytes!("assets/vendor/ace/ace.js"),
+        "mode-yaml.js" => include_bytes!("assets/vendor/ace/mode-yaml.js"),
+        "mode-ini.js" => include_bytes!("assets/vendor/ace/mode-ini.js"),
+        "theme-github.js" => include_bytes!("assets/vendor/ace/theme-github.js"),
+        "theme-github_dark.js" => include_bytes!("assets/vendor/ace/theme-github_dark.js"),
+        "ext-searchbox.js" => include_bytes!("assets/vendor/ace/ext-searchbox.js"),
+        _ => return Err(AppError::not_found("资源不存在")),
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    ))
 }
 
 #[cfg(test)]

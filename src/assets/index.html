@@ -54,13 +54,6 @@
       --log-text: #f0f6fc;
       --progress-bg: #212830;
       --shadow: 0 0 0 1px #3d444d;
-      --yml-key: #7ee787;
-      --yml-str: #a5d6ff;
-      --yml-num: #79c0ff;
-      --yml-kw: #ff7b72;
-      --yml-cmt: #8b949e;
-      --yml-p: #c9d1d9;
-      --yml-var: #d2a8ff;
     }
     :root[data-theme="light"] {
       color-scheme: light;
@@ -99,13 +92,6 @@
       --log-text: #1f2328;
       --progress-bg: #d1d9e0;
       --shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
-      --yml-key: #116329;
-      --yml-str: #0a3069;
-      --yml-num: #0550ae;
-      --yml-kw: #cf222e;
-      --yml-cmt: #6e7781;
-      --yml-p: #1f2328;
-      --yml-var: #8250df;
     }
     * { box-sizing: border-box; border-radius: 6px; }
     * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
@@ -347,39 +333,18 @@
       border-right: 1px solid var(--line);
       background: var(--log-bg);
     }
-    .yaml-hl, .compose-edit-main textarea {
+    #compose-ace {
       position: absolute; inset: 0;
-      margin: 0; width: 100%; height: 100%; min-height: 0;
-      padding: 12px 14px; border: 0; border-radius: 0;
+      width: 100%; height: 100%;
+    }
+    .compose-edit-main .ace_editor {
       font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
-      font-size: 14px; line-height: 1.5; tab-size: 2;
-      white-space: pre; overflow-wrap: normal; word-break: normal;
+      font-size: 16px; line-height: 1.5;
       font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
-      box-sizing: border-box;
     }
-    .yaml-hl {
-      overflow: hidden; pointer-events: none;
-      color: var(--log-text); background: var(--log-bg);
-      z-index: 0;
-    }
-    .yml-k { color: var(--yml-key); }
-    .yml-s { color: var(--yml-str); }
-    .yml-n { color: var(--yml-num); }
-    .yml-kw { color: var(--yml-kw); }
-    .yml-c { color: var(--yml-cmt); font-style: italic; }
-    .yml-p { color: var(--yml-p); }
-    .yml-v { color: var(--yml-var); }
-    .compose-edit-main textarea {
-      resize: none; overflow: auto; z-index: 1;
-      background: transparent; color: transparent;
-      caret-color: var(--log-text);
-      -webkit-text-fill-color: transparent;
-    }
-    .compose-edit-main textarea::selection {
-      background: var(--bg-active); color: transparent;
-      -webkit-text-fill-color: transparent;
-    }
-    .compose-edit-main textarea:focus { box-shadow: none; border-color: transparent; }
+    .compose-edit-main .ace_editor,
+    .compose-edit-main .ace_editor * { border-radius: 0 !important; }
+    .ace_search { border-radius: 6px !important; }
     .compose-edit-actions {
       grid-column: 1 / -1; grid-row: 3;
       padding: 10px 14px; border-top: 1px solid var(--line);
@@ -531,7 +496,7 @@
     const PROJECT_TABS = [
       {
         id: "import",
-        label: "导入数据",
+        label: "系统升级",
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Zm5.03-3.47 3.25-3.25a.75.75 0 0 0-1.06-1.06L8.75 8.19V2a.75.75 0 0 0-1.5 0v6.19L5.03 6.22a.75.75 0 0 0-1.06 1.06l3.25 3.25a.75.75 0 0 0 1.06 0Z"/></svg>',
       },
       {
@@ -545,12 +510,12 @@
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.22 14.78a.75.75 0 0 0 1.06-1.06L4.56 12h8.69a.75.75 0 0 0 0-1.5H4.56l1.72-1.72a.75.75 0 0 0-1.06-1.06l-3 3a.75.75 0 0 0 0 1.06Zm5.56-6.5a.75.75 0 1 1-1.06-1.06l1.72-1.72H2.75a.75.75 0 0 1 0-1.5h8.69L9.72 2.28a.75.75 0 0 1 1.06-1.06l3 3a.75.75 0 0 1 0 1.06Z"/></svg>',
       },
     ];
-    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, confirmClose: null };
+    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null };
     const composePoll = { timer: null, inflight: false };
     const metaPoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
-    const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false };
+    const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
     const FILE_EDIT = {
       compose: {
         title: "编辑 Compose 文件",
@@ -560,6 +525,7 @@
         defaultName: "docker-compose.yml",
         missing: "文件还不存在，保存后将创建 docker-compose.yml",
         restoreMsg: "确定把此历史版本写回磁盘上的 Compose 文件？",
+        mode: "ace/mode/yaml",
       },
       env: {
         title: "编辑环境变量",
@@ -569,6 +535,7 @@
         defaultName: ".env",
         missing: "",
         restoreMsg: "确定把此历史版本写回磁盘上的 .env 文件？",
+        mode: "ace/mode/ini",
       },
     };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
@@ -1667,6 +1634,7 @@
         dialog.term = null;
         dialog.fit = null;
       }
+      destroyAceEditor();
       dialog.confirmClose = null;
       composeEdit.kind = "compose";
       composeEdit.etag = "";
@@ -1701,173 +1669,101 @@
     }
 
     function composeDirty() {
-      const ta = $("#compose-src");
-      return !!(ta && ta.value !== composeEdit.disk);
-    }
-
-    function matchYamlKey(line, from) {
-      const s = line.slice(from);
-      const m = s.match(/^("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^ \t:#][^:#]*?)\s*:/);
-      return m ? { key: m[1], end: from + m[0].length } : null;
-    }
-
-    function highlightYamlTokens(s) {
-      let i = 0;
-      let html = "";
-      const n = s.length;
-      while (i < n) {
-        if (s[i] === "#" && (i === 0 || /\s/.test(s[i - 1]))) {
-          html += `<span class="yml-c">${esc(s.slice(i))}</span>`;
-          break;
-        }
-        if (s[i] === '"' || s[i] === "'") {
-          const q = s[i];
-          let j = i + 1;
-          while (j < n) {
-            if (s[j] === "\\") { j += 2; continue; }
-            if (s[j] === q) { j++; break; }
-            j++;
-          }
-          html += `<span class="yml-s">${esc(s.slice(i, j))}</span>`;
-          i = j;
-          continue;
-        }
-        if (s[i] === "$" && s[i + 1] === "{") {
-          let j = s.indexOf("}", i + 2);
-          if (j < 0) j = n - 1;
-          html += `<span class="yml-v">${esc(s.slice(i, j + 1))}</span>`;
-          i = j + 1;
-          continue;
-        }
-        if (s[i] === "&" || s[i] === "*" || s[i] === "!") {
-          let j = i + 1;
-          while (j < n && !/[\s,\]}]/.test(s[j])) j++;
-          html += `<span class="yml-v">${esc(s.slice(i, j))}</span>`;
-          i = j;
-          continue;
-        }
-        if ("[]{},:".indexOf(s[i]) >= 0 || s[i] === "|" || s[i] === ">") {
-          html += `<span class="yml-p">${esc(s[i])}</span>`;
-          i++;
-          continue;
-        }
-        if (/[A-Za-z0-9._+-]/.test(s[i])) {
-          let j = i + 1;
-          while (j < n && /[A-Za-z0-9._+-]/.test(s[j])) j++;
-          const w = s.slice(i, j);
-          const cls = /^(true|false|null|yes|no|on|off|True|False|Null|Yes|No|~)$/.test(w)
-            ? "yml-kw"
-            : /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(w)
-              ? "yml-n"
-              : "";
-          html += cls ? `<span class="${cls}">${esc(w)}</span>` : esc(w);
-          i = j;
-          continue;
-        }
-        html += esc(s[i]);
-        i++;
-      }
-      return html;
-    }
-
-    function highlightYamlLine(line) {
-      if (!line) return "";
-      let i = 0;
-      const n = line.length;
-      let html = "";
-      const takeWs = () => {
-        const s = i;
-        while (i < n && (line[i] === " " || line[i] === "\t")) i++;
-        html += esc(line.slice(s, i));
-      };
-      takeWs();
-      if (i >= n) return html;
-      if (line[i] === "#") return html + `<span class="yml-c">${esc(line.slice(i))}</span>`;
-      const rest = line.slice(i);
-      if (rest === "---" || rest === "..." || rest.startsWith("---") || rest.startsWith("...")) {
-        if (rest.startsWith("---") || rest.startsWith("...")) {
-          html += `<span class="yml-p">${esc(rest.slice(0, 3))}</span>`;
-          html += highlightYamlTokens(rest.slice(3));
-          return html;
-        }
-      }
-      if (line[i] === "-" && (i + 1 === n || line[i + 1] === " " || line[i + 1] === "\t")) {
-        html += `<span class="yml-p">-</span>`;
-        i += 1;
-        takeWs();
-      }
-      const key = matchYamlKey(line, i);
-      if (key) {
-        html += `<span class="yml-k">${esc(key.key)}</span><span class="yml-p">:</span>`;
-        i = key.end;
-        takeWs();
-        if (i < n) html += highlightYamlTokens(line.slice(i));
-        return html;
-      }
-      return html + highlightYamlTokens(line.slice(i));
-    }
-
-    function highlightYaml(src) {
-      return String(src ?? "").split("\n").map(highlightYamlLine).join("\n");
-    }
-
-    function syncComposeHighlightScroll() {
-      const ta = $("#compose-src");
-      const hl = $("#compose-hl");
-      if (!ta || !hl) return;
-      hl.scrollTop = ta.scrollTop;
-      hl.scrollLeft = ta.scrollLeft;
-    }
-
-    function highlightEnvLine(line) {
-      if (!line) return "";
-      let i = 0;
-      const n = line.length;
-      let html = "";
-      while (i < n && (line[i] === " " || line[i] === "\t")) {
-        html += esc(line[i]);
-        i++;
-      }
-      if (i >= n) return html;
-      if (line[i] === "#") return html + `<span class="yml-c">${esc(line.slice(i))}</span>`;
-      let rest = line.slice(i);
-      if (rest.startsWith("export") && (rest.length === 6 || /\s/.test(rest[6]))) {
-        html += `<span class="yml-kw">export</span>`;
-        i += 6;
-        while (i < n && (line[i] === " " || line[i] === "\t")) {
-          html += esc(line[i]);
-          i++;
-        }
-        rest = line.slice(i);
-      }
-      const eq = rest.indexOf("=");
-      if (eq < 0) return html + esc(rest);
-      html += `<span class="yml-k">${esc(rest.slice(0, eq))}</span><span class="yml-p">=</span>`;
-      html += highlightYamlTokens(rest.slice(eq + 1));
-      return html;
-    }
-
-    function highlightEnv(src) {
-      return String(src ?? "").split("\n").map(highlightEnvLine).join("\n");
-    }
-
-    function paintComposeHighlight() {
-      const ta = $("#compose-src");
-      const hl = $("#compose-hl");
-      if (!ta || !hl) return;
-      const src = ta.value;
-      hl.innerHTML = (composeEdit.kind === "env" ? highlightEnv(src) : highlightYaml(src)) || " ";
-      syncComposeHighlightScroll();
+      return !!(composeEdit.editor && composeEdit.editor.getValue() !== composeEdit.disk);
     }
 
     function fileEditSpec() {
       return FILE_EDIT[composeEdit.kind] || FILE_EDIT.compose;
     }
 
+    function aceThemeName() {
+      return currentTheme() === "light" ? "ace/theme/github" : "ace/theme/github_dark";
+    }
+
+    function applyAceTheme() {
+      if (composeEdit.editor) composeEdit.editor.setTheme(aceThemeName());
+    }
+
+    function loadScriptOnce(src) {
+      return new Promise((resolve, reject) => {
+        if (document.querySelector('script[src="' + src + '"]')) {
+          resolve();
+          return;
+        }
+        const s = document.createElement("script");
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("无法加载 " + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    function loadAce() {
+      if (window.ace) return Promise.resolve();
+      if (dialog.aceReady) return dialog.aceReady;
+      dialog.aceReady = (async () => {
+        await loadScriptOnce("/vendor/ace/ace.js");
+        if (!window.ace) throw new Error("无法加载 Ace 编辑器");
+        window.ace.config.set("basePath", "/vendor/ace");
+        window.ace.config.set("loadWorkerFromBlob", false);
+        await Promise.all([
+          loadScriptOnce("/vendor/ace/mode-yaml.js"),
+          loadScriptOnce("/vendor/ace/mode-ini.js"),
+          loadScriptOnce("/vendor/ace/theme-github.js"),
+          loadScriptOnce("/vendor/ace/theme-github_dark.js"),
+          loadScriptOnce("/vendor/ace/ext-searchbox.js"),
+        ]);
+      })();
+      return dialog.aceReady;
+    }
+
+    function destroyAceEditor() {
+      if (composeEdit.resizeObs) {
+        try { composeEdit.resizeObs.disconnect(); } catch {}
+        composeEdit.resizeObs = null;
+      }
+      if (composeEdit.editor) {
+        try { composeEdit.editor.destroy(); } catch {}
+        composeEdit.editor = null;
+      }
+    }
+
+    function mountAceEditor() {
+      destroyAceEditor();
+      const el = $("#compose-ace");
+      if (!el || !window.ace) return;
+      const spec = fileEditSpec();
+      const editor = window.ace.edit(el, {
+        mode: spec.mode,
+        theme: aceThemeName(),
+        useWorker: false,
+        fontSize: 16,
+        tabSize: 2,
+        useSoftTabs: true,
+        wrap: false,
+        showPrintMargin: false,
+        fadeFoldWidgets: true,
+        scrollPastEnd: 0.4,
+        fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
+      });
+      editor.commands.addCommand({
+        name: "saveFile",
+        bindKey: { win: "Ctrl-S", mac: "Command-S" },
+        exec: () => saveComposeFile(),
+      });
+      editor.focus();
+      composeEdit.editor = editor;
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => {
+          if (composeEdit.editor) composeEdit.editor.resize();
+        });
+        ro.observe(el);
+        composeEdit.resizeObs = ro;
+      }
+    }
+
     function setComposeSource(text) {
-      const ta = $("#compose-src");
-      if (ta) ta.value = text ?? "";
-      paintComposeHighlight();
+      if (composeEdit.editor) composeEdit.editor.setValue(text ?? "", -1);
     }
 
     function applyComposeFile(data, selectedId) {
@@ -1877,7 +1773,6 @@
       composeEdit.filename = data.filename || spec.defaultName;
       composeEdit.selected = selectedId || null;
       if (selectedId == null) setComposeSource(data.content || "");
-      else paintComposeHighlight();
       const meta = $("#compose-edit-meta");
       if (meta) {
         const mismatch = data.exists && data.revisions && data.revisions.length && !data.matches_latest
@@ -1939,6 +1834,15 @@
         flash("err", "正在处理中，请勿重复操作");
         return;
       }
+      try {
+        await loadAce();
+        if (document.fonts && document.fonts.load) {
+          await document.fonts.load('16px "Iosevka Term"');
+        }
+      } catch (e) {
+        flash("err", e.message);
+        return;
+      }
       closeDialog();
       composeEdit.kind = kind === "env" ? "env" : "compose";
       const spec = fileEditSpec();
@@ -1953,8 +1857,7 @@
             <div class="flash compose-edit-flash" id="compose-edit-flash" hidden></div>
           </div>
           <div class="compose-edit-main">
-            <div class="yaml-hl" id="compose-hl" aria-hidden="true"></div>
-            <textarea id="compose-src" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+            <div id="compose-ace"></div>
           </div>
           <div class="compose-edit-actions">
             <label class="compose-note-wrap">备注<input id="compose-note" type="text" placeholder="本次改了什么（可选）" /></label>
@@ -1971,26 +1874,12 @@
         if (!composeDirty()) return true;
         return confirm("有未保存的修改，确定关闭？");
       };
-      const ta = $("#compose-src");
-      ta.addEventListener("input", paintComposeHighlight);
-      ta.addEventListener("scroll", syncComposeHighlightScroll);
-      ta.addEventListener("keydown", (e) => {
-        if (e.key === "Tab") {
-          e.preventDefault();
-          const start = ta.selectionStart;
-          const end = ta.selectionEnd;
-          ta.setRangeText("  ", start, end, "end");
-          paintComposeHighlight();
-        } else if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
-          e.preventDefault();
-          saveComposeFile();
-        }
-      });
+      mountAceEditor();
       $("#btn-compose-save").onclick = saveComposeFile;
       try {
         const data = await api(spec.file(state.current.id));
         applyComposeFile(data, null);
-        ta.focus();
+        if (composeEdit.editor) composeEdit.editor.focus();
       } catch (e) {
         composeEditFlash("err", e.message);
       }
@@ -2018,9 +1907,7 @@
     }
 
     async function saveComposeFile() {
-      if (!state.current || composeEdit.busy) return;
-      const ta = $("#compose-src");
-      if (!ta) return;
+      if (!state.current || composeEdit.busy || !composeEdit.editor) return;
       composeEdit.busy = true;
       const btn = $("#btn-compose-save");
       if (btn) btn.disabled = true;
@@ -2030,7 +1917,7 @@
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            content: ta.value,
+            content: composeEdit.editor.getValue(),
             note: ($("#compose-note") && $("#compose-note").value) || "",
             recreate: $("#compose-recreate") ? $("#compose-recreate").checked : false,
             expected_etag: composeEdit.etag,
@@ -2195,6 +2082,7 @@
       document.documentElement.setAttribute("data-theme", next);
       localStorage.setItem(THEME_KEY, next);
       renderTheme();
+      applyAceTheme();
     }
     $("#theme-toggle").onclick = toggleTheme;
     $("#gate-theme").onclick = toggleTheme;
