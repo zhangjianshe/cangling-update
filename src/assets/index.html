@@ -259,15 +259,56 @@
       padding: 7px 10px; height: 34px; min-width: 140px;
     }
     select:focus { border-color: var(--accent-emphasis); outline: none; box-shadow: 0 0 0 3px var(--bg-active); }
+    .combo { position: relative; min-width: 0; }
+    .combo-btn {
+      width: 100%; height: 34px; display: flex; align-items: center; gap: 6px;
+      padding: 0 8px 0 11px; border: 1px solid var(--line); background: var(--bg-input);
+      color: var(--text); text-align: left;
+    }
+    .combo-btn:hover { border-color: var(--line-hover); background: var(--bg-3); }
+    .combo-btn:focus, .combo-btn.open {
+      border-color: var(--accent-emphasis); outline: none; box-shadow: 0 0 0 3px var(--bg-active);
+    }
+    .combo-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .combo-val {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px;
+    }
+    .combo-val.ph { color: var(--muted); font-family: inherit; font-size: 14px; }
+    .combo-caret { flex: 0 0 auto; width: 16px; height: 16px; color: var(--muted); display: block; }
+    #combo-pop {
+      position: fixed; z-index: 35; min-width: 180px; max-width: min(480px, calc(100vw - 16px));
+      display: flex; flex-direction: column; overflow: hidden;
+      background: var(--bg-2); border: 1px solid var(--line);
+      box-shadow: 0 8px 24px rgba(1, 4, 9, 0.45);
+    }
+    :root[data-theme="light"] #combo-pop { box-shadow: 0 8px 24px rgba(31, 35, 40, 0.18); }
+    #combo-pop[hidden] { display: none !important; }
+    #combo-search {
+      flex: 0 0 auto; width: 100%; height: 34px; border: 0; border-bottom: 1px solid var(--line);
+      border-radius: 0; padding: 7px 10px; background: var(--bg-input);
+    }
+    #combo-search:focus { outline: none; box-shadow: none; border-color: var(--line); }
+    #combo-list { overflow: auto; flex: 1; min-height: 0; padding: 4px; }
+    .combo-opt {
+      display: block; width: 100%; text-align: left; border: 0; background: transparent;
+      color: var(--text); padding: 7px 10px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px;
+    }
+    .combo-opt:hover, .combo-opt.active { background: var(--bg-active); }
+    .combo-opt.sel { font-weight: 600; }
+    .combo-empty { color: var(--muted); padding: 16px 10px; text-align: center; }
     #panel-db:not([hidden]) {
       flex: 1 1 auto; min-height: 0; margin-bottom: 0; overflow: hidden;
       display: flex; flex-direction: column;
     }
     #panel-db > .hint, #panel-db > .flash { flex: 0 0 auto; }
     .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; flex: 0 0 auto; }
-    .db-toolbar .field { margin: 0; min-width: 140px; }
+    .db-toolbar .field { margin: 0; min-width: 150px; flex: 0 1 170px; }
+    .db-toolbar .combo { width: 100%; }
     .db-toolbar label { margin-bottom: 4px; font-size: 13px; }
     .db-toolbar .db-filter-field { flex: 1 1 200px; min-width: 180px; }
+    .db-toolbar > .field:last-child { flex: 0 0 auto; min-width: 0; }
     .db-toolbar .db-filter-field input {
       width: 100%; height: 34px; padding: 7px 10px;
     }
@@ -572,6 +613,10 @@
       <div class="modal-body" id="dialog-body"></div>
     </div>
   </div>
+  <div id="combo-pop" hidden>
+    <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
+    <div id="combo-list" role="listbox"></div>
+  </div>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers" };
     const PROJECT_TABS = [
@@ -845,6 +890,7 @@
 
     function route() {
       stopComposePoll();
+      comboClose();
       closeDialog();
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
@@ -1438,10 +1484,10 @@
           <p class="hint" style="margin-top:0">选择正在运行的容器，连接其中的 PostgreSQL，浏览 schema / 表 / 视图，或执行 SQL。当前仅支持 postgres。</p>
           <div class="flash err" id="db-err" hidden></div>
           <div class="db-toolbar">
-            <div class="field"><label>容器</label><select id="db-service"></select></div>
-            <div class="field"><label>数据库类型</label><select id="db-engine"><option value="postgres">postgres</option></select></div>
-            <div class="field"><label>数据库</label><select id="db-database"></select></div>
-            <div class="field"><label>Schema</label><select id="db-schema"></select></div>
+            <div class="field"><label>容器</label><div class="combo" id="db-service"></div></div>
+            <div class="field"><label>数据库类型</label><div class="combo" id="db-engine"></div></div>
+            <div class="field"><label>数据库</label><div class="combo" id="db-database"></div></div>
+            <div class="field"><label>Schema</label><div class="combo" id="db-schema"></div></div>
             <div class="field db-filter-field"><label>表和视图</label><input id="db-filter" type="text" placeholder="过滤表 / 视图" autocomplete="off" spellcheck="false" /></div>
             <div class="field"><label>&nbsp;</label><button type="button" class="btn" id="btn-db-sql">执行 SQL</button></div>
           </div>
@@ -1496,6 +1542,7 @@
 
     function applyProjectTab(tab) {
       if (tab) state.projectTab = tab;
+      comboClose();
       const cur = currentProjectTab();
       const main = $("#main");
       if (main) main.classList.toggle("db-fill", cur === "db");
@@ -1515,11 +1562,168 @@
       return ((state.compose && state.compose.services) || []).filter((s) => /run/i.test(s.state || ""));
     }
 
-    function dbFillSelect(el, items, current, placeholder) {
-      if (!el) return;
-      const opts = (items || []).map((n) => `<option value="${esc(n)}" ${n === current ? "selected" : ""}>${esc(n)}</option>`).join("");
-      el.innerHTML = (placeholder ? `<option value="">${esc(placeholder)}</option>` : "") + opts;
-      if (current && items && items.includes(current)) el.value = current;
+    const comboPop = { host: null, items: [], filtered: [], value: "", q: "", hi: 0, onPick: null, bound: false };
+
+    function comboCaret() {
+      return '<svg class="combo-caret" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"/></svg>';
+    }
+
+    function comboBind(host, opts) {
+      if (!host) return;
+      if (comboPop.host === host) comboClose();
+      const items = opts.items || [];
+      const value = opts.value || "";
+      const placeholder = opts.placeholder || "请选择";
+      host.classList.add("combo");
+      const shown = value || placeholder;
+      host.innerHTML = `<button type="button" class="combo-btn" aria-haspopup="listbox" aria-expanded="false"${items.length ? "" : " disabled"}><span class="combo-val${value ? "" : " ph"}">${esc(shown)}</span>${comboCaret()}</button>`;
+      const btn = host.querySelector(".combo-btn");
+      if (!btn) return;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        if (!items.length) return;
+        if (comboPop.host === host) { comboClose(); return; }
+        comboOpen(host, { items, value, placeholder, onChange: opts.onChange });
+      };
+    }
+
+    function comboEnsureListeners() {
+      if (comboPop.bound) return;
+      comboPop.bound = true;
+      document.addEventListener("mousedown", (e) => {
+        const pop = $("#combo-pop");
+        if (!pop || pop.hidden) return;
+        if (pop.contains(e.target) || (comboPop.host && comboPop.host.contains(e.target))) return;
+        comboClose();
+      });
+      window.addEventListener("resize", () => { if (comboPop.host) comboPlace(comboPop.host); });
+      window.addEventListener("scroll", (e) => {
+        if (!comboPop.host) return;
+        const pop = $("#combo-pop");
+        if (pop && (pop === e.target || pop.contains(e.target))) return;
+        comboClose();
+      }, true);
+    }
+
+    function comboOpen(host, opts) {
+      comboEnsureListeners();
+      const pop = $("#combo-pop");
+      const search = $("#combo-search");
+      if (!pop || !search) return;
+      comboPop.host = host;
+      comboPop.items = opts.items || [];
+      comboPop.value = opts.value || "";
+      comboPop.q = "";
+      comboPop.onPick = opts.onChange || null;
+      const btn = host.querySelector(".combo-btn");
+      if (btn) {
+        btn.classList.add("open");
+        btn.setAttribute("aria-expanded", "true");
+      }
+      search.value = "";
+      pop.hidden = false;
+      comboRenderList();
+      comboPlace(host);
+      search.focus();
+      search.oninput = () => {
+        comboPop.q = search.value;
+        comboRenderList();
+      };
+      search.onkeydown = (e) => {
+        if (e.key === "Escape") { e.preventDefault(); comboClose(); return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); comboMove(1); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); comboMove(-1); return; }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const items = comboPop.filtered || [];
+          if (items[comboPop.hi] != null) comboPick(items[comboPop.hi]);
+        }
+      };
+    }
+
+    function comboFiltered() {
+      const q = (comboPop.q || "").trim().toLowerCase();
+      const items = comboPop.items || [];
+      if (!q) return items.slice();
+      return items.filter((n) => String(n).toLowerCase().includes(q));
+    }
+
+    function comboRenderList() {
+      const list = $("#combo-list");
+      if (!list) return;
+      const items = comboFiltered();
+      comboPop.filtered = items;
+      const cur = items.indexOf(comboPop.value);
+      comboPop.hi = cur >= 0 ? cur : 0;
+      if (!items.length) {
+        list.innerHTML = `<div class="combo-empty">${(comboPop.items || []).length ? "没有匹配项" : "没有可选项"}</div>`;
+        return;
+      }
+      list.innerHTML = items.map((n, i) => {
+        const sel = n === comboPop.value ? " sel" : "";
+        const hi = i === comboPop.hi ? " active" : "";
+        return `<button type="button" class="combo-opt${sel}${hi}" data-v="${esc(n)}" role="option">${esc(n)}</button>`;
+      }).join("");
+      for (const b of list.querySelectorAll("[data-v]")) {
+        b.onmouseenter = () => {
+          const opts = [...list.querySelectorAll(".combo-opt")];
+          comboPop.hi = opts.indexOf(b);
+          opts.forEach((o, idx) => o.classList.toggle("active", idx === comboPop.hi));
+        };
+        b.onclick = () => comboPick(b.getAttribute("data-v"));
+      }
+      const act = list.querySelector(".combo-opt.active");
+      if (act) act.scrollIntoView({ block: "nearest" });
+    }
+
+    function comboMove(delta) {
+      const opts = [...document.querySelectorAll("#combo-list .combo-opt")];
+      if (!opts.length) return;
+      comboPop.hi = (comboPop.hi + delta + opts.length) % opts.length;
+      opts.forEach((o, idx) => o.classList.toggle("active", idx === comboPop.hi));
+      opts[comboPop.hi].scrollIntoView({ block: "nearest" });
+    }
+
+    function comboPick(v) {
+      const onPick = comboPop.onPick;
+      comboClose();
+      if (onPick) onPick(v);
+    }
+
+    function comboClose() {
+      const pop = $("#combo-pop");
+      if (pop) pop.hidden = true;
+      if (comboPop.host) {
+        const btn = comboPop.host.querySelector(".combo-btn");
+        if (btn) {
+          btn.classList.remove("open");
+          btn.setAttribute("aria-expanded", "false");
+        }
+      }
+      comboPop.host = null;
+      comboPop.onPick = null;
+    }
+
+    function comboPlace(host) {
+      const pop = $("#combo-pop");
+      if (!pop || !host) return;
+      const r = host.getBoundingClientRect();
+      const width = Math.max(r.width, 200);
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+      pop.style.width = width + "px";
+      pop.style.left = left + "px";
+      const spaceBelow = window.innerHeight - r.bottom - 8;
+      const spaceAbove = r.top - 8;
+      const maxH = Math.min(360, window.innerHeight * 0.6);
+      if (spaceBelow < 140 && spaceAbove > spaceBelow) {
+        pop.style.top = "auto";
+        pop.style.bottom = (window.innerHeight - r.top + 4) + "px";
+        pop.style.maxHeight = Math.max(120, Math.min(maxH, spaceAbove)) + "px";
+      } else {
+        pop.style.bottom = "auto";
+        pop.style.top = (r.bottom + 4) + "px";
+        pop.style.maxHeight = Math.max(120, Math.min(maxH, spaceBelow)) + "px";
+      }
     }
 
     function dbShowErr(msg) {
@@ -1536,17 +1740,31 @@
     }
 
     function bindDbPanel() {
-      const svc = $("#db-service");
       const names = dbRunningServices().map((s) => s.name).filter(Boolean);
-      dbFillSelect(svc, names, dbAdmin.service, names.length ? "请选择容器" : "没有运行中的容器");
-      dbFillSelect($("#db-database"), dbAdmin.databases, dbAdmin.database, "请选择数据库");
-      dbFillSelect($("#db-schema"), dbAdmin.schemas, dbAdmin.schema, "请选择 schema");
-      if ($("#db-engine")) $("#db-engine").value = dbAdmin.engine || "postgres";
-      if (svc) svc.onchange = () => dbOnService(svc.value);
-      const dbSel = $("#db-database");
-      if (dbSel) dbSel.onchange = () => dbOnDatabase(dbSel.value);
-      const sch = $("#db-schema");
-      if (sch) sch.onchange = () => dbOnSchema(sch.value);
+      comboBind($("#db-service"), {
+        items: names,
+        value: dbAdmin.service,
+        placeholder: names.length ? "请选择容器" : "没有运行中的容器",
+        onChange: dbOnService,
+      });
+      comboBind($("#db-engine"), {
+        items: ["postgres"],
+        value: dbAdmin.engine || "postgres",
+        placeholder: "请选择类型",
+        onChange: (v) => { dbAdmin.engine = v; },
+      });
+      comboBind($("#db-database"), {
+        items: dbAdmin.databases,
+        value: dbAdmin.database,
+        placeholder: "请选择数据库",
+        onChange: dbOnDatabase,
+      });
+      comboBind($("#db-schema"), {
+        items: dbAdmin.schemas,
+        value: dbAdmin.schema,
+        placeholder: "请选择 schema",
+        onChange: dbOnSchema,
+      });
       const sqlBtn = $("#btn-db-sql");
       if (sqlBtn) sqlBtn.onclick = openDbSqlDialog;
       const filter = $("#db-filter");
@@ -2407,6 +2625,7 @@
     }
 
     function closeDialog() {
+      comboClose();
       if (dialog.ws) {
         try { dialog.ws.close(); } catch {}
         dialog.ws = null;
