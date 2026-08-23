@@ -46,6 +46,7 @@ pub struct ObjectList {
 pub struct RowPage {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<serde_json::Value>>,
+    pub pk: Vec<String>,
     pub total: u64,
     pub offset: u32,
     pub limit: u32,
@@ -65,6 +66,22 @@ pub struct QueryBody {
     pub engine: Option<String>,
     pub database: String,
     pub sql: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateRowBody {
+    pub service: String,
+    pub engine: Option<String>,
+    pub database: String,
+    pub schema: String,
+    pub table: String,
+    pub keys: serde_json::Map<String, serde_json::Value>,
+    pub values: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateRowResult {
+    pub updated: u64,
 }
 
 pub fn require_engine(engine: Option<&str>) -> Result<(), AppError> {
@@ -384,13 +401,90 @@ pub async fn rows(
     );
     let raw = psql(docker, dir, service, &conn, database, &data_sql).await?;
     let (columns, rows) = rows_from_json_agg(&raw)?;
+    let pk_sql = format!(
+        "SELECT coalesce(json_agg(kcu.column_name ORDER BY kcu.ordinal_position), '[]'::json) \
+         FROM information_schema.table_constraints tc \
+         JOIN information_schema.key_column_usage kcu \
+           ON tc.constraint_name = kcu.constraint_name \
+          AND tc.table_schema = kcu.table_schema \
+          AND tc.table_name = kcu.table_name \
+         WHERE tc.constraint_type = 'PRIMARY KEY' \
+           AND tc.table_schema = {} AND tc.table_name = {}",
+        sql_literal(schema),
+        sql_literal(name)
+    );
+    let pk_raw = psql(docker, dir, service, &conn, database, &pk_sql).await?;
+    let pk = parse_string_array(&pk_raw).unwrap_or_default();
     Ok(RowPage {
         columns,
         rows,
+        pk,
         total,
         offset,
         limit,
     })
+}
+
+pub fn sql_value(v: &serde_json::Value) -> Result<String, AppError> {
+    match v {
+        serde_json::Value::Null => Ok("NULL".into()),
+        serde_json::Value::Bool(b) => Ok(if *b { "TRUE".into() } else { "FALSE".into() }),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::String(s) => Ok(sql_literal(s)),
+        other => Ok(format!("{}::jsonb", sql_literal(&other.to_string()))),
+    }
+}
+
+fn sql_eq(ident: &str, v: &serde_json::Value) -> Result<String, AppError> {
+    if v.is_null() {
+        Ok(format!("{ident} IS NULL"))
+    } else {
+        Ok(format!("{ident} IS NOT DISTINCT FROM {}", sql_value(v)?))
+    }
+}
+
+pub async fn update_row(
+    docker: &Docker,
+    dir: &Path,
+    body: &UpdateRowBody,
+) -> Result<UpdateRowResult, AppError> {
+    crate::docker::validate_service_name(&body.service).map_err(|e| AppError::bad(e.to_string()))?;
+    let fq = format!("{}.{}", quote_ident(&body.schema)?, quote_ident(&body.table)?);
+    let _ = quote_ident(&body.database)?;
+    if body.values.is_empty() || body.keys.is_empty() {
+        return Err(AppError::bad("缺少要更新的行"));
+    }
+    if body.values.len() > 64 || body.keys.len() > 64 {
+        return Err(AppError::bad("列数过多"));
+    }
+    let mut sets = Vec::new();
+    for (col, val) in &body.values {
+        let ident = quote_ident(col)?;
+        if body.keys.get(col) == Some(val) {
+            continue;
+        }
+        sets.push(format!("{ident} = {}", sql_value(val)?));
+    }
+    if sets.is_empty() {
+        return Err(AppError::bad("没有修改"));
+    }
+    let mut wheres = Vec::new();
+    for (col, val) in &body.keys {
+        let ident = quote_ident(col)?;
+        wheres.push(sql_eq(&ident, val)?);
+    }
+    let sql = format!(
+        "WITH u AS (UPDATE {fq} SET {} WHERE {} RETURNING 1) SELECT count(*)::bigint FROM u",
+        sets.join(", "),
+        wheres.join(" AND ")
+    );
+    let conn = probe_conn(docker, dir, &body.service).await?;
+    let raw = psql(docker, dir, &body.service, &conn, &body.database, &sql).await?;
+    let updated: u64 = raw.trim().parse().unwrap_or(0);
+    if updated == 0 {
+        return Err(AppError::conflict("未更新任何行，记录可能已被修改或不存在"));
+    }
+    Ok(UpdateRowResult { updated })
 }
 
 pub async fn query(
@@ -519,5 +613,16 @@ mod tests {
         let (cols, rows) = rows_from_json_agg(r#"[{"id":1,"name":"a"},{"id":2,"name":"b"}]"#).unwrap();
         assert!(cols.contains(&"id".into()));
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn sql_values() {
+        assert_eq!(sql_value(&serde_json::Value::Null).unwrap(), "NULL");
+        assert_eq!(sql_value(&serde_json::json!(true)).unwrap(), "TRUE");
+        assert_eq!(sql_value(&serde_json::json!(3)).unwrap(), "3");
+        assert_eq!(sql_value(&serde_json::json!("a'b")).unwrap(), "'a''b'");
+        assert!(sql_eq("\"id\"", &serde_json::Value::Null)
+            .unwrap()
+            .contains("IS NULL"));
     }
 }

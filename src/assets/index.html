@@ -110,7 +110,7 @@
     button { cursor: pointer; }
     a { color: var(--accent); }
     a.brand { text-decoration: none; color: inherit; }
-    .app { display: grid; grid-template-rows: 64px 1fr; height: 100%; }
+    .app { display: grid; grid-template-rows: 64px minmax(0, 1fr); height: 100%; overflow: hidden; }
     header {
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
       padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
@@ -147,7 +147,7 @@
     .meta b { color: var(--text); font-weight: 600; }
     .ok { color: var(--success); }
     .bad { color: var(--danger); }
-    .shell { display: grid; grid-template-columns: 280px 1fr; min-height: 0; }
+    .shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 0; }
     aside {
       border-right: 1px solid var(--line); background: var(--bg-2);
       display: flex; flex-direction: column; min-height: 0;
@@ -163,7 +163,13 @@
     .pitem.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
     .pitem .n { font-weight: 600; display: block; }
     .pitem .d { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    main { min-width: 0; overflow: auto; padding: 22px 26px 40px; }
+    main {
+      min-width: 0; min-height: 0; overflow: auto; padding: 22px 26px 40px;
+      display: flex; flex-direction: column;
+    }
+    main.db-fill { overflow: hidden; padding-bottom: 16px; }
+    main.db-fill #orphan-box { display: none; }
+    .title-row, .tabs, .progress-wrap, #flash { flex-shrink: 0; }
     .btn {
       border: 1px solid var(--line); background: var(--bg-3); color: var(--text);
       padding: 7px 12px;
@@ -253,14 +259,21 @@
       padding: 7px 10px; height: 34px; min-width: 140px;
     }
     select:focus { border-color: var(--accent-emphasis); outline: none; box-shadow: 0 0 0 3px var(--bg-active); }
-    .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; }
+    #panel-db:not([hidden]) {
+      flex: 1 1 auto; min-height: 0; margin-bottom: 0; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    #panel-db > .hint, #panel-db > .flash { flex: 0 0 auto; }
+    .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; flex: 0 0 auto; }
     .db-toolbar .field { margin: 0; min-width: 140px; }
     .db-toolbar label { margin-bottom: 4px; font-size: 13px; }
     .db-split {
       display: grid; grid-template-columns: 240px minmax(0, 1fr);
-      border: 1px solid var(--line); min-height: 320px; background: var(--bg-2);
+      grid-template-rows: minmax(0, 1fr);
+      border: 1px solid var(--line); min-height: 0; flex: 1 1 auto; background: var(--bg-2);
+      overflow: hidden;
     }
-    .db-objects { overflow: auto; border-right: 1px solid var(--line); max-height: 420px; }
+    .db-objects { overflow: auto; border-right: 1px solid var(--line); min-height: 0; }
     .db-obj {
       display: block; width: 100%; text-align: left; border: 0; border-radius: 0;
       background: transparent; color: var(--text); padding: 8px 10px;
@@ -269,11 +282,26 @@
     .db-obj:hover { background: var(--bg-3); }
     .db-obj.active { background: var(--bg-active); }
     .db-obj .k { color: var(--muted); font-size: 12px; margin-right: 6px; }
-    .db-data { overflow: auto; max-height: 420px; min-width: 0; }
+    .db-browse {
+      display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
+    }
+    .db-data { overflow: auto; min-width: 0; min-height: 0; flex: 1 1 auto; }
     .db-data table { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
     .db-data th, .db-data td { white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
     .db-data td:last-child, .db-data th:last-child { text-align: left; }
-    .db-pager { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-top: 1px solid var(--line); }
+    .db-data tbody tr { cursor: pointer; }
+    .db-data tbody tr.active { background: var(--bg-active); }
+    .db-edit-form { flex: 1; min-height: 0; overflow: auto; padding: 12px 14px; }
+    .db-edit-row { display: grid; grid-template-columns: minmax(120px, 180px) 1fr auto; gap: 8px 10px; align-items: start; margin-bottom: 10px; }
+    .db-edit-row label { margin: 0; padding-top: 8px; }
+    .db-edit-row textarea { min-height: 38px; width: 100%; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
+    .db-edit-row .check { margin: 8px 0 0; white-space: nowrap; }
+    .db-pager {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+      padding: 8px 10px; border-top: 1px solid var(--line);
+      flex: 0 0 auto; background: var(--bg-2);
+    }
+    .db-pager .hint { flex: 1 1 auto; min-width: 0; }
     .db-sql-edit {
       flex: 1; min-height: 0; display: flex; flex-direction: column;
     }
@@ -284,8 +312,15 @@
     .db-sql-meta { padding: 8px 14px; color: var(--muted); border-bottom: 1px solid var(--line); }
     .db-sql-out { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; }
     @media (max-width: 900px) {
-      .db-split { grid-template-columns: 1fr; }
-      .db-objects { max-height: 180px; border-right: 0; border-bottom: 1px solid var(--line); }
+      main.db-fill { overflow: auto; }
+      #panel-db:not([hidden]) { overflow: visible; flex: 1 0 auto; }
+      .db-split {
+        grid-template-columns: 1fr;
+        grid-template-rows: 140px minmax(0, 1fr);
+        flex: 1 0 360px;
+        min-height: 360px;
+      }
+      .db-objects { max-height: 140px; height: 100%; border-right: 0; border-bottom: 1px solid var(--line); }
     }
     .flash { margin: 0 0 14px; padding: 10px 12px; }
     .flash.err { background: var(--flash-err-bg); color: var(--flash-err-text); border: 1px solid var(--flash-err-line); }
@@ -595,6 +630,8 @@
       selected: null,
       columns: [],
       rows: [],
+      pk: [],
+      rowIndex: null,
       total: 0,
       offset: 0,
       limit: 50,
@@ -811,6 +848,7 @@
     function renderHome() {
       state.current = null;
       renderList();
+      $("#main").classList.remove("db-fill");
       $("#main").innerHTML = `
         <div class="title-row">
           <div>
@@ -834,6 +872,7 @@
     function renderNew() {
       state.current = null;
       renderList();
+      $("#main").classList.remove("db-fill");
       $("#main").innerHTML = `
         <div class="title-row"><div><h2>新建项目</h2><div class="path">绑定本机上的 Compose 应用目录</div></div></div>
         <div id="flash" hidden></div>
@@ -1171,6 +1210,8 @@
           dbAdmin.selected = null;
           dbAdmin.columns = [];
           dbAdmin.rows = [];
+          dbAdmin.pk = [];
+          dbAdmin.rowIndex = null;
           dbAdmin.total = 0;
           dbAdmin.offset = 0;
           dbAdmin.sqlResult = null;
@@ -1183,6 +1224,7 @@
         renderList();
         renderProject();
       } catch (e) {
+        $("#main").classList.remove("db-fill");
         $("#main").innerHTML = `<div class="flash err">${esc(e.message)}</div>`;
       }
     }
@@ -1395,9 +1437,9 @@
           </div>
           <div class="db-split">
             <div class="db-objects" id="db-objects"><div class="empty">请选择容器和 schema</div></div>
-            <div>
+            <div class="db-browse">
               <div class="db-data" id="db-data"><div class="empty">点击左侧表或视图查看数据</div></div>
-              <div class="db-pager" id="db-pager" hidden></div>
+              <div class="db-pager" id="db-pager"><span class="hint">选择左侧表或视图后分页浏览</span></div>
             </div>
           </div>
         </div>
@@ -1445,6 +1487,8 @@
     function applyProjectTab(tab) {
       if (tab) state.projectTab = tab;
       const cur = currentProjectTab();
+      const main = $("#main");
+      if (main) main.classList.toggle("db-fill", cur === "db");
       for (const btn of document.querySelectorAll("[data-tab]")) {
         const on = btn.getAttribute("data-tab") === cur;
         btn.classList.toggle("active", on);
@@ -1529,6 +1573,8 @@
       dbAdmin.selected = null;
       dbAdmin.rows = [];
       dbAdmin.columns = [];
+      dbAdmin.pk = [];
+      dbAdmin.rowIndex = null;
       dbAdmin.total = 0;
       dbAdmin.sqlResult = null;
       dbShowErr("");
@@ -1564,6 +1610,8 @@
       dbAdmin.selected = null;
       dbAdmin.rows = [];
       dbAdmin.columns = [];
+      dbAdmin.pk = [];
+      dbAdmin.rowIndex = null;
       dbAdmin.total = 0;
       bindDbPanel();
       if (!dbAdmin.database) return;
@@ -1585,6 +1633,8 @@
       dbAdmin.selected = null;
       dbAdmin.rows = [];
       dbAdmin.columns = [];
+      dbAdmin.pk = [];
+      dbAdmin.rowIndex = null;
       dbAdmin.total = 0;
       bindDbPanel();
       if (!dbAdmin.schema) return;
@@ -1619,6 +1669,7 @@
     async function dbOpenObject(name, kind) {
       dbAdmin.selected = { name, kind };
       dbAdmin.offset = 0;
+      dbAdmin.rowIndex = null;
       dbRenderObjects();
       await dbLoadRows();
     }
@@ -1633,9 +1684,11 @@
         }));
         dbAdmin.columns = data.columns || [];
         dbAdmin.rows = data.rows || [];
+        dbAdmin.pk = data.pk || [];
         dbAdmin.total = data.total || 0;
         dbAdmin.offset = data.offset || 0;
         dbAdmin.limit = data.limit || dbAdmin.limit;
+        if (dbAdmin.rowIndex != null && dbAdmin.rowIndex >= dbAdmin.rows.length) dbAdmin.rowIndex = null;
         dbShowErr("");
       } catch (e) {
         dbShowErr(e.message);
@@ -1655,7 +1708,7 @@
       if (!box) return;
       if (!dbAdmin.selected) {
         box.innerHTML = `<div class="empty">点击左侧表或视图查看数据</div>`;
-        if (pager) pager.hidden = true;
+        if (pager) pager.innerHTML = `<span class="hint">选择左侧表或视图后分页浏览</span>`;
         return;
       }
       const cols = dbAdmin.columns || [];
@@ -1664,25 +1717,153 @@
         box.innerHTML = `<div class="empty">${esc(dbAdmin.selected.name)} 无数据</div>`;
       } else {
         box.innerHTML = `<table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
-          rows.map((r) => `<tr>${cols.map((_, i) => {
+          rows.map((r, ri) => `<tr data-db-row="${ri}" class="${dbAdmin.rowIndex === ri ? "active" : ""}">${cols.map((_, i) => {
             const t = dbCell(r[i]);
             return `<td title="${esc(t)}">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</td>`;
           }).join("")}</tr>`).join("") || `<tr><td class="empty" colspan="${cols.length}">无行</td></tr>`
         }</tbody></table>`;
+        for (const tr of box.querySelectorAll("[data-db-row]")) {
+          tr.onclick = () => {
+            dbAdmin.rowIndex = Number(tr.getAttribute("data-db-row"));
+            dbRenderRows();
+          };
+          tr.ondblclick = () => {
+            dbAdmin.rowIndex = Number(tr.getAttribute("data-db-row"));
+            openDbEditDialog();
+          };
+        }
       }
       if (pager) {
         const from = dbAdmin.total ? dbAdmin.offset + 1 : 0;
         const to = Math.min(dbAdmin.offset + (rows.length || 0), dbAdmin.total);
-        pager.hidden = false;
+        const canEdit = dbAdmin.selected.kind !== "view" && dbAdmin.rowIndex != null;
         pager.innerHTML = `
           <button type="button" class="btn" id="db-prev" ${dbAdmin.offset <= 0 ? "disabled" : ""}>上一页</button>
-          <span class="hint">${esc(dbAdmin.selected.name)} · ${from}-${to} / ${dbAdmin.total}</span>
+          <span class="hint">${esc(dbAdmin.selected.name)} · ${from}-${to} / ${dbAdmin.total}${dbAdmin.pk && dbAdmin.pk.length ? " · 主键 " + esc(dbAdmin.pk.join(", ")) : ""}</span>
+          <button type="button" class="btn" id="db-edit-row" ${canEdit ? "" : "disabled"} title="${dbAdmin.selected.kind === "view" ? "视图不能直接编辑" : "选中一行后编辑"}">编辑</button>
           <button type="button" class="btn" id="db-next" ${dbAdmin.offset + dbAdmin.limit >= dbAdmin.total ? "disabled" : ""}>下一页</button>`;
         const prev = $("#db-prev");
         const next = $("#db-next");
-        if (prev) prev.onclick = () => { dbAdmin.offset = Math.max(0, dbAdmin.offset - dbAdmin.limit); dbLoadRows(); };
-        if (next) next.onclick = () => { dbAdmin.offset += dbAdmin.limit; dbLoadRows(); };
+        const edit = $("#db-edit-row");
+        if (prev) prev.onclick = () => { dbAdmin.offset = Math.max(0, dbAdmin.offset - dbAdmin.limit); dbAdmin.rowIndex = null; dbLoadRows(); };
+        if (next) next.onclick = () => { dbAdmin.offset += dbAdmin.limit; dbAdmin.rowIndex = null; dbLoadRows(); };
+        if (edit) edit.onclick = openDbEditDialog;
       }
+    }
+
+    function dbRowObject(row) {
+      const obj = {};
+      (dbAdmin.columns || []).forEach((c, i) => { obj[c] = row[i]; });
+      return obj;
+    }
+
+    function dbParseField(text, asNull, original) {
+      if (asNull) return null;
+      if (original !== null && typeof original === "object") {
+        try { return JSON.parse(text); } catch { return text; }
+      }
+      if (typeof original === "boolean") {
+        if (text === "true" || text === "TRUE") return true;
+        if (text === "false" || text === "FALSE") return false;
+      }
+      if (typeof original === "number" && text !== "" && Number.isFinite(Number(text))) return Number(text);
+      return text;
+    }
+
+    function openDbEditDialog() {
+      if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) {
+        dbShowErr("请先选择一行");
+        return;
+      }
+      if (dbAdmin.selected.kind === "view") {
+        dbShowErr("视图不能直接编辑");
+        return;
+      }
+      const row = dbAdmin.rows[dbAdmin.rowIndex];
+      if (!row) return;
+      const cols = dbAdmin.columns || [];
+      const pk = dbAdmin.pk || [];
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("compose-modal");
+      $("#dialog-title").textContent = "编辑行 · " + dbAdmin.selected.name;
+      const extra = $("#dialog-extra");
+      extra.hidden = false;
+      extra.textContent = "保存";
+      extra.onclick = dbSaveRow;
+      $("#dialog-body").innerHTML = `<div class="db-edit-form">${
+        cols.map((c, i) => {
+          const v = row[i];
+          const isNull = v == null;
+          const text = isNull ? "" : dbCell(v);
+          const isPk = pk.includes(c);
+          return `<div class="db-edit-row">
+            <label>${esc(c)}${isPk ? " <span class=\"k\">主键</span>" : ""}</label>
+            <textarea data-col="${esc(c)}" ${isNull ? "disabled" : ""}>${esc(text)}</textarea>
+            <label class="check"><input type="checkbox" data-null="${esc(c)}" ${isNull ? "checked" : ""} /> NULL</label>
+          </div>`;
+        }).join("")
+      }</div>`;
+      $("#dialog").hidden = false;
+      for (const cb of document.querySelectorAll("[data-null]")) {
+        cb.onchange = () => {
+          const col = cb.getAttribute("data-null");
+          const ta = document.querySelector(`textarea[data-col="${CSS.escape(col)}"]`);
+          if (ta) ta.disabled = cb.checked;
+        };
+      }
+    }
+
+    async function dbSaveRow() {
+      if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) return;
+      const original = dbAdmin.rows[dbAdmin.rowIndex];
+      const cols = dbAdmin.columns || [];
+      const pk = dbAdmin.pk || [];
+      const keys = {};
+      const values = {};
+      const keyCols = pk.length ? pk : cols;
+      for (const c of keyCols) {
+        const i = cols.indexOf(c);
+        keys[c] = i >= 0 ? original[i] : null;
+      }
+      for (const c of cols) {
+        const i = cols.indexOf(c);
+        const ta = document.querySelector(`textarea[data-col="${CSS.escape(c)}"]`);
+        const cb = document.querySelector(`input[data-null="${CSS.escape(c)}"]`);
+        values[c] = dbParseField(ta ? ta.value : "", !!(cb && cb.checked), original[i]);
+      }
+      const extra = $("#dialog-extra");
+      if (extra) extra.disabled = true;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/db/row", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            service: dbAdmin.service,
+            engine: dbAdmin.engine,
+            database: dbAdmin.database,
+            schema: dbAdmin.schema,
+            table: dbAdmin.selected.name,
+            keys,
+            values,
+          }),
+        });
+        closeDialog();
+        dbShowErr("");
+        await dbLoadRows();
+        flash("ok", "已更新 " + (data.updated || 1) + " 行");
+      } catch (e) {
+        const form = $(".db-edit-form");
+        let err = form && form.querySelector(".flash.err");
+        if (!err && form) {
+          err = document.createElement("div");
+          err.className = "flash err";
+          form.prepend(err);
+        }
+        if (err) err.textContent = e.message;
+        else dbShowErr(e.message);
+      }
+      if (extra) extra.disabled = false;
     }
 
     function openDbSqlDialog() {
