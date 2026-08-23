@@ -2215,6 +2215,9 @@ struct DbParams {
     name: Option<String>,
     offset: Option<u32>,
     limit: Option<u32>,
+    filter_col: Option<String>,
+    filter_op: Option<String>,
+    filter_value: Option<String>,
 }
 
 fn db_project(state: &AppState, id: &str) -> Result<Project, AppError> {
@@ -2283,6 +2286,17 @@ async fn db_rows(
     let schema = q.schema.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择 schema"))?;
     let name = q.name.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择表或视图"))?;
     let project = db_project(&state, &id)?;
+    let filter = match (
+        q.filter_col.as_deref().filter(|s| !s.is_empty()),
+        q.filter_value.as_deref().filter(|s| !s.trim().is_empty()),
+    ) {
+        (Some(col), Some(val)) => Some(crate::dbadmin::RowFilter {
+            column: col.to_string(),
+            op: q.filter_op.as_deref().unwrap_or("contains").to_string(),
+            value: val.to_string(),
+        }),
+        _ => None,
+    };
     Ok(Json(
         crate::dbadmin::rows(
             &state.docker,
@@ -2293,6 +2307,7 @@ async fn db_rows(
             name,
             q.offset.unwrap_or(0),
             crate::dbadmin::clamp_limit(q.limit),
+            filter,
         )
         .await?,
     ))

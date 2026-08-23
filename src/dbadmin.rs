@@ -52,6 +52,13 @@ pub struct RowPage {
     pub limit: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct RowFilter {
+    pub column: String,
+    pub op: String,
+    pub value: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct QueryResult {
     pub columns: Vec<String>,
@@ -393,6 +400,24 @@ pub async fn objects(
     Ok(ObjectList { items })
 }
 
+fn row_filter_clause(filter: &RowFilter) -> Result<String, AppError> {
+    let ident = quote_ident(&filter.column)?;
+    let value = filter.value.trim();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let lit = sql_literal(value);
+    let low = format!("lower({ident}::text)");
+    let low_val = format!("lower({lit})");
+    Ok(match filter.op.as_str() {
+        "eq" => format!("{low} = {low_val}"),
+        "neq" => format!("{low} <> {low_val}"),
+        "prefix" => format!("left({low}, char_length({lit})) = {low_val}"),
+        "suffix" => format!("right({low}, char_length({lit})) = {low_val}"),
+        _ => format!("strpos({low}, {low_val}) > 0"),
+    })
+}
+
 pub async fn rows(
     docker: &Docker,
     dir: &Path,
@@ -402,17 +427,29 @@ pub async fn rows(
     name: &str,
     offset: u32,
     limit: u32,
+    filter: Option<RowFilter>,
 ) -> Result<RowPage, AppError> {
     crate::docker::validate_service_name(service).map_err(|e| AppError::bad(e.to_string()))?;
     let fq = format!("{}.{}", quote_ident(schema)?, quote_ident(name)?);
     let _ = quote_ident(database)?;
     let limit = clamp_limit(Some(limit));
     let conn = probe_conn(docker, dir, service).await?;
-    let count_sql = format!("SELECT count(*)::bigint FROM {fq}");
+    let where_clause = match filter {
+        Some(f) => {
+            let clause = row_filter_clause(&f)?;
+            if clause.is_empty() {
+                String::new()
+            } else {
+                format!(" WHERE {clause}")
+            }
+        }
+        None => String::new(),
+    };
+    let count_sql = format!("SELECT count(*)::bigint FROM {fq}{where_clause}");
     let count_raw = psql(docker, dir, service, &conn, database, &count_sql).await?;
     let total: u64 = count_raw.trim().parse().unwrap_or(0);
     let data_sql = format!(
-        "SELECT coalesce(json_agg(row_to_json(q)), '[]'::json) FROM (SELECT * FROM {fq} LIMIT {limit} OFFSET {offset}) q"
+        "SELECT coalesce(json_agg(row_to_json(q)), '[]'::json) FROM (SELECT * FROM {fq}{where_clause} LIMIT {limit} OFFSET {offset}) q"
     );
     let raw = psql(docker, dir, service, &conn, database, &data_sql).await?;
     let (columns, rows) = rows_from_json_agg(&raw)?;
@@ -680,6 +717,29 @@ mod tests {
         let (cols, rows) = rows_from_json_agg(r#"[{"id":1,"name":"a"},{"id":2,"name":"b"}]"#).unwrap();
         assert!(cols.contains(&"id".into()));
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn filter_clauses() {
+        let f = RowFilter { column: "name".into(), op: "contains".into(), value: "Ab".into() };
+        assert_eq!(
+            row_filter_clause(&f).unwrap(),
+            "strpos(lower(\"name\"::text), lower('Ab')) > 0"
+        );
+        let f = RowFilter { column: "name".into(), op: "eq".into(), value: "a'b".into() };
+        assert_eq!(
+            row_filter_clause(&f).unwrap(),
+            "lower(\"name\"::text) = lower('a''b')"
+        );
+        let f = RowFilter { column: "x".into(), op: "prefix".into(), value: "Ab".into() };
+        assert_eq!(
+            row_filter_clause(&f).unwrap(),
+            "left(lower(\"x\"::text), char_length('Ab')) = lower('Ab')"
+        );
+        let f = RowFilter { column: "x".into(), op: "unknown".into(), value: "z".into() };
+        assert!(row_filter_clause(&f).unwrap().contains("strpos"));
+        let f = RowFilter { column: "x".into(), op: "contains".into(), value: "   ".into() };
+        assert_eq!(row_filter_clause(&f).unwrap(), "");
     }
 
     #[test]
