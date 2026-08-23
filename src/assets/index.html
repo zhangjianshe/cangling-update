@@ -94,6 +94,12 @@
       --shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
     }
     * { box-sizing: border-box; border-radius: 6px; }
+    /* 结构分割线保持直角，按钮/面板仍保留圆角 */
+    header, aside, .tabs, table, th, td,
+    .db-split, .db-objects, .db-data, .db-rowfilter, .db-pager,
+    .modal-head, .modal-foot {
+      border-radius: 0;
+    }
     * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
@@ -115,6 +121,8 @@
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
       padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
     }
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .nav-toggle { display: none; }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .mark {
       width: 32px; height: 32px; flex: 0 0 auto;
@@ -193,6 +201,7 @@
       padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
     }
     .card h3 { margin: 0 0 12px; color: var(--muted); font-size: 16px; font-weight: 600; }
+    .card.tab-panel { border: none; border-radius: 0; box-shadow: none; }
     .tabs {
       display: flex; flex-wrap: wrap; gap: 0;
       border-bottom: 1px solid var(--line); margin: 0 0 16px; padding: 0;
@@ -250,10 +259,22 @@
     @keyframes prog-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .card > table th, .card > table td { vertical-align: middle; }
+    .card > table tbody tr:hover { background: var(--bg-active); }
     th { color: var(--muted); font-weight: 700; }
     th:last-child, td:last-child:not(.empty) { text-align: right; }
     td:last-child .row { justify-content: flex-end; }
+    .card > table th, .db-data th { position: sticky; top: 0; z-index: 1; background: var(--bg-2); }
     .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
+    .db-loading { display: flex; align-items: center; justify-content: center; gap: 10px; }
+    .db-loading .spin {
+      width: 16px; height: 16px; flex: 0 0 auto;
+      border: 2px solid var(--line);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
     select {
       background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
       padding: 7px 10px; height: 34px; min-width: 140px;
@@ -347,6 +368,12 @@
     .db-data { overflow: auto; min-width: 0; min-height: 0; flex: 1 1 auto; }
     .db-data table { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
     .db-data th, .db-data td { white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+    .db-data th {
+      background: var(--bg-3);
+      color: var(--text);
+      font-weight: 700;
+      border-bottom: 2px solid var(--line);
+    }
     .db-data td:last-child, .db-data th:last-child { text-align: left; }
     .db-data tbody tr { cursor: pointer; }
     .db-data tbody tr.active { background: var(--bg-active); }
@@ -364,10 +391,17 @@
     .db-sql-edit {
       flex: 1; min-height: 0; display: flex; flex-direction: column;
     }
-    .db-sql-edit textarea {
-      font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
-      min-height: 180px; flex: 0 0 auto; border-radius: 0; border-left: 0; border-right: 0;
+    .db-sql-ace {
+      position: relative; flex: 0 0 auto; height: 200px;
+      border-bottom: 1px solid var(--line);
+      background: var(--log-bg);
     }
+    .db-sql-ace .ace_editor {
+      font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
+      font-size: 16px; line-height: 1.5;
+      font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
+    }
+    .db-sql-ace .ace_editor, .db-sql-ace .ace_editor * { border-radius: 0 !important; }
     .db-sql-meta { padding: 8px 14px; color: var(--muted); border-bottom: 1px solid var(--line); }
     .db-sql-out { flex: 1; min-height: 0; overflow: auto; padding: 10px 14px; }
     @media (max-width: 900px) {
@@ -429,22 +463,45 @@
     .overlay {
       position: fixed; inset: 0; z-index: 40;
       background: rgba(1, 4, 9, 0.65);
-      display: grid; place-items: center; padding: 20px;
+      display: grid; place-items: center; padding: 48px 20px;
     }
     :root[data-theme="light"] .overlay { background: rgba(31, 35, 40, 0.45); }
     .overlay[hidden] { display: none !important; }
+    .confirm-overlay { z-index: 60; }
+    .confirm-box {
+      width: min(420px, 100%);
+      background: var(--bg-2); border: 1px solid var(--line); box-shadow: var(--shadow);
+      border-radius: 6px; padding: 24px;
+    }
+    .confirm-msg { margin: 0 0 24px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
     .modal {
-      width: min(1080px, 100%); height: min(78vh, 820px);
+      width: min(1500px, 100%);
+      height: 100%;
       background: var(--bg-2); border: 1px solid var(--line); box-shadow: var(--shadow);
       display: flex; flex-direction: column; min-height: 0;
     }
+    .modal.narrow { width: min(1200px, 100%); }
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
-      padding: 10px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+      padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+      min-height: 40px;
     }
-    .modal-head h3 { margin: 0; font-size: 16px; font-weight: 600; }
+    .modal-head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+    .close-btn {
+      flex: 0 0 auto; width: 28px; height: 28px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      border: none; border-radius: 0; background: transparent; color: var(--muted);
+    }
+    .close-btn:hover { background: var(--bg-3); color: var(--text); }
     .modal-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-    .modal.compose-modal { width: min(1180px, 100%); height: min(88vh, 940px); }
+    .modal-foot {
+      flex: 0 0 auto; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+      padding: 10px 16px; border-top: 1px solid var(--line);
+      background: var(--bg-3);
+    }
+    .modal-foot[hidden] { display: none !important; }
+    .modal.compose-modal { width: min(1700px, 100%); }
     .compose-edit {
       flex: 1; min-height: 0; display: grid;
       grid-template-columns: minmax(0, 1fr) 280px;
@@ -482,7 +539,7 @@
       grid-column: 1 / -1; grid-row: 3;
       padding: 10px 14px; border-top: 1px solid var(--line);
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) auto auto auto;
       gap: 12px 16px;
       align-items: center;
     }
@@ -538,8 +595,23 @@
     }
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
-      aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 240px; }
-      .modal { height: min(90vh, 820px); }
+      .nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; padding: 0; }
+      aside {
+        position: fixed; top: 64px; left: 0; bottom: 0;
+        width: min(300px, 84vw); z-index: 30;
+        max-height: none; border-right: 1px solid var(--line); border-bottom: 0;
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        box-shadow: 6px 0 24px rgba(0, 0, 0, 0.35);
+      }
+      aside.open { transform: translateX(0); }
+      .nav-scrim {
+        position: fixed; inset: 64px 0 0 0; z-index: 29;
+        display: block;
+        background: rgba(0, 0, 0, 0.4);
+      }
+      .nav-scrim[hidden] { display: none !important; }
+      .modal { height: 100%; }
       .compose-edit {
         grid-template-columns: 1fr;
         grid-template-rows: auto minmax(0, 1fr) auto minmax(160px, 28%);
@@ -580,7 +652,11 @@
   </div>
   <div class="app" id="app" hidden>
     <header>
-      <a class="brand" href="/" title="返回首页">
+      <div class="header-left">
+        <button type="button" class="btn nav-toggle" id="nav-toggle" aria-label="打开项目列表" aria-expanded="false">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1 2.75h14v1.5H1zm0 4.5h14v1.5H1zm0 4.5h14v1.5H1z"/></svg>
+        </button>
+        <a class="brand" href="/" title="返回首页">
         <span class="mark" title="系统更新" aria-hidden="true">
           <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
             <rect width="32" height="32" rx="6" fill="currentColor"/>
@@ -594,6 +670,7 @@
           <small>主机 Docker Compose 系统管理 · 返回首页</small>
         </div>
       </a>
+      </div>
       <div class="header-right">
         <div class="meta" id="meta">加载中…</div>
         <span id="who"></span>
@@ -612,16 +689,29 @@
       <main id="main"></main>
     </div>
   </div>
+  <div class="nav-scrim" id="nav-scrim" hidden></div>
   <div class="overlay" id="dialog" hidden>
     <div class="modal" id="dialog-modal">
       <div class="modal-head">
         <h3 id="dialog-title">窗口</h3>
-        <div class="row">
-          <button type="button" class="btn" id="dialog-extra" hidden>刷新</button>
-          <button type="button" class="btn" id="dialog-close">关闭</button>
-        </div>
+        <button type="button" class="close-btn" id="dialog-close" aria-label="关闭" title="关闭">
+          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg>
+        </button>
       </div>
       <div class="modal-body" id="dialog-body"></div>
+      <div class="modal-foot" id="dialog-foot" hidden>
+        <button type="button" class="btn primary" id="dialog-extra" hidden>保存</button>
+        <button type="button" class="btn" id="dialog-foot-close">关闭</button>
+      </div>
+    </div>
+  </div>
+  <div class="overlay confirm-overlay" id="confirm-overlay" hidden>
+    <div class="confirm-box">
+      <div class="confirm-msg" id="confirm-msg"></div>
+      <div class="confirm-actions">
+        <button type="button" class="btn" id="confirm-cancel">取消</button>
+        <button type="button" class="btn danger" id="confirm-ok">确定</button>
+      </div>
     </div>
   </div>
   <div id="combo-pop" hidden>
@@ -652,7 +742,7 @@
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 1c3.5 0 6.5.9 6.5 2.2v9.6C14.5 14.1 11.5 15 8 15s-6.5-.9-6.5-2.2V3.2C1.5 1.9 4.5 1 8 1m0 1.2c-2.9 0-5.2.7-5.2 1.3S5.1 4.8 8 4.8s5.2-.7 5.2-1.3S10.9 2.2 8 2.2M2.8 6.1C3.9 6.7 5.8 7.1 8 7.1s4.1-.4 5.2-1v2.2c0 .6-2.3 1.3-5.2 1.3S2.8 8.9 2.8 8.3zm0 4.1c1.1.6 3 1 5.2 1s4.1-.4 5.2-1v2.1c0 .6-2.3 1.3-5.2 1.3s-5.2-.7-5.2-1.3z"/></svg>',
       },
     ];
-    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null };
+    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null };
     const composePoll = { timer: null, inflight: false };
     const metaPoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
@@ -906,6 +996,7 @@
       stopComposePoll();
       comboClose();
       closeDialog();
+      setNav(false);
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
       const m = hash.match(/^#\/p\/([^/]+)$/);
@@ -1207,7 +1298,7 @@
           </div>`;
         for (const b of box.querySelectorAll("[data-orphan]")) {
           b.onclick = async () => {
-            if (!confirm("确定删除这份残留备份？")) return;
+            if (!(await confirmDialog("确定删除这份残留备份？", { danger: true }))) return;
             try {
               const oid = b.getAttribute("data-orphan") || "";
               await api("/api/orphans/" + encodeURIComponent(oid), { method: "DELETE" });
@@ -1224,11 +1315,11 @@
 
     async function createProject() {
       const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
-      if (!confirm(
+      if (!(await confirmDialog(
         "将全量备份该目录（包含 PostGIS 等数据库文件）。\n" +
         (stopFirst ? "会先停止 Compose，备份完成后再启动。\n" : "请先手动停止当前应用，否则备份可能失败或不完整。\n") +
         "确定继续？"
-      )) return;
+      ))) return;
       const btn = $("#btn-create");
       let stop = () => {};
       try {
@@ -1952,6 +2043,8 @@
 
     async function dbLoadRows() {
       if (!dbAdmin.selected || !state.current) return;
+      const box = $("#db-data");
+      if (box) box.innerHTML = `<div class="empty db-loading"><span class="spin"></span>加载中…</div>`;
       try {
         const data = await api("/api/projects/" + state.current.id + "/db/rows?" + dbQs({
           name: dbAdmin.selected.name,
@@ -2147,12 +2240,9 @@
       const pk = dbAdmin.pk || [];
       closeDialog();
       const modal = $("#dialog-modal");
-      if (modal) modal.classList.add("compose-modal");
+      if (modal) modal.classList.add("narrow");
       $("#dialog-title").textContent = "编辑行 · " + dbAdmin.selected.name;
-      const extra = $("#dialog-extra");
-      extra.hidden = false;
-      extra.textContent = "保存";
-      extra.onclick = dbSaveRow;
+      setDialogAction("保存", dbSaveRow);
       $("#dialog-body").innerHTML = `<div class="db-edit-form">${
         cols.map((c, i) => {
           const v = row[i];
@@ -2202,7 +2292,7 @@
       }
       const keys = dbSelectedRowKeys();
       if (!keys) return;
-      if (!confirm("确定删除 " + dbAdmin.selected.name + " 中选中的这一行？此操作不可恢复。")) return;
+      if (!(await confirmDialog("确定删除 " + dbAdmin.selected.name + " 中选中的这一行？此操作不可恢复。", { danger: true }))) return;
       const btn = $("#db-del-row");
       if (btn) btn.disabled = true;
       try {
@@ -2280,38 +2370,28 @@
       if (extra) extra.disabled = false;
     }
 
-    function openDbSqlDialog() {
+    async function openDbSqlDialog() {
       if (!state.current || !dbAdmin.service || !dbAdmin.database) {
         dbShowErr("请先选择容器和数据库");
         return;
       }
       closeDialog();
-      const modal = $("#dialog-modal");
-      if (modal) modal.classList.add("compose-modal");
       $("#dialog-title").textContent = "执行 SQL";
-      const extra = $("#dialog-extra");
-      extra.hidden = false;
-      extra.textContent = "执行";
-      extra.onclick = dbRunSql;
+      setDialogAction("执行", dbRunSql);
       $("#dialog-body").innerHTML = `
         <div class="db-sql-edit">
           <div class="db-sql-meta">${esc(dbAdmin.service)} · ${esc(dbAdmin.engine)} · ${esc(dbAdmin.database)}${dbAdmin.schema ? " · " + esc(dbAdmin.schema) : ""}　Ctrl+Enter 执行</div>
-          <textarea id="db-sql" spellcheck="false" placeholder="SELECT * FROM public.lin_user LIMIT 50">${esc(dbAdmin.sql || "")}</textarea>
+          <div class="db-sql-ace" id="db-sql-ace"></div>
           <div class="db-sql-out" id="db-sql-out"></div>
         </div>`;
       $("#dialog").hidden = false;
-      const ta = $("#db-sql");
-      if (ta) {
-        ta.focus();
-        ta.addEventListener("keydown", (e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-            e.preventDefault();
-            dbRunSql();
-          }
-        });
-        ta.addEventListener("input", () => { dbAdmin.sql = ta.value; });
-      }
       dbRenderSqlOut();
+      try {
+        await loadAce();
+        mountSqlEditor();
+      } catch (e) {
+        dbShowErr(e.message);
+      }
     }
 
     async function dbRunSql() {
@@ -2319,8 +2399,7 @@
         dbShowErr("请先选择容器和数据库");
         return;
       }
-      const ta = $("#db-sql");
-      const sql = (ta && ta.value) || dbAdmin.sql || "";
+      const sql = (dialog.sqlEditor ? dialog.sqlEditor.getValue() : "") || dbAdmin.sql || "";
       dbAdmin.sql = sql;
       const btn = $("#dialog-extra");
       if (btn) btn.disabled = true;
@@ -2414,11 +2493,11 @@
         return;
       }
       const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
-      if (!confirm(
+      if (!(await confirmDialog(
         "将全量备份当前目录（包含数据库数据）。\n" +
         (stopFirst ? "会先停止 Compose，再备份。\n" : "请先手动停止当前应用，否则备份可能失败或不完整。\n") +
         "确定继续？"
-      )) {
+      ))) {
         return;
       }
       let stop = () => {};
@@ -2494,11 +2573,12 @@
         flash("err", "请至少选择一个镜像包或 JAR。");
         return;
       }
-      if (!confirm(
+      if (!(await confirmDialog(
         "不会备份当前目录，也不会写入版本记录。\n" +
         "将覆盖已选的镜像包 / JAR，并重启容器。\n" +
-        "确定继续？"
-      )) {
+        "确定继续？",
+        { danger: true }
+      ))) {
         return;
       }
       let stop = () => {};
@@ -2569,11 +2649,12 @@
         return;
       }
       const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
-      if (!confirm(
+      if (!(await confirmDialog(
         "确定恢复此版本？恢复前会先全量备份当前目录。\n" +
         (stopFirst ? "会先停止 Compose，再备份并恢复。\n" : "请先手动停止当前应用。\n") +
-        "确定继续？"
-      )) return;
+        "确定继续？",
+        { danger: true }
+      ))) return;
       if (state.busy) {
         flash("err", "正在恢复中，请勿重复操作");
         return;
@@ -2663,7 +2744,7 @@
         flash("err", "正在处理中，请稍后再重启该服务");
         return;
       }
-      if (!confirm("确定重启服务 " + name + "？其它容器不受影响。")) return;
+      if (!(await confirmDialog("确定重启服务 " + name + "？其它容器不受影响。"))) return;
       const btn = document.querySelector('[data-svc-restart="' + CSS.escape(name) + '"]');
       const idle = btn ? btn.textContent : "重启";
       if (btn) {
@@ -2739,6 +2820,7 @@
         dialog.fit = null;
       }
       destroyAceEditor();
+      destroySqlEditor();
       dialog.confirmClose = null;
       composeEdit.kind = "compose";
       composeEdit.etag = "";
@@ -2751,12 +2833,34 @@
         extra.hidden = true;
         extra.onclick = null;
       }
+      const foot = $("#dialog-foot");
+      if (foot) foot.hidden = true;
       const modal = $("#dialog-modal");
-      if (modal) modal.classList.remove("compose-modal");
+      if (modal) {
+        modal.classList.remove("compose-modal");
+        modal.classList.remove("narrow");
+      }
       const box = $("#dialog");
       if (box) box.hidden = true;
       const body = $("#dialog-body");
       if (body) body.innerHTML = "";
+    }
+
+    function setDialogAction(label, handler) {
+      const extra = $("#dialog-extra");
+      const foot = $("#dialog-foot");
+      if (!extra || !foot) return;
+      if (label && handler) {
+        extra.textContent = label;
+        extra.className = "btn primary";
+        extra.hidden = false;
+        extra.onclick = handler;
+        foot.hidden = false;
+      } else {
+        extra.hidden = true;
+        extra.onclick = null;
+        foot.hidden = true;
+      }
     }
 
     function composeEditFlash(kind, msg) {
@@ -2786,6 +2890,7 @@
 
     function applyAceTheme() {
       if (composeEdit.editor) composeEdit.editor.setTheme(aceThemeName());
+      if (dialog.sqlEditor) dialog.sqlEditor.setTheme(aceThemeName());
     }
 
     function loadScriptOnce(src) {
@@ -2813,6 +2918,7 @@
         await Promise.all([
           loadScriptOnce("/vendor/ace/mode-yaml.js"),
           loadScriptOnce("/vendor/ace/mode-ini.js"),
+          loadScriptOnce("/vendor/ace/mode-sql.js"),
           loadScriptOnce("/vendor/ace/theme-github.js"),
           loadScriptOnce("/vendor/ace/theme-github_dark.js"),
           loadScriptOnce("/vendor/ace/ext-searchbox.js"),
@@ -2829,6 +2935,55 @@
       if (composeEdit.editor) {
         try { composeEdit.editor.destroy(); } catch {}
         composeEdit.editor = null;
+      }
+    }
+
+    function destroySqlEditor() {
+      if (dialog.sqlEditor) {
+        try { dbAdmin.sql = dialog.sqlEditor.getValue() || ""; } catch {}
+      }
+      if (dialog.sqlResizeObs) {
+        try { dialog.sqlResizeObs.disconnect(); } catch {}
+        dialog.sqlResizeObs = null;
+      }
+      if (dialog.sqlEditor) {
+        try { dialog.sqlEditor.destroy(); } catch {}
+        dialog.sqlEditor = null;
+      }
+    }
+
+    function mountSqlEditor() {
+      destroySqlEditor();
+      const el = $("#db-sql-ace");
+      if (!el || !window.ace) return;
+      const editor = window.ace.edit(el, {
+        mode: "ace/mode/sql",
+        theme: aceThemeName(),
+        useWorker: false,
+        fontSize: 16,
+        tabSize: 2,
+        useSoftTabs: true,
+        wrap: false,
+        showPrintMargin: false,
+        fadeFoldWidgets: true,
+        scrollPastEnd: 0.4,
+        fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
+      });
+      editor.commands.addCommand({
+        name: "runSql",
+        bindKey: { win: "Ctrl-Enter", mac: "Command-Enter" },
+        exec: () => dbRunSql(),
+      });
+      editor.setValue(dbAdmin.sql || "", -1);
+      editor.clearSelection();
+      editor.focus();
+      dialog.sqlEditor = editor;
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => {
+          if (dialog.sqlEditor) dialog.sqlEditor.resize();
+        });
+        ro.observe(el);
+        dialog.sqlResizeObs = ro;
       }
     }
 
@@ -2967,6 +3122,7 @@
             <label class="compose-note-wrap">备注<input id="compose-note" type="text" placeholder="本次改了什么（可选）" /></label>
             <label class="check"><input type="checkbox" id="compose-recreate" /> 保存后执行 Compose Up</label>
             <button type="button" class="btn primary" id="btn-compose-save">保存</button>
+            <button type="button" class="btn" id="btn-compose-close">关闭</button>
           </div>
           <div class="compose-edit-hist">
             <h4>文件版本</h4>
@@ -2974,12 +3130,13 @@
           </div>
         </div>`;
       $("#dialog").hidden = false;
-      dialog.confirmClose = () => {
+      dialog.confirmClose = async () => {
         if (!composeDirty()) return true;
-        return confirm("有未保存的修改，确定关闭？");
+        return await confirmDialog("有未保存的修改，确定关闭？", { danger: true });
       };
       mountAceEditor();
       $("#btn-compose-save").onclick = saveComposeFile;
+      $("#btn-compose-close").onclick = requestCloseDialog;
       try {
         const data = await api(spec.file(state.current.id));
         applyComposeFile(data, null);
@@ -2991,7 +3148,7 @@
 
     async function loadComposeRevision(revId) {
       if (!state.current || !revId || composeEdit.busy) return;
-      if (composeDirty() && !confirm("编辑器里有未保存的修改，确定加载此版本到编辑器？")) return;
+      if (composeDirty() && !(await confirmDialog("编辑器里有未保存的修改，确定加载此版本到编辑器？", { danger: true }))) return;
       try {
         const rev = await api(fileEditSpec().rev(state.current.id, revId));
         setComposeSource(rev.content || "");
@@ -3043,8 +3200,8 @@
 
     async function restoreComposeRevision(revId) {
       if (!state.current || !revId || composeEdit.busy) return;
-      if (composeDirty() && !confirm("编辑器里有未保存的修改，确定用此历史版本覆盖磁盘上的文件？")) return;
-      else if (!composeDirty() && !confirm(fileEditSpec().restoreMsg)) return;
+      if (composeDirty() && !(await confirmDialog("编辑器里有未保存的修改，确定用此历史版本覆盖磁盘上的文件？", { danger: true }))) return;
+      else if (!composeDirty() && !(await confirmDialog(fileEditSpec().restoreMsg, { danger: true }))) return;
       composeEdit.busy = true;
       composeEditFlash("ok", "正在恢复…");
       try {
@@ -3072,9 +3229,6 @@
       if (!state.current || !name) return;
       closeDialog();
       $("#dialog-title").textContent = "日志 · " + name;
-      const extra = $("#dialog-extra");
-      extra.hidden = false;
-      extra.textContent = "刷新";
       $("#dialog-body").innerHTML = `<pre class="logs" id="dialog-logs">加载中…</pre>`;
       $("#dialog").hidden = false;
       const load = async () => {
@@ -3090,7 +3244,7 @@
           setLogs(el, e.message);
         }
       };
-      extra.onclick = load;
+      setDialogAction("刷新", load);
       await load();
     }
 
@@ -3159,7 +3313,7 @@
         flash("err", "正在恢复中，请勿重复操作");
         return;
       }
-      if (!confirm("确定删除此项目及其版本备份？主机上的 Compose 目录不会被删除。")) return;
+      if (!(await confirmDialog("确定删除此项目及其版本备份？主机上的 Compose 目录不会被删除。", { danger: true }))) return;
       try {
         await api("/api/projects/" + state.current.id, { method: "DELETE" });
         location.hash = "#/";
@@ -3192,12 +3346,55 @@
     $("#gate-theme").onclick = toggleTheme;
     renderTheme();
 
-    $("#dialog-close").onclick = () => {
-      if (dialog.confirmClose && !dialog.confirmClose()) return;
+    async function requestCloseDialog() {
+      if (dialog.confirmClose && !(await dialog.confirmClose())) return;
       closeDialog();
-    };
+    }
+
+    function confirmDialog(message, opts = {}) {
+      return new Promise((resolve) => {
+        const overlay = $("#confirm-overlay");
+        const msg = $("#confirm-msg");
+        const ok = $("#confirm-ok");
+        const cancel = $("#confirm-cancel");
+        if (!overlay || !msg || !ok || !cancel) { resolve(false); return; }
+        msg.textContent = message;
+        ok.className = "btn" + (opts.danger ? " danger" : " primary");
+        ok.textContent = opts.confirmText || "确定";
+        cancel.textContent = opts.cancelText || "取消";
+        cancel.hidden = !!opts.hideCancel;
+        overlay.hidden = false;
+        const onKey = (e) => {
+          if (e.key === "Escape") { e.preventDefault(); done(false); }
+        };
+        const done = (v) => {
+          overlay.hidden = true;
+          document.removeEventListener("keydown", onKey);
+          resolve(v);
+        };
+        document.addEventListener("keydown", onKey);
+        ok.onclick = () => done(true);
+        cancel.onclick = () => done(false);
+        if (opts.hideCancel) ok.focus(); else cancel.focus();
+      });
+    }
+    $("#dialog-close").onclick = requestCloseDialog;
+    $("#dialog-foot-close").onclick = requestCloseDialog;
     $("#btn-new").onclick = () => location.hash = "#/new";
     $("#btn-logout").onclick = () => logout();
+    function setNav(open) {
+      const aside = document.querySelector("aside");
+      const scrim = $("#nav-scrim");
+      if (aside) aside.classList.toggle("open", open);
+      if (scrim) scrim.hidden = !open;
+      const t = $("#nav-toggle");
+      if (t) t.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    $("#nav-toggle").onclick = () => {
+      const aside = document.querySelector("aside");
+      setNav(!(aside && aside.classList.contains("open")));
+    };
+    $("#nav-scrim").onclick = () => setNav(false);
     $("#gate-submit").onclick = submitGate;
     ["gate-user", "gate-pass", "gate-pass2"].forEach((id) => {
       const el = document.getElementById(id);
