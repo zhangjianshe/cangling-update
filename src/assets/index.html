@@ -1737,17 +1737,21 @@
         const from = dbAdmin.total ? dbAdmin.offset + 1 : 0;
         const to = Math.min(dbAdmin.offset + (rows.length || 0), dbAdmin.total);
         const canEdit = dbAdmin.selected.kind !== "view" && dbAdmin.rowIndex != null;
+        const rowHint = dbAdmin.selected.kind === "view" ? "视图不能直接修改" : "选中一行后操作";
         pager.innerHTML = `
           <button type="button" class="btn" id="db-prev" ${dbAdmin.offset <= 0 ? "disabled" : ""}>上一页</button>
           <span class="hint">${esc(dbAdmin.selected.name)} · ${from}-${to} / ${dbAdmin.total}${dbAdmin.pk && dbAdmin.pk.length ? " · 主键 " + esc(dbAdmin.pk.join(", ")) : ""}</span>
-          <button type="button" class="btn" id="db-edit-row" ${canEdit ? "" : "disabled"} title="${dbAdmin.selected.kind === "view" ? "视图不能直接编辑" : "选中一行后编辑"}">编辑</button>
+          <button type="button" class="btn" id="db-edit-row" ${canEdit ? "" : "disabled"} title="${esc(rowHint)}">编辑</button>
+          <button type="button" class="btn danger" id="db-del-row" ${canEdit ? "" : "disabled"} title="${esc(rowHint)}">删除</button>
           <button type="button" class="btn" id="db-next" ${dbAdmin.offset + dbAdmin.limit >= dbAdmin.total ? "disabled" : ""}>下一页</button>`;
         const prev = $("#db-prev");
         const next = $("#db-next");
         const edit = $("#db-edit-row");
+        const del = $("#db-del-row");
         if (prev) prev.onclick = () => { dbAdmin.offset = Math.max(0, dbAdmin.offset - dbAdmin.limit); dbAdmin.rowIndex = null; dbLoadRows(); };
         if (next) next.onclick = () => { dbAdmin.offset += dbAdmin.limit; dbAdmin.rowIndex = null; dbLoadRows(); };
         if (edit) edit.onclick = openDbEditDialog;
+        if (del) del.onclick = dbDeleteRow;
       }
     }
 
@@ -1814,18 +1818,70 @@
       }
     }
 
+    function dbSelectedRowKeys() {
+      if (!dbAdmin.selected || dbAdmin.rowIndex == null) return null;
+      const row = dbAdmin.rows[dbAdmin.rowIndex];
+      if (!row) return null;
+      const cols = dbAdmin.columns || [];
+      const pk = dbAdmin.pk || [];
+      const keys = {};
+      const keyCols = pk.length ? pk : cols;
+      for (const c of keyCols) {
+        const i = cols.indexOf(c);
+        keys[c] = i >= 0 ? row[i] : null;
+      }
+      return keys;
+    }
+
+    async function dbDeleteRow() {
+      if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) {
+        dbShowErr("请先选择一行");
+        return;
+      }
+      if (dbAdmin.selected.kind === "view") {
+        dbShowErr("视图不能直接删除");
+        return;
+      }
+      const keys = dbSelectedRowKeys();
+      if (!keys) return;
+      if (!confirm("确定删除 " + dbAdmin.selected.name + " 中选中的这一行？此操作不可恢复。")) return;
+      const btn = $("#db-del-row");
+      if (btn) btn.disabled = true;
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/db/row", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            service: dbAdmin.service,
+            engine: dbAdmin.engine,
+            database: dbAdmin.database,
+            schema: dbAdmin.schema,
+            table: dbAdmin.selected.name,
+            keys,
+          }),
+        });
+        dbAdmin.rowIndex = null;
+        dbShowErr("");
+        await dbLoadRows();
+        if ((dbAdmin.rows || []).length === 0 && dbAdmin.offset > 0) {
+          dbAdmin.offset = Math.max(0, dbAdmin.offset - dbAdmin.limit);
+          await dbLoadRows();
+        }
+        flash("ok", "已删除 " + (data.deleted || 1) + " 行");
+      } catch (e) {
+        dbShowErr(e.message);
+        const live = $("#db-del-row");
+        if (live) live.disabled = false;
+      }
+    }
+
     async function dbSaveRow() {
       if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) return;
       const original = dbAdmin.rows[dbAdmin.rowIndex];
       const cols = dbAdmin.columns || [];
-      const pk = dbAdmin.pk || [];
-      const keys = {};
+      const keys = dbSelectedRowKeys();
       const values = {};
-      const keyCols = pk.length ? pk : cols;
-      for (const c of keyCols) {
-        const i = cols.indexOf(c);
-        keys[c] = i >= 0 ? original[i] : null;
-      }
+      if (!keys) return;
       for (const c of cols) {
         const i = cols.indexOf(c);
         const ta = document.querySelector(`textarea[data-col="${CSS.escape(c)}"]`);

@@ -103,7 +103,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/db/objects", get(db_objects))
         .route("/api/projects/{id}/db/rows", get(db_rows))
         .route("/api/projects/{id}/db/query", post(db_query))
-        .route("/api/projects/{id}/db/row", post(db_update_row))
+        .route(
+            "/api/projects/{id}/db/row",
+            post(db_update_row).delete(db_delete_row),
+        )
         .route("/vendor/xterm.css", get(vendor_xterm_css))
         .route("/vendor/xterm.js", get(vendor_xterm_js))
         .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
@@ -2304,6 +2307,19 @@ async fn db_update_row(
     let project = db_project(&state, &id)?;
     Ok(Json(
         crate::dbadmin::update_row(&state.docker, std::path::Path::new(&project.directory), &body)
+            .await?,
+    ))
+}
+
+async fn db_delete_row(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<crate::dbadmin::DeleteRowBody>,
+) -> Result<Json<crate::dbadmin::DeleteRowResult>, AppError> {
+    crate::dbadmin::require_engine(body.engine.as_deref())?;
+    let project = db_project(&state, &id)?;
+    Ok(Json(
+        crate::dbadmin::delete_row(&state.docker, std::path::Path::new(&project.directory), &body)
             .await?,
     ))
 }

@@ -84,6 +84,21 @@ pub struct UpdateRowResult {
     pub updated: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeleteRowBody {
+    pub service: String,
+    pub engine: Option<String>,
+    pub database: String,
+    pub schema: String,
+    pub table: String,
+    pub keys: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteRowResult {
+    pub deleted: u64,
+}
+
 pub fn require_engine(engine: Option<&str>) -> Result<(), AppError> {
     match engine.unwrap_or("postgres") {
         "postgres" | "postgresql" | "postgis" => Ok(()),
@@ -468,15 +483,10 @@ pub async fn update_row(
     if sets.is_empty() {
         return Err(AppError::bad("没有修改"));
     }
-    let mut wheres = Vec::new();
-    for (col, val) in &body.keys {
-        let ident = quote_ident(col)?;
-        wheres.push(sql_eq(&ident, val)?);
-    }
     let sql = format!(
         "WITH u AS (UPDATE {fq} SET {} WHERE {} RETURNING 1) SELECT count(*)::bigint FROM u",
         sets.join(", "),
-        wheres.join(" AND ")
+        row_where(&body.keys)?
     );
     let conn = probe_conn(docker, dir, &body.service).await?;
     let raw = psql(docker, dir, &body.service, &conn, &body.database, &sql).await?;
@@ -485,6 +495,50 @@ pub async fn update_row(
         return Err(AppError::conflict("未更新任何行，记录可能已被修改或不存在"));
     }
     Ok(UpdateRowResult { updated })
+}
+
+fn row_where(keys: &serde_json::Map<String, serde_json::Value>) -> Result<String, AppError> {
+    if keys.is_empty() {
+        return Err(AppError::bad("缺少要定位的行"));
+    }
+    if keys.len() > 64 {
+        return Err(AppError::bad("列数过多"));
+    }
+    let mut wheres = Vec::new();
+    for (col, val) in keys {
+        let ident = quote_ident(col)?;
+        wheres.push(sql_eq(&ident, val)?);
+    }
+    Ok(wheres.join(" AND "))
+}
+
+fn delete_row_sql(
+    schema: &str,
+    table: &str,
+    keys: &serde_json::Map<String, serde_json::Value>,
+) -> Result<String, AppError> {
+    let fq = format!("{}.{}", quote_ident(schema)?, quote_ident(table)?);
+    let wheres = row_where(keys)?;
+    Ok(format!(
+        "WITH d AS (DELETE FROM {fq} WHERE ctid = (SELECT ctid FROM {fq} WHERE {wheres} LIMIT 1) RETURNING 1) SELECT count(*)::bigint FROM d"
+    ))
+}
+
+pub async fn delete_row(
+    docker: &Docker,
+    dir: &Path,
+    body: &DeleteRowBody,
+) -> Result<DeleteRowResult, AppError> {
+    crate::docker::validate_service_name(&body.service).map_err(|e| AppError::bad(e.to_string()))?;
+    let _ = quote_ident(&body.database)?;
+    let sql = delete_row_sql(&body.schema, &body.table, &body.keys)?;
+    let conn = probe_conn(docker, dir, &body.service).await?;
+    let raw = psql(docker, dir, &body.service, &conn, &body.database, &sql).await?;
+    let deleted: u64 = raw.trim().parse().unwrap_or(0);
+    if deleted == 0 {
+        return Err(AppError::conflict("未删除任何行，记录可能已被修改或不存在"));
+    }
+    Ok(DeleteRowResult { deleted })
 }
 
 pub async fn query(
@@ -595,6 +649,19 @@ mod tests {
         assert!(!is_safe_sql_name("a b"));
         assert_eq!(quote_ident("public").unwrap(), "\"public\"");
         assert_eq!(quote_ident("cl-base").unwrap(), "\"cl-base\"");
+    }
+
+    #[test]
+    fn delete_sql_matches_one_row() {
+        let mut keys = serde_json::Map::new();
+        keys.insert("id".into(), serde_json::json!(12));
+        keys.insert("name".into(), serde_json::Value::Null);
+        let sql = delete_row_sql("public", "lin_user", &keys).unwrap();
+        assert!(sql.contains("DELETE FROM \"public\".\"lin_user\""));
+        assert!(sql.contains("\"id\" IS NOT DISTINCT FROM 12"));
+        assert!(sql.contains("\"name\" IS NULL"));
+        assert!(sql.contains("LIMIT 1"));
+        assert!(row_where(&serde_json::Map::new()).is_err());
     }
 
     #[test]
