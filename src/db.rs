@@ -74,6 +74,21 @@ CREATE TABLE IF NOT EXISTS compose_revisions (
 );
 CREATE INDEX IF NOT EXISTS idx_compose_revisions_project
     ON compose_revisions(project_id, rev_no);
+CREATE TABLE IF NOT EXISTS env_revisions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    rev_no INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    content TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'save',
+    etag TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    UNIQUE(project_id, rev_no)
+);
+CREATE INDEX IF NOT EXISTS idx_env_revisions_project
+    ON env_revisions(project_id, rev_no);
 CREATE TABLE IF NOT EXISTS portal_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -416,6 +431,71 @@ pub fn latest_compose_revision(
         .map_err(Into::into)
 }
 
+pub fn next_env_rev_no(conn: &Connection, project_id: &str) -> Result<i64> {
+    let n: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(rev_no), 0) FROM env_revisions WHERE project_id = ?1",
+        params![project_id],
+        |r| r.get(0),
+    )?;
+    Ok(n + 1)
+}
+
+pub fn insert_env_revision(conn: &Connection, r: &ComposeRevision) -> Result<()> {
+    conn.execute(
+        "INSERT INTO env_revisions
+            (id, project_id, rev_no, filename, content, note, kind, etag, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            r.id,
+            r.project_id,
+            r.rev_no,
+            r.filename,
+            r.content,
+            r.note,
+            r.kind,
+            r.etag,
+            r.created_at,
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_env_revisions(conn: &Connection, project_id: &str) -> Result<Vec<ComposeRevision>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, octet_length(content)
+         FROM env_revisions WHERE project_id = ?1 ORDER BY rev_no DESC",
+    )?;
+    let rows = stmt.query_map(params![project_id], map_compose_revision_meta)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+pub fn get_env_revision(
+    conn: &Connection,
+    project_id: &str,
+    rev_id: &str,
+) -> Result<Option<ComposeRevision>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, content
+         FROM env_revisions WHERE project_id = ?1 AND id = ?2",
+    )?;
+    stmt.query_row(params![project_id, rev_id], map_compose_revision)
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn latest_env_revision(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Option<ComposeRevision>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, content
+         FROM env_revisions WHERE project_id = ?1 ORDER BY rev_no DESC LIMIT 1",
+    )?;
+    stmt.query_row(params![project_id], map_compose_revision)
+        .optional()
+        .map_err(Into::into)
+}
+
 fn map_compose_revision_meta(row: &rusqlite::Row<'_>) -> rusqlite::Result<ComposeRevision> {
     let bytes: i64 = row.get(8)?;
     Ok(ComposeRevision {
@@ -675,6 +755,48 @@ mod tests {
         assert_eq!(latest.id, "r1");
         delete_project(&conn, "p1").unwrap();
         assert!(list_compose_revisions(&conn, "p1").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn env_revisions_roundtrip_and_cascade() {
+        let (conn, dir) = temp_conn();
+        let p = Project {
+            id: "p1".into(),
+            name: "demo".into(),
+            description: String::new(),
+            directory: "/tmp/demo".into(),
+            created_at: now_rfc3339(),
+            updated_at: now_rfc3339(),
+            current_version_no: None,
+            current_version_id: None,
+            version_count: 0,
+        };
+        insert_project(&conn, &p).unwrap();
+        let r = ComposeRevision {
+            id: "e1".into(),
+            project_id: "p1".into(),
+            rev_no: next_env_rev_no(&conn, "p1").unwrap(),
+            filename: ".env".into(),
+            content: "FOO=bar\n".into(),
+            note: "基线".into(),
+            kind: "baseline".into(),
+            etag: "env-8".into(),
+            created_at: now_rfc3339(),
+            bytes: 0,
+        };
+        insert_env_revision(&conn, &r).unwrap();
+        let listed = list_env_revisions(&conn, "p1").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].rev_no, 1);
+        assert!(listed[0].content.is_empty());
+        assert!(listed[0].bytes > 0);
+        let got = get_env_revision(&conn, "p1", "e1").unwrap().unwrap();
+        assert!(got.content.contains("FOO=bar"));
+        let latest = latest_env_revision(&conn, "p1").unwrap().unwrap();
+        assert_eq!(latest.id, "e1");
+        delete_project(&conn, "p1").unwrap();
+        assert!(list_env_revisions(&conn, "p1").unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

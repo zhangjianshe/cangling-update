@@ -151,6 +151,64 @@ pub fn compose_live_path(dir: &Path) -> (PathBuf, String, bool) {
     }
 }
 
+pub const ENV_FILENAME: &str = ".env";
+pub const ENV_MAX_BYTES: usize = 1024 * 1024;
+
+pub fn find_env_file(dir: &Path) -> Option<PathBuf> {
+    let path = dir.join(ENV_FILENAME);
+    path.is_file().then_some(path)
+}
+
+pub fn env_live_path(dir: &Path) -> (PathBuf, String, bool) {
+    let path = dir.join(ENV_FILENAME);
+    let exists = path.is_file();
+    (path, ENV_FILENAME.into(), exists)
+}
+
+pub fn validate_env_text(content: &str) -> Result<()> {
+    if content.len() > ENV_MAX_BYTES {
+        bail!(".env 文件不能超过 1 MB");
+    }
+    if content.as_bytes().contains(&0) {
+        bail!(".env 文件不能包含空字节");
+    }
+    for (i, line) in content.lines().enumerate() {
+        let n = i + 1;
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let rest = trimmed
+            .strip_prefix("export")
+            .and_then(|s| {
+                if s.is_empty() || s.starts_with(char::is_whitespace) {
+                    Some(s.trim_start())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(trimmed);
+        let Some((key, _)) = rest.split_once('=') else {
+            bail!("第 {n} 行不是 KEY=VALUE 或注释");
+        };
+        let key = key.trim();
+        if !is_env_key(key) {
+            bail!("第 {n} 行变量名无效：{key}");
+        }
+    }
+    Ok(())
+}
+
+fn is_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    }
+}
+
 pub fn compose_etag(content: &str) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     for b in content.as_bytes() {
@@ -383,6 +441,38 @@ services:
         assert_ne!(compose_etag("a"), compose_etag("b"));
         assert_ne!(compose_etag("ab"), compose_etag("a"));
         assert!(compose_etag("hello").contains("-5"));
+    }
+
+    #[test]
+    fn validate_env_text_accepts_common_dotenv() {
+        assert!(validate_env_text("").is_ok());
+        assert!(validate_env_text("# comment\n\nFOO=bar\nexport BAZ=1\n").is_ok());
+        assert!(validate_env_text("FOO=\"a=b\"\n_BAR=1\n").is_ok());
+        assert!(validate_env_text("FOO\n").is_err());
+        assert!(validate_env_text("1FOO=bar\n").is_err());
+        assert!(validate_env_text("FOO=bar\0\n").is_err());
+        assert!(validate_env_text("exportFOO=bar\n").is_ok());
+    }
+
+    #[test]
+    fn find_env_file_only_when_present() {
+        let dir = std::env::temp_dir().join(format!(
+            "cangling-env-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(find_env_file(&dir).is_none());
+        let path = dir.join(".env");
+        std::fs::write(&path, "A=1\n").unwrap();
+        assert_eq!(find_env_file(&dir).as_deref(), Some(path.as_path()));
+        let (live, name, exists) = env_live_path(&dir);
+        assert_eq!(live, path);
+        assert_eq!(name, ".env");
+        assert!(exists);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

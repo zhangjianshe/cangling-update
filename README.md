@@ -16,7 +16,7 @@
 5. 每次升级前用 **Git 全量备份** 项目目录（含 PostGIS 等数据目录；相同文件只存一份，并单独记下权限/属主），可回滚。备份前请先停止应用，页面会提示并默认先 `compose down`
 6. 登录保护；2 小时无操作自动退出
 7. 对正在运行的容器打开 **xterm 终端**（`docker compose exec`），并按容器查看日志
-8. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本
+8. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本；若项目目录有 `.env`，可同样编辑环境变量
 
 ## 安装
 ```bash
@@ -243,6 +243,13 @@ Compose 面板的 **编辑** 会打开当前目录里的 `docker-compose.yml` / 
 - 磁盘文件若被外部改过，历史里会先补记一条「外部变更」，避免覆盖时丢掉那段内容
 - 保存时若文件已在别处被改，会提示冲突，需关闭后重新打开再保存
 
+### 编辑环境变量
+
+项目目录里若存在 **`.env`**，应用容器面板会出现 **环境变量** 按钮，编辑方式和 Compose 文件相同（高亮、历史版本、保存冲突检测、可选 Compose Up）。没有 `.env` 时不显示该按钮，也不会在保存时新建这个文件。
+
+- 每行须是注释、空行或 `KEY=VALUE`（可写 `export KEY=VALUE`）
+- `.env` 的历史与 Compose 文件历史分开存放
+
 ## 数据目录
 
 默认在可执行文件旁边：
@@ -251,7 +258,7 @@ Compose 面板的 **编辑** 会打开当前目录里的 `docker-compose.yml` / 
 cangling-update                 # 程序
 logs/cangling-update.log        # 运行日志（与程序同目录）
 config/
-  cangling.db                   # SQLite（项目、版本、Compose 文件历史、用户、会话）
+  cangling.db                   # SQLite（项目、版本、Compose / .env 文件历史、用户、会话）
   backups/<项目ID>/<版本ID>/
     repo.git/                   # 项目级 Git 仓库（跨版本去重）
     <版本ID>/tree.gitref        # 指向某次 commit

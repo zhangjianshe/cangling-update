@@ -550,7 +550,27 @@
     const metaPoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
-    const composeEdit = { etag: "", disk: "", filename: "", selected: null, busy: false };
+    const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false };
+    const FILE_EDIT = {
+      compose: {
+        title: "编辑 Compose 文件",
+        file: (id) => "/api/projects/" + id + "/compose/file",
+        rev: (id, rid) => "/api/projects/" + id + "/compose/revisions/" + encodeURIComponent(rid),
+        restore: (id, rid) => "/api/projects/" + id + "/compose/revisions/" + encodeURIComponent(rid) + "/restore",
+        defaultName: "docker-compose.yml",
+        missing: "文件还不存在，保存后将创建 docker-compose.yml",
+        restoreMsg: "确定把此历史版本写回磁盘上的 Compose 文件？",
+      },
+      env: {
+        title: "编辑环境变量",
+        file: (id) => "/api/projects/" + id + "/env/file",
+        rev: (id, rid) => "/api/projects/" + id + "/env/revisions/" + encodeURIComponent(rid),
+        restore: (id, rid) => "/api/projects/" + id + "/env/revisions/" + encodeURIComponent(rid) + "/restore",
+        defaultName: ".env",
+        missing: "",
+        restoreMsg: "确定把此历史版本写回磁盘上的 .env 文件？",
+      },
+    };
     const COMPOSE = { plugin: "插件", standalone: "独立程序", missing: "未安装" };
     const IDLE_MS = 2 * 60 * 60 * 1000;
     let lastActivity = Date.now();
@@ -1166,6 +1186,29 @@
           err.textContent = "";
         }
       }
+      syncEnvButton(compose);
+    }
+
+    function syncEnvButton(compose) {
+      const row = $("#btn-edit-compose") && $("#btn-edit-compose").parentElement;
+      if (!row) return;
+      let btn = $("#btn-edit-env");
+      if (compose.env_file) {
+        if (!btn) {
+          btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn";
+          btn.id = "btn-edit-env";
+          btn.textContent = "环境变量";
+          btn.onclick = openEnvEditor;
+          const op = $("#compose-op");
+          row.insertBefore(btn, op || null);
+        }
+        btn.disabled = !!state.busy;
+        btn.hidden = false;
+      } else if (btn) {
+        btn.remove();
+      }
     }
 
     function stopComposePoll() {
@@ -1189,10 +1232,12 @@
         const prev = JSON.stringify({
           services: (state.compose && state.compose.services) || [],
           error: (state.compose && state.compose.error) || "",
+          env_file: (state.compose && state.compose.env_file) || "",
         });
         const next = JSON.stringify({
           services: compose.services || [],
           error: compose.error || "",
+          env_file: compose.env_file || "",
         });
         if (prev !== next) applyComposeStatus(compose);
         if (compose.available && state.meta && !(state.meta.docker && state.meta.docker.available)) {
@@ -1270,6 +1315,7 @@
             <button class="btn" id="btn-restart" ${state.busy ? "disabled" : ""} title="docker compose up -d --force-recreate --remove-orphans">重启</button>
             <button class="btn" id="btn-down" ${state.busy ? "disabled" : ""}>停止</button>
             <button class="btn" id="btn-edit-compose" ${state.busy ? "disabled" : ""}>编辑</button>
+            ${c.env_file ? `<button class="btn" id="btn-edit-env" ${state.busy ? "disabled" : ""}>环境变量</button>` : ""}
             <span id="compose-op" class="compose-op" hidden></span>
           </div>
           <div class="flash err" id="compose-err" ${c.error ? "" : "hidden"}>${esc(c.error || "")}</div>
@@ -1313,6 +1359,7 @@
       $("#btn-down").onclick = () => compose("down");
       $("#btn-restart").onclick = () => compose("restart");
       $("#btn-edit-compose").onclick = openComposeEditor;
+      if ($("#btn-edit-env")) $("#btn-edit-env").onclick = openEnvEditor;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
@@ -1347,7 +1394,7 @@
 
     function setBusy(kind) {
       state.busy = kind;
-      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-del", "btn-refresh"];
+      const ids = ["btn-update", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-del", "btn-refresh"];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.disabled = true;
@@ -1621,6 +1668,7 @@
         dialog.fit = null;
       }
       dialog.confirmClose = null;
+      composeEdit.kind = "compose";
       composeEdit.etag = "";
       composeEdit.disk = "";
       composeEdit.filename = "";
@@ -1771,12 +1819,49 @@
       hl.scrollLeft = ta.scrollLeft;
     }
 
+    function highlightEnvLine(line) {
+      if (!line) return "";
+      let i = 0;
+      const n = line.length;
+      let html = "";
+      while (i < n && (line[i] === " " || line[i] === "\t")) {
+        html += esc(line[i]);
+        i++;
+      }
+      if (i >= n) return html;
+      if (line[i] === "#") return html + `<span class="yml-c">${esc(line.slice(i))}</span>`;
+      let rest = line.slice(i);
+      if (rest.startsWith("export") && (rest.length === 6 || /\s/.test(rest[6]))) {
+        html += `<span class="yml-kw">export</span>`;
+        i += 6;
+        while (i < n && (line[i] === " " || line[i] === "\t")) {
+          html += esc(line[i]);
+          i++;
+        }
+        rest = line.slice(i);
+      }
+      const eq = rest.indexOf("=");
+      if (eq < 0) return html + esc(rest);
+      html += `<span class="yml-k">${esc(rest.slice(0, eq))}</span><span class="yml-p">=</span>`;
+      html += highlightYamlTokens(rest.slice(eq + 1));
+      return html;
+    }
+
+    function highlightEnv(src) {
+      return String(src ?? "").split("\n").map(highlightEnvLine).join("\n");
+    }
+
     function paintComposeHighlight() {
       const ta = $("#compose-src");
       const hl = $("#compose-hl");
       if (!ta || !hl) return;
-      hl.innerHTML = highlightYaml(ta.value) || " ";
+      const src = ta.value;
+      hl.innerHTML = (composeEdit.kind === "env" ? highlightEnv(src) : highlightYaml(src)) || " ";
       syncComposeHighlightScroll();
+    }
+
+    function fileEditSpec() {
+      return FILE_EDIT[composeEdit.kind] || FILE_EDIT.compose;
     }
 
     function setComposeSource(text) {
@@ -1786,9 +1871,10 @@
     }
 
     function applyComposeFile(data, selectedId) {
+      const spec = fileEditSpec();
       composeEdit.etag = data.etag || "";
       composeEdit.disk = data.content || "";
-      composeEdit.filename = data.filename || "docker-compose.yml";
+      composeEdit.filename = data.filename || spec.defaultName;
       composeEdit.selected = selectedId || null;
       if (selectedId == null) setComposeSource(data.content || "");
       else paintComposeHighlight();
@@ -1800,7 +1886,7 @@
         const rev = data.current_rev_no ? "r" + data.current_rev_no : "尚无历史";
         meta.innerHTML = `<span class="path">${esc(data.path || composeEdit.filename)}</span>` +
           `<span>${esc(rev)}</span>` +
-          (data.exists ? "" : "<span>文件还不存在，保存后将创建 docker-compose.yml</span>") +
+          (!data.exists && spec.missing ? `<span>${esc(spec.missing)}</span>` : "") +
           (mismatch ? `<span class="bad">${esc(mismatch)}</span>` : "");
       }
       renderComposeRevisions(data, selectedId);
@@ -1840,15 +1926,25 @@
     }
 
     async function openComposeEditor() {
+      return openFileEditor("compose");
+    }
+
+    async function openEnvEditor() {
+      return openFileEditor("env");
+    }
+
+    async function openFileEditor(kind) {
       if (!state.current) return;
       if (state.busy) {
         flash("err", "正在处理中，请勿重复操作");
         return;
       }
       closeDialog();
+      composeEdit.kind = kind === "env" ? "env" : "compose";
+      const spec = fileEditSpec();
       const modal = $("#dialog-modal");
       if (modal) modal.classList.add("compose-modal");
-      $("#dialog-title").textContent = "编辑 Compose 文件";
+      $("#dialog-title").textContent = spec.title;
       $("#dialog-extra").hidden = true;
       $("#dialog-body").innerHTML = `
         <div class="compose-edit">
@@ -1892,7 +1988,7 @@
       });
       $("#btn-compose-save").onclick = saveComposeFile;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/compose/file");
+        const data = await api(spec.file(state.current.id));
         applyComposeFile(data, null);
         ta.focus();
       } catch (e) {
@@ -1904,7 +2000,7 @@
       if (!state.current || !revId || composeEdit.busy) return;
       if (composeDirty() && !confirm("编辑器里有未保存的修改，确定加载此版本到编辑器？")) return;
       try {
-        const rev = await api("/api/projects/" + state.current.id + "/compose/revisions/" + encodeURIComponent(revId));
+        const rev = await api(fileEditSpec().rev(state.current.id, revId));
         setComposeSource(rev.content || "");
         composeEdit.selected = rev.id;
         const items = document.querySelectorAll(".rev-item");
@@ -1930,7 +2026,7 @@
       if (btn) btn.disabled = true;
       composeEditFlash("ok", "正在保存…");
       try {
-        const data = await api("/api/projects/" + state.current.id + "/compose/file", {
+        const data = await api(fileEditSpec().file(state.current.id), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1957,12 +2053,12 @@
     async function restoreComposeRevision(revId) {
       if (!state.current || !revId || composeEdit.busy) return;
       if (composeDirty() && !confirm("编辑器里有未保存的修改，确定用此历史版本覆盖磁盘上的文件？")) return;
-      else if (!composeDirty() && !confirm("确定把此历史版本写回磁盘上的 Compose 文件？")) return;
+      else if (!composeDirty() && !confirm(fileEditSpec().restoreMsg)) return;
       composeEdit.busy = true;
       composeEditFlash("ok", "正在恢复…");
       try {
         const data = await api(
-          "/api/projects/" + state.current.id + "/compose/revisions/" + encodeURIComponent(revId) + "/restore",
+          fileEditSpec().restore(state.current.id, revId),
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },

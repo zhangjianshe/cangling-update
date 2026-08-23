@@ -9,10 +9,10 @@ use crate::error::AppError;
 use crate::hostinfo;
 use crate::models::*;
 use crate::paths::{
-    commit_compose_draft, compose_draft_path, compose_etag, compose_live_path, find_compose_file,
-    is_image_archive_name, is_uploadable_name, parse_compose_images, parse_compose_jar_mounts,
-    require_absolute_dir, resolve_host_path, safe_filename, validate_compose_text,
-    write_text_atomic, JarMount,
+    commit_compose_draft, compose_draft_path, compose_etag, compose_live_path, env_live_path,
+    find_compose_file, find_env_file, is_image_archive_name, is_uploadable_name,
+    parse_compose_images, parse_compose_jar_mounts, require_absolute_dir, resolve_host_path,
+    safe_filename, validate_compose_text, validate_env_text, write_text_atomic, JarMount,
 };
 use crate::state::AppState;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
@@ -67,6 +67,19 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/projects/{id}/compose/revisions/{rev_id}/restore",
             post(compose_revision_restore),
+        )
+        .route(
+            "/api/projects/{id}/env/file",
+            get(env_file_get).put(env_file_put),
+        )
+        .route("/api/projects/{id}/env/revisions", get(env_revisions_list))
+        .route(
+            "/api/projects/{id}/env/revisions/{rev_id}",
+            get(env_revision_get),
+        )
+        .route(
+            "/api/projects/{id}/env/revisions/{rev_id}/restore",
+            post(env_revision_restore),
         )
         .route("/api/projects/{id}/compose/up", post(compose_up))
         .route("/api/projects/{id}/compose/down", post(compose_down))
@@ -1376,6 +1389,7 @@ async fn compose_status(
                 .to_string_lossy()
                 .into_owned()
         }),
+        env_file: find_env_file(&dir).map(|_| crate::paths::ENV_FILENAME.to_string()),
         images,
         jar_mounts,
         services,
@@ -1679,6 +1693,271 @@ async fn compose_revision_restore(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| format!("恢复 r{}", rev.rev_no));
     save_compose_content(
+        &state,
+        &project,
+        rev.content,
+        note,
+        "restore",
+        body.recreate,
+        None,
+    )
+    .await
+}
+
+fn env_file_view(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    path: &std::path::Path,
+    filename: &str,
+    exists: bool,
+    content: &str,
+    etag: &str,
+    recreate_log: Option<String>,
+    unchanged: bool,
+) -> Result<ComposeFileView, AppError> {
+    let revisions = db::list_env_revisions(conn, project_id)?;
+    let latest = revisions.first();
+    Ok(ComposeFileView {
+        filename: filename.to_string(),
+        path: path.display().to_string(),
+        exists,
+        bytes: content.len() as u64,
+        matches_latest: latest.map(|r| r.etag.as_str()) == Some(etag),
+        current_rev_id: latest.map(|r| r.id.clone()),
+        current_rev_no: latest.map(|r| r.rev_no),
+        revisions,
+        content: content.to_string(),
+        etag: etag.to_string(),
+        recreate_log,
+        unchanged,
+    })
+}
+
+fn record_env_revision(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    filename: &str,
+    content: &str,
+    note: &str,
+    kind: &str,
+) -> Result<ComposeRevision, AppError> {
+    let rev = ComposeRevision {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.to_string(),
+        rev_no: db::next_env_rev_no(conn, project_id)?,
+        filename: filename.to_string(),
+        etag: compose_etag(content),
+        bytes: content.len() as u64,
+        content: content.to_string(),
+        note: note.to_string(),
+        kind: kind.to_string(),
+        created_at: db::now_rfc3339(),
+    };
+    db::insert_env_revision(conn, &rev)?;
+    Ok(rev)
+}
+
+fn snapshot_env_disk_if_needed(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+    filename: &str,
+    disk: &str,
+    disk_etag: &str,
+) -> Result<(), AppError> {
+    let latest = db::latest_env_revision(conn, project_id)?;
+    match latest {
+        Some(r) if r.etag == disk_etag => Ok(()),
+        Some(_) => {
+            record_env_revision(conn, project_id, filename, disk, "磁盘上的未记录内容", "external")?;
+            Ok(())
+        }
+        None => {
+            record_env_revision(conn, project_id, filename, disk, "打开编辑器时的线上文件", "baseline")?;
+            Ok(())
+        }
+    }
+}
+
+async fn save_env_content(
+    state: &AppState,
+    project: &Project,
+    content: String,
+    note: String,
+    kind: &str,
+    recreate: bool,
+    expected_etag: Option<&str>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    validate_env_text(&content).map_err(|e| AppError::bad(e.to_string()))?;
+    let dir = PathBuf::from(&project.directory);
+    let (dest, _filename, exists) = env_live_path(&dir);
+    if !exists {
+        return Err(AppError::not_found("项目目录中没有 .env 文件"));
+    }
+    let (_disk, disk_etag) = read_compose_disk(&dest, exists)?;
+    if let Some(expected) = expected_etag {
+        if expected != disk_etag {
+            return Err(AppError::conflict(
+                "磁盘上的 .env 文件已变化，请关闭后重新打开再保存",
+            ));
+        }
+    }
+
+    let gate = state.lock_project(&project.id);
+    let _guard = gate.lock().await;
+
+    let (dest, filename, exists) = env_live_path(&dir);
+    if !exists {
+        return Err(AppError::not_found("项目目录中没有 .env 文件"));
+    }
+    let (disk, disk_etag) = read_compose_disk(&dest, exists)?;
+    if let Some(expected) = expected_etag {
+        if expected != disk_etag {
+            return Err(AppError::conflict(
+                "磁盘上的 .env 文件已变化，请关闭后重新打开再保存",
+            ));
+        }
+    }
+
+    if content == disk {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        snapshot_env_disk_if_needed(&conn, &project.id, &filename, &disk, &disk_etag)?;
+        let view = env_file_view(
+            &conn,
+            &project.id,
+            &dest,
+            &filename,
+            exists,
+            &disk,
+            &disk_etag,
+            None,
+            true,
+        )?;
+        return Ok(Json(view));
+    }
+
+    write_text_atomic(&dest, &content)?;
+    let etag = compose_etag(&content);
+    let default_note = if kind == "restore" {
+        "恢复历史版本"
+    } else {
+        ""
+    };
+    let note = if note.trim().is_empty() {
+        default_note.to_string()
+    } else {
+        note
+    };
+
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        snapshot_env_disk_if_needed(&conn, &project.id, &filename, &disk, &disk_etag)?;
+        record_env_revision(&conn, &project.id, &filename, &content, &note, kind)?;
+    }
+
+    let recreate_log = if recreate {
+        match state.docker.compose_up(&dir).await {
+            Ok(logs) => Some(logs),
+            Err(err) => Some(format!(".env 已保存，但启动失败：{err}")),
+        }
+    } else {
+        None
+    };
+
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let view = env_file_view(
+        &conn,
+        &project.id,
+        &dest,
+        &filename,
+        true,
+        &content,
+        &etag,
+        recreate_log,
+        false,
+    )?;
+    Ok(Json(view))
+}
+
+async fn env_file_get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    let dir = PathBuf::from(&project.directory);
+    let (path, filename, exists) = env_live_path(&dir);
+    if !exists {
+        return Err(AppError::not_found("项目目录中没有 .env 文件"));
+    }
+    let (content, etag) = read_compose_disk(&path, exists)?;
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    Ok(Json(env_file_view(
+        &conn, &id, &path, &filename, exists, &content, &etag, None, false,
+    )?))
+}
+
+async fn env_file_put(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SaveComposeBody>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    save_env_content(
+        &state,
+        &project,
+        body.content,
+        body.note.unwrap_or_default(),
+        "save",
+        body.recreate,
+        body.expected_etag.as_deref(),
+    )
+    .await
+}
+
+async fn env_revisions_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<ComposeRevision>>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    if db::get_project(&conn, &id)?.is_none() {
+        return Err(AppError::not_found("项目不存在"));
+    }
+    Ok(Json(db::list_env_revisions(&conn, &id)?))
+}
+
+async fn env_revision_get(
+    State(state): State<AppState>,
+    Path((id, rev_id)): Path<(String, String)>,
+) -> Result<Json<ComposeRevision>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    db::get_env_revision(&conn, &id, &rev_id)?
+        .map(Json)
+        .ok_or_else(|| AppError::not_found("该环境变量版本不存在"))
+}
+
+async fn env_revision_restore(
+    State(state): State<AppState>,
+    Path((id, rev_id)): Path<(String, String)>,
+    Json(body): Json<RestoreComposeBody>,
+) -> Result<Json<ComposeFileView>, AppError> {
+    let (project, rev) = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        let project = db::get_project(&conn, &id)?
+            .ok_or_else(|| AppError::not_found("项目不存在"))?;
+        let rev = db::get_env_revision(&conn, &id, &rev_id)?
+            .ok_or_else(|| AppError::not_found("该环境变量版本不存在"))?;
+        (project, rev)
+    };
+    let note = body
+        .note
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("恢复 r{}", rev.rev_no));
+    save_env_content(
         &state,
         &project,
         rev.content,
