@@ -23,7 +23,7 @@
 ```bash
   mkdir update
   cd update
-  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.42/cangling-update-linux-amd64
+  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.43/cangling-update-linux-amd64
   chmod +x cangling-update
   ./cangling-update install-service
   # 访问地址 http://localhost:5400
@@ -292,6 +292,7 @@ config/
 - 密码用 Argon2 存放
 - 会话 Cookie：`cangling_session`（HttpOnly）
 - **2 小时没有任何操作**（页面交互或接口）会退出
+- 连续 **3 次登录失败**后，该账号会被锁定 **3 分钟**，期间无法登录
 
 网页上不能自助找回密码。能登录这台主机的人可以重置：
 
