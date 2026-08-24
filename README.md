@@ -23,7 +23,7 @@
 ```bash
   mkdir update
   cd update
-  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.43/cangling-update-linux-amd64
+  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.44/cangling-update-linux-amd64
   chmod +x cangling-update
   ./cangling-update install-service
   # 访问地址 http://localhost:5400
@@ -85,10 +85,10 @@ sudo ./cangling-update fix-k3s
 # 若已安装 k3s：在 /var/lib/rancher/k3s/server/manifests/ 写入 traefik-config.yaml
 # 把 Traefik HTTP/HTTPS 默认入口改为 8020 / 8443，然后重启 Traefik；未安装 k3s 时只打印提示
 
-# 终端彩色查看（无需登录）
-curl -s http://<主机>:5400/hostinfo
-curl -s http://<主机>:5400/hostinfo.md | glow -
-curl -s 'http://<主机>:5400/hostinfo?color=0'   # 无颜色
+# 终端彩色查看（仅限本机 / localhost，无需登录；远程访问需先登录）
+curl -s http://localhost:5400/hostinfo
+curl -s http://localhost:5400/hostinfo.md | glow -
+curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 ```
 
 常用参数：
@@ -342,7 +342,7 @@ cangling-update [选项] [命令]
                        --proxy URL       HTTP/HTTPS/SOCKS 代理（也可设 https_proxy）
   hostinfo             采集主机信息，写入程序目录下的 info.md
                        -o / --output     输出路径（默认：程序目录/info.md）
-                       网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md
+                       网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md（仅限 localhost）
                        内容：软件版本与路径、本机 IP、项目列表、磁盘、内存、CPU/GPU
   fix-k3s              若已安装 k3s：写入 Traefik 入口配置（HTTP 8020 / HTTPS 8443）并重启 Traefik
 
