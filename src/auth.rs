@@ -4,11 +4,12 @@ use crate::models::{AuthStatus, AuthUser, Credentials};
 use crate::state::AppState;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, Request};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 pub const IDLE_TIMEOUT_SECS: u64 = 2 * 60 * 60;
@@ -18,7 +19,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     if path.starts_with("/vendor/") || path.starts_with("/media/portal/") {
         return true;
     }
-    if matches!(path, "/" | "/console" | "/hostinfo" | "/hostinfo.md") {
+    if matches!(path, "/" | "/console") {
         return true;
     }
     if matches!(
@@ -30,13 +31,20 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     method == Method::GET && path == "/api/portal"
 }
 
+fn is_hostinfo_path(path: &str) -> bool {
+    matches!(path, "/hostinfo" | "/hostinfo.md")
+}
+
 pub async fn require_auth(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, AppError> {
     let path = request.uri().path().to_string();
-    if is_public(request.method(), &path) {
+    if is_public(request.method(), &path)
+        || (is_hostinfo_path(&path) && addr.ip().is_loopback())
+    {
         return Ok(next.run(request).await);
     }
 
@@ -109,11 +117,19 @@ pub async fn login(
         return Err(AppError::bad("请输入用户名和密码"));
     }
 
+    if let Some(secs) = state.login_guard.lockout_remaining_secs(&username) {
+        let minutes = (secs + 59) / 60;
+        return Err(AppError::unauthorized(format!(
+            "登录失败次数过多，请 {minutes} 分钟后再试"
+        )));
+    }
+
     let user = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         db::get_user_by_name(&conn, &username)?
     };
     let Some(user) = user else {
+        state.login_guard.record_failure(&username);
         return Err(AppError::unauthorized("用户名或密码错误"));
     };
 
@@ -122,9 +138,11 @@ pub async fn login(
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     if !ok {
+        state.login_guard.record_failure(&username);
         return Err(AppError::unauthorized("用户名或密码错误"));
     }
 
+    state.login_guard.clear(&username);
     issue_session(&state, &user.id, &user.username)
 }
 
@@ -279,8 +297,11 @@ mod tests {
         assert!(is_public(&Method::GET, "/media/portal/background"));
         assert!(is_public(&Method::GET, "/media/portal/icon/abc"));
         assert!(is_public(&Method::GET, "/api/auth/status"));
-        assert!(is_public(&Method::GET, "/hostinfo"));
-        assert!(is_public(&Method::GET, "/hostinfo.md"));
+        assert!(!is_public(&Method::GET, "/hostinfo"));
+        assert!(!is_public(&Method::GET, "/hostinfo.md"));
+        assert!(is_hostinfo_path("/hostinfo"));
+        assert!(is_hostinfo_path("/hostinfo.md"));
+        assert!(!is_hostinfo_path("/hostinfo?color=0"));
         assert!(!is_public(&Method::GET, "/api/projects"));
     }
 }
