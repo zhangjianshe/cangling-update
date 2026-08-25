@@ -112,7 +112,7 @@ jobs:
           # Upload AMD64 binary
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
             -F "token=${{ secrets.CANGLING_TOKEN }}" \
-            -F "version=${{ github.ref_name }}" \
+            -F "version=latest" \
             -F "name=cangling-update" \
             -F "summary=Automatic release for version ${{ github.ref_name }}" \
             -F "os=linux" \
@@ -122,7 +122,7 @@ jobs:
           # Upload ARM64 binary
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
             -F "token=${{ secrets.CANGLING_TOKEN }}" \
-            -F "version=${{ github.ref_name }}" \
+            -F "version=latest" \
             -F "name=cangling-update" \
             -F "summary=Automatic release for version ${{ github.ref_name }}" \
             -F "os=linux" \
