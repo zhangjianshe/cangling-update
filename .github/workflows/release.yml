@@ -107,3 +107,24 @@ jobs:
             dist/cangling-update-linux-arm64
             dist/cangling-update-linux-arm64.sha256
           fail_on_unmatched_files: true
+      - name: Upload to soft.cangling.cn
+        run: |
+          # Upload AMD64 binary
+          curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
+            -F "token=${{ secrets.CANGLING_TOKEN }}" \
+            -F "version=${{ github.ref_name }}" \
+            -F "name=cangling-update" \
+            -F "summary=Automatic release for version ${{ github.ref_name }}" \
+            -F "os=linux" \
+            -F "arch=amd64" \
+            -F "file=@dist/cangling-update-linux-amd64"
+          
+          # Upload ARM64 binary
+          curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
+            -F "token=${{ secrets.CANGLING_TOKEN }}" \
+            -F "version=${{ github.ref_name }}" \
+            -F "name=cangling-update" \
+            -F "summary=Automatic release for version ${{ github.ref_name }}" \
+            -F "os=linux" \
+            -F "arch=arm64" \
+            -F "file=@dist/cangling-update-linux-arm64"
