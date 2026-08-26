@@ -111,7 +111,7 @@ jobs:
       - name: Upload to soft.cangling.cn
         run: |
           # output a version.txt
-          echo ${{ github.ref_name }} > @dist/version.txt
+          echo "${{ github.ref_name }}" > dist/version.txt
           # Upload AMD64 binary
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
             -F "token=${{ secrets.CANGLING_TOKEN }}" \
