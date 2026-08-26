@@ -79,6 +79,7 @@ jobs:
             dist/${{ matrix.asset }}.sha256
           if-no-files-found: error
 
+
   publish:
     name: Publish GitHub Release
     needs: build
@@ -109,6 +110,8 @@ jobs:
           fail_on_unmatched_files: true
       - name: Upload to soft.cangling.cn
         run: |
+          # output a version.txt
+          echo ${{ github.ref_name }} > @dist/version.txt
           # Upload AMD64 binary
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
             -F "token=${{ secrets.CANGLING_TOKEN }}" \
@@ -128,3 +131,13 @@ jobs:
             -F "os=linux" \
             -F "arch=arm64" \
             -F "file=@dist/cangling-update-linux-arm64"
+          
+           # Upload Version
+          curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
+            -F "token=${{ secrets.CANGLING_TOKEN }}" \
+            -F "version=latest" \
+            -F "name=cangling-update-version" \
+            -F "summary=${{ github.ref_name }}" \
+            -F "os=linux" \
+            -F "arch=arm64" \
+            -F "file=@dist/version.txt"
