@@ -114,7 +114,8 @@ jobs:
           echo "${{ github.ref_name }}" > dist/version.txt
           # Upload AMD64 binary
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
-            -F "token=${{ secrets.CANGLING_TOKEN }}" \
+            -H "API-TOKEN: ${{ secrets.CANGLING_TOKEN }}" \
+            -F "token=26deab4218cf40d3a611f87fd4dd9018" \
             -F "version=latest" \
             -F "name=cangling-update" \
             -F "summary=Automatic release for version ${{ github.ref_name }}" \
@@ -124,7 +125,8 @@ jobs:
           
           # Upload ARM64 binary
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
-            -F "token=${{ secrets.CANGLING_TOKEN }}" \
+            -H "API-TOKEN: ${{ secrets.CANGLING_TOKEN }}" \
+            -F "token=26deab4218cf40d3a611f87fd4dd9018" \
             -F "version=latest" \
             -F "name=cangling-update" \
             -F "summary=Automatic release for version ${{ github.ref_name }}" \
@@ -134,7 +136,8 @@ jobs:
           
            # Upload Version
           curl -k -X POST "https://soft.cangling.cn:22002/api/v1/software/upload" \
-            -F "token=${{ secrets.CANGLING_TOKEN }}" \
+            -H "API-TOKEN: ${{ secrets.CANGLING_TOKEN }}" \
+            -F "token=26deab4218cf40d3a611f87fd4dd9018" \
             -F "version=latest" \
             -F "name=cangling-update-version" \
             -F "summary=${{ github.ref_name }}" \
