@@ -695,6 +695,7 @@
       <div class="header-right">
         <div class="meta" id="meta">加载中…</div>
         <span id="who"></span>
+        <button type="button" class="btn" id="btn-pass">修改密码</button>
         <button type="button" class="btn" id="btn-logout">退出</button>
         <button type="button" class="btn" id="theme-toggle" aria-label="切换深色或浅色主题">浅色</button>
       </div>
@@ -1031,6 +1032,63 @@
       }
     }
 
+    function openChangePassword() {
+      closeDialog();
+      $("#dialog-title").textContent = "修改密码";
+      setDialogAction("确认修改", submitChangePassword);
+      $("#dialog-body").innerHTML = `
+        <div class="field"><label>当前密码</label><input id="pw-old" type="password" autocomplete="current-password" /></div>
+        <div class="field"><label>新密码（至少 8 位）</label><input id="pw-new" type="password" autocomplete="new-password" /></div>
+        <div class="field"><label>确认新密码</label><input id="pw-new2" type="password" autocomplete="new-password" /></div>
+        <div id="pw-flash" hidden></div>`;
+      $("#dialog").hidden = false;
+      const first = $("#pw-old");
+      if (first) first.focus();
+      ["pw-old", "pw-new", "pw-new2"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") submitChangePassword(); });
+      });
+    }
+
+    async function submitChangePassword() {
+      const box = $("#pw-flash");
+      const show = (kind, msg) => {
+        box.className = "flash " + kind;
+        box.textContent = msg;
+        box.hidden = false;
+      };
+      const oldPassword = $("#pw-old").value;
+      const newPassword = $("#pw-new").value;
+      const again = $("#pw-new2").value;
+      if (newPassword !== again) {
+        show("err", "两次输入的新密码不一致");
+        return;
+      }
+      const btn = $("#dialog-extra");
+      if (btn) btn.disabled = true;
+      try {
+        const data = await api("/api/auth/change-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+        });
+        const synced = (data && data.synced) || [];
+        const failed = (data && data.failed) || [];
+        let msg = "密码已修改，请重新登录。";
+        if (synced.length) msg += " 已同步节点：" + synced.join("、") + "。";
+        if (failed.length) msg += " 同步失败：" + failed.map((f) => f.node).join("、") + "。";
+        show("ok", msg);
+        $("#pw-old").value = "";
+        $("#pw-new").value = "";
+        $("#pw-new2").value = "";
+        setDialogAction("重新登录", () => logout("密码已修改，请重新登录"));
+        if (btn) btn.disabled = false;
+      } catch (e) {
+        show("err", e.message);
+        if (btn) btn.disabled = false;
+      }
+    }
+
     function route() {
       stopComposePoll();
       stopClusterPoll();
@@ -1139,8 +1197,8 @@
         </div>
         <div id="flash" hidden></div>
         <div class="card"><h3>概览</h3><p class="hint" id="cluster-overview"></p></div>
-        ${initCard}
         <div class="card"><h3>节点列表</h3><div id="nodes-body"></div></div>
+        ${initCard}
         ${workerNote}`;
       const initBtn = $("#btn-init-cluster");
       if (initBtn) initBtn.onclick = startClusterInit;
@@ -3789,6 +3847,7 @@
     $("#btn-cluster").onclick = () => location.hash = "#/cluster";
     $("#btn-repo").onclick = () => location.hash = "#/repo";
     $("#btn-logout").onclick = () => logout();
+    $("#btn-pass").onclick = openChangePassword;
     function setNav(open) {
       const aside = document.querySelector("aside");
       const scrim = $("#nav-scrim");

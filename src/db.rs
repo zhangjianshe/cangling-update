@@ -371,6 +371,19 @@ pub fn list_usernames(conn: &Connection) -> Result<Vec<String>> {
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
+pub fn list_users(conn: &Connection) -> Result<Vec<UserRow>> {
+    let mut stmt =
+        conn.prepare("SELECT id, username, password_hash FROM users ORDER BY username")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(UserRow {
+            id: r.get(0)?,
+            username: r.get(1)?,
+            password_hash: r.get(2)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
 pub fn update_password_hash(conn: &Connection, user_id: &str, password_hash: &str) -> Result<bool> {
     let n = conn.execute(
         "UPDATE users SET password_hash = ?1 WHERE id = ?2",

@@ -215,6 +215,25 @@ pub struct Credentials {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordBody {
+    pub old_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SyncFailure {
+    pub node: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangePasswordResponse {
+    pub ok: bool,
+    pub synced: Vec<String>,
+    pub failed: Vec<SyncFailure>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AuthUser {
     pub id: String,

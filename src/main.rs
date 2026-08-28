@@ -58,7 +58,7 @@ struct Cli {
     master: Option<String>,
 
     /// 集群共享令牌（master / worker 角色必须一致）
-    #[arg(long, env = "CANGLING_CLUSTER_TOKEN")]
+    #[arg(long, env = "CANGLING_CLUSTER_TOKEN", global = true)]
     cluster_token: Option<String>,
 
     /// UDP 发现端口（默认 5401）
@@ -79,6 +79,18 @@ enum Command {
         /// 新密码；省略则自动生成并打印一次
         #[arg(short, long)]
         password: Option<String>,
+    },
+    /// 修改登录密码（可同步到所有在线工作节点）
+    ChangePassword {
+        /// 用户名；只有一个账号时可省略
+        #[arg(short, long)]
+        username: Option<String>,
+        /// 新密码；省略则自动生成并打印一次
+        #[arg(short, long)]
+        password: Option<String>,
+        /// 同步到所有在线工作节点（需要集群令牌）
+        #[arg(long)]
+        sync: bool,
     },
     /// 将当前程序安装为 systemd 服务（工作目录为程序所在目录）
     InstallService,
@@ -119,6 +131,21 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::ResetPassword { username, password }) => {
             let paths = AppPaths::resolve(cli.data_dir)?;
             return reset_password(&paths, username, password);
+        }
+        Some(Command::ChangePassword {
+            username,
+            password,
+            sync,
+        }) => {
+            let paths = AppPaths::resolve(cli.data_dir)?;
+            return change_password(
+                &paths,
+                cli.cluster_token.as_deref(),
+                username,
+                password,
+                sync,
+            )
+            .await;
         }
         Some(Command::InstallService) => {
             return service::install(&cli.bind, cli.port, cli.data_dir.as_deref());
@@ -212,6 +239,86 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    Ok(())
+}
+
+async fn change_password(
+    paths: &AppPaths,
+    token: Option<&str>,
+    username: Option<String>,
+    password: Option<String>,
+    sync: bool,
+) -> anyhow::Result<()> {
+    let conn = db::open(&paths.db_path)?;
+    let names = db::list_usernames(&conn)?;
+    if names.is_empty() {
+        bail!("还没有管理员账号。请先打开网页完成初始化。");
+    }
+
+    let username = match username {
+        Some(u) => u,
+        None if names.len() == 1 => names[0].clone(),
+        None => bail!(
+            "存在多个用户，请指定 --username。当前用户：{}",
+            names.join(", ")
+        ),
+    };
+
+    let Some(user) = db::get_user_by_name(&conn, &username)? else {
+        bail!("用户不存在：{username}。当前用户：{}", names.join(", "));
+    };
+
+    let (password, generated) = match password {
+        Some(p) => (p, false),
+        None => (generate_password(), true),
+    };
+    auth::validate_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let hash = auth::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
+    db::update_password_hash(&conn, &user.id, &hash)?;
+    db::delete_sessions_for_user(&conn, &user.id)?;
+
+    eprintln!("已修改用户 {username} 的密码，旧登录会话已全部失效。");
+    if generated {
+        println!("{password}");
+        eprintln!("请立即登录。以上密码只显示一次。");
+    }
+
+    if sync {
+        let token = token.map(str::trim).filter(|s| !s.is_empty());
+        let Some(token) = token else {
+            bail!("--sync 需要集群令牌（--cluster-token 或 CANGLING_CLUSTER_TOKEN）");
+        };
+        let workers = cluster::server::online_workers_in(&conn)?;
+        let mut synced = 0usize;
+        let mut failures = Vec::new();
+        for (name, addr) in workers {
+            let url = format!("http://{addr}/api/cluster/auth/sync");
+            let body = serde_json::json!({
+                "username": username.clone(),
+                "password_hash": hash.clone(),
+            });
+            match cluster::http::post_json(&url, token, &body).await {
+                Ok((status, _)) if status.is_success() => {
+                    eprintln!("已同步到 {name}");
+                    synced += 1;
+                }
+                Ok((status, value)) => {
+                    let msg = value
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| value.to_string());
+                    eprintln!("同步失败 {name}：HTTP {status}: {msg}");
+                    failures.push(name);
+                }
+                Err(e) => {
+                    eprintln!("同步失败 {name}：{e:#}");
+                    failures.push(name);
+                }
+            }
+        }
+        eprintln!("同步完成：成功 {synced} 个，失败 {} 个。", failures.len());
+    }
     Ok(())
 }
 

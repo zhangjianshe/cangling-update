@@ -13,9 +13,10 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterRequest {
@@ -45,6 +46,19 @@ pub struct HeartbeatResponse {
     pub ok: bool,
     /// 是否已登记该节点；false 时 worker 应重新注册。
     pub known: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthSyncRequest {
+    pub username: String,
+    pub password_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthSyncResponse {
+    pub ok: bool,
+    pub username: String,
+    pub created: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -103,6 +117,7 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
             "/api/cluster/init/run",
             post(crate::cluster::init::run_worker_init),
         )
+        .route("/api/cluster/auth/sync", post(auth_sync))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_cluster_token,
@@ -159,6 +174,43 @@ pub async fn maintain_self_node(state: AppState) {
     }
 }
 
+pub async fn auth_sync(
+    State(state): State<AppState>,
+    Json(body): Json<AuthSyncRequest>,
+) -> Result<Json<AuthSyncResponse>, AppError> {
+    let username = body.username.trim().to_string();
+    if username.is_empty() {
+        return Err(AppError::bad("username 不能为空"));
+    }
+    if body.password_hash.is_empty() {
+        return Err(AppError::bad("password_hash 不能为空"));
+    }
+    let mut created = false;
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        match crate::db::get_user_by_name(&conn, &username)? {
+            Some(user) => {
+                crate::db::update_password_hash(&conn, &user.id, &body.password_hash)?;
+                crate::db::delete_sessions_for_user(&conn, &user.id)?;
+            }
+            None => {
+                crate::db::insert_user(
+                    &conn,
+                    &Uuid::new_v4().to_string(),
+                    &username,
+                    &body.password_hash,
+                )?;
+                created = true;
+            }
+        }
+    }
+    Ok(Json(AuthSyncResponse {
+        ok: true,
+        username,
+        created,
+    }))
+}
+
 pub async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
@@ -181,6 +233,16 @@ pub async fn register(
             &now,
         )?;
     }
+
+    // 新加入/重新注册的 worker：把 master 的登录账号同步过去，保证各节点同一套账号密码。
+    {
+        let state = state.clone();
+        let addr = body.addr.clone();
+        tokio::spawn(async move {
+            crate::auth::sync_users_to_worker(&state, &addr).await;
+        });
+    }
+
     Ok(Json(RegisterResponse {
         ok: true,
         heartbeat_interval_secs: HEARTBEAT_INTERVAL_SECS,
@@ -197,10 +259,25 @@ pub async fn heartbeat(
         .host
         .as_ref()
         .and_then(|h| serde_json::to_string(h).ok());
-    let known = {
+    let (known, reconnect_addr) = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        touch_node(&conn, &body.id, &now, info.as_deref())?
+        let prev = node_online_state(&conn, &body.id)?;
+        let known = touch_node(&conn, &body.id, &now, info.as_deref())?;
+        // 从离线→在线的重连，需要重新同步账号（新加入的节点走 register 分支）。
+        let reconnect_addr = match (&prev, known) {
+            (Some((addr, false)), true) => Some(addr.clone()),
+            _ => None,
+        };
+        (known, reconnect_addr)
     };
+
+    if let Some(addr) = reconnect_addr {
+        let state = state.clone();
+        tokio::spawn(async move {
+            crate::auth::sync_users_to_worker(&state, &addr).await;
+        });
+    }
+
     Ok(Json(HeartbeatResponse { ok: true, known }))
 }
 
@@ -301,6 +378,45 @@ fn touch_node(
         )?,
     };
     Ok(changed > 0)
+}
+
+/// 读取节点上一轮是否在线：返回 Some((addr, 是否在线))；不存在则 None。
+fn node_online_state(conn: &Connection, id: &str) -> rusqlite::Result<Option<(String, bool)>> {
+    let mut stmt = conn.prepare("SELECT addr, last_seen FROM cluster_nodes WHERE id = ?1")?;
+    let row: Option<(String, String)> = stmt
+        .query_row(params![id], |r| {
+            let addr: String = r.get(0)?;
+            let last_seen: String = r.get(1)?;
+            Ok((addr, last_seen))
+        })
+        .optional()?;
+    Ok(row.map(|(addr, last_seen)| (addr, is_online(&last_seen))))
+}
+
+pub fn online_workers_in(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT name, addr, last_seen FROM cluster_nodes WHERE role = 'worker' ORDER BY name",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (name, addr, last_seen) = row?;
+        if is_online(&last_seen) {
+            out.push((name, addr));
+        }
+    }
+    Ok(out)
+}
+
+pub fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    online_workers_in(&conn).map_err(AppError::from)
 }
 
 fn list_cluster_nodes(conn: &Connection) -> rusqlite::Result<Vec<ClusterNode>> {

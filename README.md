@@ -113,6 +113,7 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 同一个可执行文件可以组成「主节点 + 工作节点」的集群：主节点收集各节点信息（主机名、IP、磁盘/内存/CPU/GPU、软件、项目列表），网页控制台左侧「集群」入口可查看节点在线状态与每台主机的信息。主节点启动后也会把自己登记进节点列表并保持在线。
 
 - 所有节点使用**相同的 `--cluster-token`**（机器间认证，与网页登录账号无关）。
+- 新节点注册到主节点、或从离线恢复在线时，主节点会自动把本机账号推送给它，使各节点保持同一套登录账号密码（详见「登录与忘记密码」）。
 - 工作节点每 15 秒向主节点发一次心跳，45 秒无心跳判定为离线；完整主机信息在注册时采集、之后每 5 分钟刷新一次。
 - 工作节点不填 `--master` 时，通过 **UDP 广播**（端口 `5401`，可用 `--discovery-port` 修改）自动发现主节点；广播里只携带令牌哈希，不发送令牌明文。子网屏蔽广播时请显式指定 `--master`。
 
@@ -375,6 +376,27 @@ sudo ./cangling-update --data-dir /var/lib/cangling-update reset-password
 
 不写 `-p` 会生成一串随机密码，只打印一次。重置后该用户的旧登录全部失效。
 
+### 修改密码（网页 / 命令行，可同步到工作节点）
+
+**网页**：登录后点右上角「修改密码」，输入当前密码与新密码。在 master 上改密时，会同时把新密码同步到所有**在线**工作节点，页面会显示同步结果；改完需要重新登录。
+
+**命令行**（在主机上执行，不校验旧密码）：
+
+```bash
+# 只改本机
+sudo ./cangling-update change-password -p '新密码'
+
+# 本机 + 同步到所有在线工作节点（需要集群令牌）
+sudo ./cangling-update --cluster-token '共享口令' change-password --sync -p '新密码'
+
+# 数据目录不是默认位置时
+sudo ./cangling-update --data-dir /var/lib/cangling-update change-password --sync
+```
+
+不写 `-p` 会生成随机密码并只打印一次。修改后该用户在本机的旧登录全部失效。
+
+**新加入的工作节点会自动同步**：worker 注册到 master 时，master 会把本机全部账号（用户名 + 密码哈希）推送到该 worker；worker 从离线恢复在线时也会补同步一次。因此各节点保持同一套账号密码。
+
 ## 自带测试镜像
 
 `test-docker/` 是一个 nginx 小应用，页面上显示镜像版本，方便验证升级是否生效。
@@ -400,6 +422,10 @@ cangling-update [选项] [命令]
   reset-password       重置登录密码
                        -u / --username   用户名；只有一个账号时可省略
                        -p / --password   新密码；省略则自动生成并打印一次
+  change-password      修改登录密码（可同步到工作节点）
+                       -u / --username   用户名；只有一个账号时可省略
+                       -p / --password   新密码；省略则自动生成并打印一次
+                       --sync            同步到所有在线工作节点（需集群令牌）
   install-service      安装 systemd 服务，并在 /usr/local/bin 创建命令符号链接
   uninstall-service    卸载 systemd 服务，并删除该符号链接
   restart              重启本服务

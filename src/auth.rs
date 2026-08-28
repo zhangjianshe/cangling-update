@@ -1,6 +1,8 @@
 use crate::db;
 use crate::error::AppError;
-use crate::models::{AuthStatus, AuthUser, Credentials};
+use crate::models::{
+    AuthStatus, AuthUser, ChangePasswordBody, ChangePasswordResponse, Credentials, SyncFailure,
+};
 use crate::state::AppState;
 use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
@@ -32,6 +34,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     if matches!(path, "/api/cluster/register" | "/api/cluster/heartbeat")
         || path == "/api/cluster/repo"
         || path == "/api/cluster/init/run"
+        || path == "/api/cluster/auth/sync"
         || (path.starts_with("/api/cluster/repo/") && path.ends_with("/download"))
     {
         return true;
@@ -88,6 +91,145 @@ pub fn auth_status(state: &AppState, headers: &HeaderMap) -> Result<AuthStatus, 
 
 pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<AuthStatus>, AppError> {
     Ok(Json(auth_status(&state, &headers)?))
+}
+
+pub fn current_auth_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Option<AuthUser>, AppError> {
+    let token = read_token(headers);
+    Ok(current_user(state, token.as_deref())?.map(|u| AuthUser {
+        id: u.id,
+        username: u.username,
+    }))
+}
+
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordBody>,
+) -> Result<Json<ChangePasswordResponse>, AppError> {
+    let user = current_auth_user(&state, &headers)?
+        .ok_or_else(|| AppError::unauthorized("请先登录或登录已过期"))?;
+
+    validate_password(&body.new_password)?;
+
+    let stored_hash = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_user_by_id(&conn, &user.id)?
+            .ok_or_else(|| AppError::unauthorized("用户不存在"))?
+            .password_hash
+    };
+    let old_password = body.old_password.clone();
+    let ok = tokio::task::spawn_blocking(move || verify_password(&old_password, &stored_hash))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    if !ok {
+        return Err(AppError::unauthorized("当前密码不正确"));
+    }
+
+    let new_hash = hash_password_async(body.new_password).await?;
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::update_password_hash(&conn, &user.id, &new_hash)?;
+        // 修改密码后使所有登录会话失效，要求重新登录。
+        db::delete_sessions_for_user(&conn, &user.id)?;
+    }
+
+    let (synced, failed) = sync_password_to_workers(&state, &user.username, &new_hash).await;
+
+    Ok(Json(ChangePasswordResponse {
+        ok: true,
+        synced,
+        failed,
+    }))
+}
+
+async fn sync_password_to_workers(
+    state: &AppState,
+    username: &str,
+    password_hash: &str,
+) -> (Vec<String>, Vec<SyncFailure>) {
+    let token = state.cluster.token.clone().unwrap_or_default();
+    let workers = match crate::cluster::server::online_workers(state) {
+        Ok(w) => w,
+        Err(e) => {
+            return (
+                Vec::new(),
+                vec![SyncFailure {
+                    node: "本机".to_string(),
+                    error: e.to_string(),
+                }],
+            )
+        }
+    };
+    let mut synced = Vec::new();
+    let mut failed = Vec::new();
+    for (name, addr) in workers {
+        let url = format!("http://{addr}/api/cluster/auth/sync");
+        let body = serde_json::json!({
+            "username": username,
+            "password_hash": password_hash,
+        });
+        match crate::cluster::http::post_json(&url, &token, &body).await {
+            Ok((status, _)) if status.is_success() => synced.push(name),
+            Ok((status, value)) => failed.push(SyncFailure {
+                node: name,
+                error: format!("HTTP {status}: {}", json_error(&value)),
+            }),
+            Err(e) => failed.push(SyncFailure {
+                node: name,
+                error: format!("{e:#}"),
+            }),
+        }
+    }
+    (synced, failed)
+}
+
+/// 将 master 上所有用户推送到指定 worker（新节点加入时调用）。
+pub async fn sync_users_to_worker(state: &AppState, waddr: &str) {
+    let token = state.cluster.token.clone().unwrap_or_default();
+    if token.is_empty() {
+        return;
+    }
+    let users = {
+        let Ok(conn) = state.db.lock() else {
+            return;
+        };
+        match db::list_users(&conn) {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!("读取本机用户列表失败：{e}");
+                return;
+            }
+        }
+    };
+    for user in users {
+        let url = format!("http://{waddr}/api/cluster/auth/sync");
+        let body = serde_json::json!({
+            "username": user.username,
+            "password_hash": user.password_hash,
+        });
+        match crate::cluster::http::post_json(&url, &token, &body).await {
+            Ok((status, _)) if status.is_success() => {
+                tracing::info!("已同步账号 {} 到 {}", body["username"], waddr);
+            }
+            Ok((status, value)) => {
+                tracing::warn!("同步账号到 {waddr} 失败：HTTP {status}: {}", json_error(&value));
+            }
+            Err(e) => {
+                tracing::warn!("同步账号到 {waddr} 失败：{e:#}");
+            }
+        }
+    }
+}
+
+fn json_error(value: &serde_json::Value) -> String {
+    value
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
 }
 
 pub async fn setup(
@@ -315,6 +457,7 @@ mod tests {
         assert!(is_public(&Method::POST, "/api/cluster/heartbeat"));
         assert!(is_public(&Method::GET, "/api/cluster/repo"));
         assert!(is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo/download"));
+        assert!(is_public(&Method::POST, "/api/cluster/auth/sync"));
         assert!(!is_public(&Method::GET, "/api/cluster/nodes"));
         assert!(!is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo"));
         assert!(!is_public(&Method::GET, "/api/cluster/packages/abc/file"));
