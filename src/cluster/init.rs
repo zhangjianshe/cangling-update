@@ -24,6 +24,7 @@ pub const WORKER_SOFTWARE: &[&str] = &[
 ];
 pub const CLUSTER_NAME_KEY: &str = "cluster_name";
 const TRAEFIK_STEP: &str = "traefik-8020/8443";
+const KUBECONFIG_STEP: &str = "~/.kube/config";
 const K3S_TOKEN_PATH: &str = "/var/lib/rancher/k3s/server/node-token";
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -230,6 +231,14 @@ fn build_steps(state: &AppState) -> Vec<InitStep> {
         output: String::new(),
         elapsed_ms: 0,
     });
+    steps.push(InitStep {
+        node: me.clone(),
+        role: "master".to_string(),
+        package: KUBECONFIG_STEP.to_string(),
+        state: "pending".to_string(),
+        output: String::new(),
+        elapsed_ms: 0,
+    });
 
     if let Ok(workers) = online_workers(state) {
         for (wname, _addr) in workers {
@@ -291,6 +300,28 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
             "failed",
             format!("{e:#}"),
             elapsed,
+        ),
+    }
+
+    // 2b) kubectl/k9s 默认 kubeconfig：检查 /root/.kube/config，缺失则从 k3s.yaml 拷贝。
+    update_step(state, &me, KUBECONFIG_STEP, "running", String::new(), 0);
+    let started = Instant::now();
+    match k3s::ensure_kubeconfig() {
+        Ok(msg) => update_step(
+            state,
+            &me,
+            KUBECONFIG_STEP,
+            "ok",
+            msg,
+            started.elapsed().as_millis() as u64,
+        ),
+        Err(e) => update_step(
+            state,
+            &me,
+            KUBECONFIG_STEP,
+            "failed",
+            format!("{e:#}"),
+            started.elapsed().as_millis() as u64,
         ),
     }
 
@@ -458,4 +489,15 @@ fn json_error(value: &serde_json::Value) -> String {
 
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kubeconfig_is_a_post_k3s_step() {
+        assert!(!MASTER_SOFTWARE.contains(&KUBECONFIG_STEP));
+        assert_eq!(KUBECONFIG_STEP, "~/.kube/config");
+    }
 }

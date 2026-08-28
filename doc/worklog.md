@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-08-28 — 检查并修复：补齐 k3s kubeconfig 拷贝
+
+### 做了什么
+原先「检查并修复」只靠重跑 `k3s-server/install.sh` 顺带拷贝 kubeconfig，没有独立步骤；脚本还依赖 `$HOME/.kube/config`，服务进程 HOME 不对时会拷到错误位置。现改为：
+1. 主节点初始化/检查增加独立步骤 `~/.kube/config`：检查 `/root/.kube/config`，缺失或与 `/etc/rancher/k3s/k3s.yaml` 不一致则拷贝（`HOME` 非 `/root` 时同时写入 `$HOME/.kube/config`）。
+2. `k3s::ensure_kubeconfig` 供集群编排与 `fix-k3s` 复用。
+3. `k3s-server/install.sh`（linux-x86 / kylin-arm）固定写入 `/root/.kube/config`；已安装路径先等待 k3s.yaml 再拷贝。
+
+### 涉及文件
+- `src/k3s.rs`、`src/cluster/init.rs`、`src/main.rs`、`src/assets/index.html`
+- `repo-templates/linux-x86/k3s-server/install.sh`、`repo-templates/kylin-arm/k3s-server/install.sh`
+- `README.md`
+
+### 验证
+- 单元测试：缺失则拷贝、内容过期则更新、目录 0700 / 文件 0600。
+- `bash -n` 两个平台 install.sh。
+
+---
+
 ## 2026-08-28 — 软件仓库 3 平台 Tab + worker 下载安装
 
 ### 做了什么

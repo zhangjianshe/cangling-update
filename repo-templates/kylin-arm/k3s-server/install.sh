@@ -10,21 +10,42 @@ DATA_DIR="/var/lib/rancher/k3s"
 IMAGES_DIR="$DATA_DIR/agent/images"
 K3S_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
 
-# k3s 把 kubeconfig 写在自己的路径；kubectl / k9s 默认读 $HOME/.kube/config。
+# k3s 把 kubeconfig 写在自己的路径；kubectl / k9s 默认读 /root/.kube/config。
 ensure_kubeconfig() {
-  local dest_dir="${HOME:-/root}/.kube"
-  local dest="$dest_dir/config"
-  if [ ! -f "$K3S_KUBECONFIG" ]; then
-    echo "!! $K3S_KUBECONFIG 不存在，跳过写入 kubectl/k9s 默认 kubeconfig。" >&2
+  local src="$K3S_KUBECONFIG"
+  local dest="/root/.kube/config"
+  if [ ! -f "$src" ]; then
+    echo "!! $src 不存在，跳过写入 kubectl/k9s 默认 kubeconfig。" >&2
     return 0
   fi
-  install -d -m 700 "$dest_dir"
-  install -m 600 "$K3S_KUBECONFIG" "$dest"
+  install -d -m 700 /root/.kube
+  install -m 600 "$src" "$dest"
   echo "已将 k3s kubeconfig 复制到 $dest（kubectl/k9s 默认路径）。"
+  if [ -n "${HOME:-}" ] && [ "$HOME/.kube/config" != "$dest" ]; then
+    install -d -m 700 "$HOME/.kube"
+    install -m 600 "$src" "$HOME/.kube/config"
+    echo "已将 k3s kubeconfig 复制到 $HOME/.kube/config。"
+  fi
+}
+
+wait_kubeconfig() {
+  if [ -f "$K3S_KUBECONFIG" ]; then
+    return 0
+  fi
+  echo "==> 等待 kubeconfig 生成"
+  local i
+  for i in $(seq 1 30); do
+    if [ -f "$K3S_KUBECONFIG" ]; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 0
 }
 
 if command -v k3s >/dev/null 2>&1; then
   echo "k3s 已安装：$(k3s --version 2>/dev/null | head -1)"
+  wait_kubeconfig
   ensure_kubeconfig
   exit 0
 fi

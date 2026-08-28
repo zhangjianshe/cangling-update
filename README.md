@@ -83,7 +83,8 @@ make arm64
 
 sudo ./cangling-update fix-k3s
 # 若已安装 k3s：在 /var/lib/rancher/k3s/server/manifests/ 写入 traefik-config.yaml
-# 把 Traefik HTTP/HTTPS 默认入口改为 8020 / 8443，然后重启 Traefik；未安装 k3s 时只打印提示
+# 把 Traefik HTTP/HTTPS 默认入口改为 8020 / 8443，然后重启 Traefik；
+# 同时检查 /root/.kube/config，缺失则从 /etc/rancher/k3s/k3s.yaml 拷贝；未安装 k3s 时只打印提示
 
 # 终端彩色查看（仅限本机 / localhost，无需登录；远程访问需先登录）
 curl -s http://localhost:5400/hostinfo
@@ -134,7 +135,7 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 
 主节点控制台的「集群」页面提供**初始化集群**按钮：填写集群名称后一键完成各节点基线软件安装。目标集群可完全离线，所有软件包都从主节点的 `repo/<本机平台>/` 里读取安装脚本执行。
 
-- 主节点：`git`、`samba`、`docker`、`k3s-server`、`k9s`，并在安装 k3s 后写入 Traefik 入口端口覆盖（HTTP 8020 / HTTPS 8443）。
+- 主节点：`git`、`samba`、`docker`、`k3s-server`、`k9s`，并在安装 k3s 后写入 Traefik 入口端口覆盖（HTTP 8020 / HTTPS 8443），检查 `/root/.kube/config`（缺失则从 `/etc/rancher/k3s/k3s.yaml` 拷贝）。
 - 工作节点：`git`、`samba`、`docker`、`k3s-agent`（自动携带 `K3S_URL` / `K3S_TOKEN` 加入集群）。
 - 各软件对应 `repo/<平台>/<软件名>/install.sh`（如 `repo/linux-x86/docker/install.sh`）；安装脚本可通过环境变量 `CANGLING_CLUSTER_NAME`、`K3S_URL`、`K3S_TOKEN` 获取集群信息。
 - 主节点会把 k3s 的 node-token（`/var/lib/rancher/k3s/server/node-token`）下发给各工作节点用于加入。
@@ -450,7 +451,7 @@ cangling-update [选项] [命令]
                        -o / --output     输出路径（默认：程序目录/info.md）
                        网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md（仅限 localhost）
                        内容：软件版本与路径、本机 IP、项目列表、磁盘、内存、CPU/GPU
-  fix-k3s              若已安装 k3s：写入 Traefik 入口配置（HTTP 8020 / HTTPS 8443）并重启 Traefik
+  fix-k3s              若已安装 k3s：写入 Traefik 入口配置（HTTP 8020 / HTTPS 8443）并重启 Traefik；检查 /root/.kube/config 并按需从 k3s.yaml 拷贝
 
 选项：
   --bind               监听地址（环境变量 CANGLING_BIND，默认 0.0.0.0）

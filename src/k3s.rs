@@ -1,4 +1,4 @@
-//! `cangling-update fix-k3s` — write Traefik port overrides into k3s manifests.
+//! `cangling-update fix-k3s` — Traefik 端口覆盖，以及 kubectl/k9s 默认 kubeconfig。
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -13,6 +13,8 @@ const K3S_UNIT_PATHS: &[&str] = &[
 ];
 pub const MANIFESTS_DIR: &str = "/var/lib/rancher/k3s/server/manifests";
 pub const TRAEFIK_CONFIG_NAME: &str = "traefik-config.yaml";
+pub const K3S_KUBECONFIG: &str = "/etc/rancher/k3s/k3s.yaml";
+pub const ROOT_KUBECONFIG: &str = "/root/.kube/config";
 
 pub const TRAEFIK_CONFIG_YAML: &str = "\
 apiVersion: helm.cattle.io/v1
@@ -56,6 +58,64 @@ pub fn ensure_traefik_config() -> Result<String> {
         .with_context(|| format!("写入 {}", dest.display()))?;
     Ok(format!(
         "已写入 Traefik 端口配置（HTTP 8020 / HTTPS 8443）：{}",
+        dest.display()
+    ))
+}
+
+/// 检查 kubectl/k9s 默认 kubeconfig（`/root/.kube/config`），缺失或与 k3s.yaml 不一致则拷贝。
+/// 若 `HOME` 指向其它目录，同时写入 `$HOME/.kube/config`。
+pub fn ensure_kubeconfig() -> Result<String> {
+    let src = Path::new(K3S_KUBECONFIG);
+    if !src.is_file() {
+        bail!(
+            "{} 不存在，无法写入 {}。请确认 k3s server 已启动。",
+            src.display(),
+            ROOT_KUBECONFIG
+        );
+    }
+    let mut dests = vec![PathBuf::from(ROOT_KUBECONFIG)];
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            let extra = PathBuf::from(home).join(".kube").join("config");
+            if extra != dests[0] {
+                dests.push(extra);
+            }
+        }
+    }
+    let mut msgs = Vec::new();
+    for dest in &dests {
+        msgs.push(sync_kubeconfig(src, dest)?);
+    }
+    Ok(msgs.join("\n"))
+}
+
+fn sync_kubeconfig(src: &Path, dest: &Path) -> Result<String> {
+    if dest.is_file() {
+        let src_bytes = std::fs::read(src).with_context(|| format!("读取 {}", src.display()))?;
+        let dest_bytes = std::fs::read(dest).with_context(|| format!("读取 {}", dest.display()))?;
+        if src_bytes == dest_bytes {
+            return Ok(format!("kubeconfig 已存在：{}", dest.display()));
+        }
+    }
+    if let Some(dir) = dest.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("创建 {}，需要 root 权限", dir.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    std::fs::copy(src, dest)
+        .with_context(|| format!("复制 {} → {}，需要 root 权限", src.display(), dest.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("设置权限 {}", dest.display()))?;
+    }
+    Ok(format!(
+        "已将 k3s kubeconfig 复制到 {}（kubectl/k9s 默认路径）",
         dest.display()
     ))
 }
@@ -107,6 +167,15 @@ fn apply(info: &K3sInstall) -> Result<()> {
     eprintln!("  HTTPS (websecure) 443 -> 8443");
 
     restart_traefik(info, &dest)?;
+
+    match ensure_kubeconfig() {
+        Ok(msg) => {
+            for line in msg.lines() {
+                eprintln!("{line}");
+            }
+        }
+        Err(e) => eprintln!("kubeconfig：{e:#}"),
+    }
     Ok(())
 }
 
@@ -370,5 +439,62 @@ mod tests {
     fn traefik_yaml_has_expected_filename() {
         assert_eq!(TRAEFIK_CONFIG_NAME, "traefik-config.yaml");
         assert!(MANIFESTS_DIR.ends_with("/server/manifests"));
+    }
+
+    #[test]
+    fn kubeconfig_paths_are_k3s_defaults() {
+        assert_eq!(K3S_KUBECONFIG, "/etc/rancher/k3s/k3s.yaml");
+        assert_eq!(ROOT_KUBECONFIG, "/root/.kube/config");
+    }
+
+    #[test]
+    fn sync_kubeconfig_copies_when_missing() {
+        let tmp = std::env::temp_dir().join(format!("cangling-kube-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let src = tmp.join("k3s.yaml");
+        let dest = tmp.join(".kube").join("config");
+        std::fs::write(&src, "apiVersion: v1\nkind: Config\n").unwrap();
+
+        let msg = sync_kubeconfig(&src, &dest).unwrap();
+        assert!(msg.contains("复制"), "{msg}");
+        assert_eq!(
+            std::fs::read_to_string(&dest).unwrap(),
+            "apiVersion: v1\nkind: Config\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                std::fs::metadata(dest.parent().unwrap())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+
+        let again = sync_kubeconfig(&src, &dest).unwrap();
+        assert!(again.contains("已存在"), "{again}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn sync_kubeconfig_updates_when_stale() {
+        let tmp = std::env::temp_dir().join(format!("cangling-kube-stale-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join(".kube")).unwrap();
+        let src = tmp.join("k3s.yaml");
+        let dest = tmp.join(".kube").join("config");
+        std::fs::write(&src, "current\n").unwrap();
+        std::fs::write(&dest, "stale\n").unwrap();
+
+        let msg = sync_kubeconfig(&src, &dest).unwrap();
+        assert!(msg.contains("复制"), "{msg}");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "current\n");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

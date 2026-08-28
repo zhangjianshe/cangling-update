@@ -119,7 +119,7 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// 检测 k3s 并写入 Traefik 入口端口配置（HTTP 8020 / HTTPS 8443）
+    /// 检测 k3s：写入 Traefik 入口端口配置（HTTP 8020 / HTTPS 8443），并确保 /root/.kube/config
     #[command(name = "fix-k3s")]
     FixK3s,
 }

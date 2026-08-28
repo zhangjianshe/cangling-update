@@ -1213,7 +1213,7 @@
               <button class="btn primary" id="btn-init-cluster">初始化集群</button>
               <button class="btn" id="btn-check-cluster">检查并修复</button>
             </div>
-            <p class="hint">初始化：全新安装各节点基线软件。检查并修复：对每个节点检查缺失软件并补装（含新加入节点），已安装的会自动跳过。软件来自离线仓库。</p>
+            <p class="hint">初始化：全新安装各节点基线软件。检查并修复：对每个节点检查缺失软件并补装（含新加入节点），已安装的会自动跳过；主节点还会检查 kubectl/k9s 的 <code>~/.kube/config</code>，缺失则从 k3s.yaml 拷贝。软件来自离线仓库。</p>
             <div id="cluster-init-body"></div>
           </div>`
         : "";
