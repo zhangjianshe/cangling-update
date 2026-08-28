@@ -8,9 +8,24 @@ K3S_VERSION="v1.30.13-rc1+k3s1"
 BIN_DIR="/usr/local/bin"
 DATA_DIR="/var/lib/rancher/k3s"
 IMAGES_DIR="$DATA_DIR/agent/images"
+K3S_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+
+# k3s 把 kubeconfig 写在自己的路径；kubectl / k9s 默认读 $HOME/.kube/config。
+ensure_kubeconfig() {
+  local dest_dir="${HOME:-/root}/.kube"
+  local dest="$dest_dir/config"
+  if [ ! -f "$K3S_KUBECONFIG" ]; then
+    echo "!! $K3S_KUBECONFIG 不存在，跳过写入 kubectl/k9s 默认 kubeconfig。" >&2
+    return 0
+  fi
+  install -d -m 700 "$dest_dir"
+  install -m 600 "$K3S_KUBECONFIG" "$dest"
+  echo "已将 k3s kubeconfig 复制到 $dest（kubectl/k9s 默认路径）。"
+}
 
 if command -v k3s >/dev/null 2>&1; then
   echo "k3s 已安装：$(k3s --version 2>/dev/null | head -1)"
+  ensure_kubeconfig
   exit 0
 fi
 
@@ -59,9 +74,9 @@ UNIT
 systemctl daemon-reload
 systemctl enable --now k3s.service
 
-echo "==> 等待 node-token 生成（供工作节点加入）"
+echo "==> 等待 node-token 与 kubeconfig 生成（供工作节点加入、kubectl/k9s 使用）"
 for i in $(seq 1 90); do
-  if [ -f "$DATA_DIR/server/node-token" ]; then
+  if [ -f "$DATA_DIR/server/node-token" ] && [ -f "$K3S_KUBECONFIG" ]; then
     break
   fi
   sleep 2
@@ -71,5 +86,6 @@ if [ -f "$DATA_DIR/server/node-token" ]; then
 else
   echo "!! k3s server 已启动但 3 分钟内未生成 node-token，请用 systemctl status k3s 检查。" >&2
 fi
+ensure_kubeconfig
 
 echo "k3s ${K3S_VERSION} server 安装完成。"
