@@ -47,6 +47,12 @@ pub fn router(state: AppState) -> Router {
             get(crate::repo::download),
         )
         .route("/api/repo/install", post(crate::repo::install))
+        .route("/api/gitrepo/status", get(crate::gitrepo::status))
+        .route("/api/gitrepo/clone", post(crate::gitrepo::clone_repo))
+        .route("/api/gitrepo/pull", post(crate::gitrepo::pull))
+        .route("/api/gitrepo/tree", get(crate::gitrepo::tree))
+        .route("/api/gitrepo/list", get(crate::gitrepo::list))
+        .route("/api/gitrepo/file", get(crate::gitrepo::file))
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/orphans", get(list_orphans))
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))

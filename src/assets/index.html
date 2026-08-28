@@ -372,6 +372,32 @@
     .db-obj.active .ico { color: var(--accent); }
     .db-obj .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .db-obj .k { color: var(--muted); font-size: 12px; margin-right: 6px; }
+    .repo-browser {
+      display: grid; grid-template-columns: 260px minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
+      border: 1px solid var(--line); min-height: 480px; background: var(--bg-2); overflow: hidden;
+    }
+    .repo-tree { overflow: auto; border-right: 1px solid var(--line); min-height: 0; }
+    .repo-tree-item {
+      display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+      border: 0; border-radius: 0; background: transparent; color: var(--text);
+      padding: 6px 10px; border-bottom: 1px solid var(--line-muted); font-size: 13px;
+    }
+    .repo-tree-item:hover { background: var(--bg-3); }
+    .repo-tree-item.active { background: var(--bg-active); }
+    .repo-tree-item .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .repo-files { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+    .repo-files-head { padding: 8px 12px; border-bottom: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); font-size: 13px; flex: 0 0 auto; }
+    .repo-files-list { flex: 0 0 auto; max-height: 40%; overflow: auto; border-bottom: 1px solid var(--line); }
+    .repo-entry {
+      display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+      border: 0; border-radius: 0; background: transparent; color: var(--text);
+      padding: 7px 12px; border-bottom: 1px solid var(--line-muted);
+    }
+    .repo-entry:hover { background: var(--bg-3); }
+    .repo-entry .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .repo-entry .s { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
+    #repo-file-view { flex: 1 1 auto; overflow: auto; min-height: 0; }
     .db-browse {
       display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
     }
@@ -757,7 +783,7 @@
     <div id="combo-list" role="listbox"></div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", gitrepo: null };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1338,7 +1364,181 @@
       state.current = null;
       renderList();
       $("#main").classList.remove("db-fill");
-      loadRepo();
+      if (state.repoMode === "packages") loadRepo();
+      else loadGitRepo();
+    }
+
+    async function loadGitRepo() {
+      try {
+        const [status, tree] = await Promise.all([
+          api("/api/gitrepo/status"),
+          api("/api/gitrepo/tree"),
+        ]);
+        state.gitrepo = { status, tree };
+        renderGitRepoLayout(status, tree);
+      } catch (e) {
+        $("#main").innerHTML = `<div class="card"><h3>软件仓库</h3><p class="hint">${esc(e.message)}</p></div>`;
+      }
+    }
+
+    function renderGitRepoLayout(status, tree) {
+      const s = status || {};
+      const cloned = !!s.is_git;
+      const statusLine = cloned
+        ? `<span>分支 <b>${esc(s.branch || "—")}</b></span>` +
+          `<span>${esc(s.last_commit || "—")}</span>` +
+          (s.dirty ? `<span class="bad">有本地改动</span>` : `<span class="ok">干净</span>`) +
+          `<span title="${esc(s.remote || "")}">${esc(s.remote || "—")}</span>` +
+          `<span>${esc(s.last_commit_time || "")}</span>`
+        : "";
+
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>软件仓库</h2><div class="path">${cloned ? esc(s.root) : "尚未克隆远程仓库"}</div></div>
+          <div class="row">
+            ${cloned
+              ? `<button class="btn primary" id="btn-repo-pull">更新</button>`
+              : `<button class="btn primary" id="btn-repo-clone">克隆仓库</button>`}
+            <button class="btn" id="btn-repo-refresh">刷新</button>
+            <button class="btn" id="btn-repo-pkg">软件包</button>
+          </div>
+        </div>
+        <div id="repo-git-msg" style="margin-bottom:16px"></div>
+        ${cloned ? `<div class="meta" style="margin-bottom:12px">${statusLine}</div>` : ""}
+        ${cloned ? renderGitBrowser() : renderCloneCard()}`;
+
+      const cloneBtn = $("#btn-repo-clone");
+      if (cloneBtn) cloneBtn.onclick = doCloneRepo;
+      const pullBtn = $("#btn-repo-pull");
+      if (pullBtn) pullBtn.onclick = doPullRepo;
+      const refreshBtn = $("#btn-repo-refresh");
+      if (refreshBtn) refreshBtn.onclick = loadGitRepo;
+      const pkgBtn = $("#btn-repo-pkg");
+      if (pkgBtn) pkgBtn.onclick = () => { state.repoMode = "packages"; renderRepo(); };
+
+      if (cloned) {
+        renderRepoTree(tree || []);
+        loadRepoDir(state.repoPath || "");
+      } else {
+        const doClone = $("#btn-do-clone");
+        if (doClone) doClone.onclick = doCloneRepo;
+      }
+    }
+
+    function renderCloneCard() {
+      return `
+        <div class="card">
+          <h3>克隆软件仓库</h3>
+          <p class="hint">从远程仓库下载到本机 <code>repo/</code> 目录，之后即可浏览文件与安装软件包。</p>
+          <div class="field"><label>仓库地址</label><input id="repo-url" type="text" value="https://code.cangling.cn:22002/operation/cangling-repo.git" /></div>
+          <div class="field"><label>用户名（私有仓库需要）</label><input id="repo-user" type="text" autocomplete="off" /></div>
+          <div class="field"><label>密码 / Token</label><input id="repo-pass" type="password" autocomplete="off" /></div>
+          <div class="row"><button class="btn primary" id="btn-do-clone">开始克隆</button></div>
+        </div>`;
+    }
+
+    function renderGitBrowser() {
+      return `
+        <div class="repo-browser">
+          <div class="repo-tree" id="repo-tree"></div>
+          <div class="repo-files" id="repo-files"></div>
+        </div>`;
+    }
+
+    function renderRepoTree(tree) {
+      const el = $("#repo-tree");
+      if (!el) return;
+      const items = [""].concat(tree || []);
+      el.innerHTML = items.map(p => {
+        const depth = p ? p.split("/").length - 1 : 0;
+        const name = p ? p.split("/").pop() : "（根目录）";
+        const active = (state.repoPath || "") === p;
+        return `<button type="button" class="repo-tree-item${active ? " active" : ""}" data-path="${esc(p)}" style="padding-left:${10 + depth * 14}px"><span class="n">${depth > 0 ? "└ " : ""}${esc(name)}</span></button>`;
+      }).join("");
+      el.querySelectorAll(".repo-tree-item").forEach(b => {
+        b.onclick = () => loadRepoDir(b.dataset.path);
+      });
+    }
+
+    async function loadRepoDir(path) {
+      const el = $("#repo-files");
+      if (!el) return;
+      state.repoPath = path || "";
+      renderRepoTree((state.gitrepo && state.gitrepo.tree) || []);
+      el.innerHTML = `<p class="hint" style="padding:12px">加载中…</p>`;
+      try {
+        const entries = await api("/api/gitrepo/list" + (path ? "?path=" + encodeURIComponent(path) : ""));
+        renderRepoEntries(entries || [], path || "");
+      } catch (e) {
+        el.innerHTML = `<p class="hint" style="padding:12px">${esc(e.message)}</p>`;
+      }
+    }
+
+    function renderRepoEntries(entries, currentPath) {
+      const el = $("#repo-files");
+      if (!el) return;
+      const rows = (entries || []).map(e => {
+        const icon = e.kind === "dir" ? "📁" : "📄";
+        const attr = e.kind === "dir" ? `data-dir="${esc(e.path)}"` : `data-file="${esc(e.path)}"`;
+        return `<button type="button" class="repo-entry" ${attr}><span>${icon}</span><span class="n">${esc(e.name)}</span><span class="s">${e.kind === "dir" ? "" : fmtBytes(e.size)}</span></button>`;
+      }).join("");
+      el.innerHTML = `
+        <div class="repo-files-head">${esc(currentPath || "仓库根目录")}</div>
+        <div class="repo-files-list">${rows || `<p class="hint" style="padding:12px">空目录</p>`}</div>
+        <div id="repo-file-view"></div>`;
+      el.querySelectorAll("[data-dir]").forEach(b => {
+        b.onclick = () => loadRepoDir(b.dataset.dir);
+      });
+      el.querySelectorAll("[data-file]").forEach(b => {
+        b.onclick = () => loadRepoFile(b.dataset.file);
+      });
+    }
+
+    async function loadRepoFile(path) {
+      const view = $("#repo-file-view");
+      if (!view) return;
+      view.innerHTML = `<p class="hint" style="padding:12px">加载中…</p>`;
+      try {
+        const f = await api("/api/gitrepo/file?path=" + encodeURIComponent(path));
+        if (f.binary) {
+          view.innerHTML = `<div class="card"><h3>${esc(f.name)}</h3><p class="hint">二进制文件 · ${fmtBytes(f.size)}</p></div>`;
+        } else {
+          view.innerHTML = `<div class="card"><h3>${esc(f.name)} <span class="hint">${fmtBytes(f.size)}${f.truncated ? " · 内容已截断" : ""}</span></h3><pre class="task-log">${esc(f.content)}</pre></div>`;
+        }
+      } catch (e) {
+        view.innerHTML = `<p class="hint" style="padding:12px">${esc(e.message)}</p>`;
+      }
+    }
+
+    async function doCloneRepo() {
+      const msg = $("#repo-git-msg");
+      const url = ($("#repo-url") ? $("#repo-url").value : "").trim();
+      const username = ($("#repo-user") ? $("#repo-user").value : "").trim();
+      const password = $("#repo-pass") ? $("#repo-pass").value : "";
+      if (msg) msg.innerHTML = `<pre class="task-log">正在克隆…</pre>`;
+      try {
+        const r = await api("/api/gitrepo/clone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: url || undefined, username: username || undefined, password: password || undefined }),
+        });
+        if (msg) msg.innerHTML = `<pre class="task-log${r.ok ? "" : " err"}">${esc(r.output || "（无输出）")}</pre>`;
+        if (r.ok) { state.repoPath = ""; await loadGitRepo(); }
+      } catch (e) {
+        if (msg) msg.innerHTML = `<pre class="task-log">克隆失败：${esc(e.message)}</pre>`;
+      }
+    }
+
+    async function doPullRepo() {
+      const msg = $("#repo-git-msg");
+      if (msg) msg.innerHTML = `<pre class="task-log">正在更新…</pre>`;
+      try {
+        const r = await api("/api/gitrepo/pull", { method: "POST" });
+        if (msg) msg.innerHTML = `<pre class="task-log${r.ok ? "" : " err"}">${esc(r.output || "（无输出）")}</pre>`;
+        await loadGitRepo();
+      } catch (e) {
+        if (msg) msg.innerHTML = `<pre class="task-log">更新失败：${esc(e.message)}</pre>`;
+      }
     }
 
     function activeRepoTab(data) {
@@ -1357,7 +1557,10 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>软件仓库</h2><div class="path">${source}</div></div>
-          <button class="btn" onclick="loadRepo()">刷新</button>
+          <div class="row">
+            <button class="btn" id="btn-repo-files">文件浏览</button>
+            <button class="btn" onclick="loadRepo()">刷新</button>
+          </div>
         </div>
         <div id="repo-run-out" style="margin-bottom:16px"></div>
         ${empty ? `
@@ -1381,6 +1584,8 @@
       document.querySelectorAll(".repo-tab").forEach(b => {
         b.onclick = () => { state.repoTab = b.dataset.tab; renderRepoLayout(data); };
       });
+      const filesBtn = $("#btn-repo-files");
+      if (filesBtn) filesBtn.onclick = () => { state.repoMode = "files"; renderRepo(); };
       if (!empty) renderRepoTab(activeRepoTab(data));
     }
 

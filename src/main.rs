@@ -6,6 +6,7 @@ mod db;
 mod dbadmin;
 mod docker;
 mod error;
+mod gitrepo;
 mod hostinfo;
 mod k3s;
 mod models;

@@ -156,6 +156,8 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 >
 > 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。
 
+控制台的「软件仓库」页支持**直接管理该 Git 仓库**：可一键克隆到本机 `repo/`，左侧浏览目录、右侧查看文件，点「更新」拉取最新版本（私有仓库可填用户名/密码或 Token；仓库地址可用环境变量 `CANGLING_REPO_URL` / `CANGLING_REPO_USERNAME` / `CANGLING_REPO_PASSWORD` 覆盖）。
+
 - `repo/kylin-arm/`、`repo/linux-x86/`、`repo/windows/` 三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
 - 包内的**安装脚本**（按优先级识别 `install.sh` / `install.bat` / `install.ps1` / `setup.sh` / `setup.bat` / `setup.ps1`）用于「安装」。脚本首行 `#!`，随后连续 `##` 行会被读作包描述。
 - 主节点（或单机）控制台可对每个包「下载」（打包为 tar.gz）或「安装」（解压到临时目录后运行安装脚本）。
