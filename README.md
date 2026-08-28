@@ -147,6 +147,15 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 
 主节点在可执行文件旁边建立 `repo/` 目录即可启用软件仓库。仓库按平台分 3 个 Tab：**麒麟 OS (ARM)**、**通用 Linux x86**、**Windows**，每个平台子目录下再放软件包。
 
+> 离线软件仓库**独立维护**在 `git@git.cangling.cn:operation/cangling-repo.git`（含各平台 install.sh 与已下载的离线包）。部署时直接克隆为程序目录下的 `repo/`：
+>
+> ```bash
+> cd /opt/cangling-update
+> git clone git@git.cangling.cn:operation/cangling-repo.git repo
+> ```
+>
+> 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。
+
 - `repo/kylin-arm/`、`repo/linux-x86/`、`repo/windows/` 三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
 - 包内的**安装脚本**（按优先级识别 `install.sh` / `install.bat` / `install.ps1` / `setup.sh` / `setup.bat` / `setup.ps1`）用于「安装」。脚本首行 `#!`，随后连续 `##` 行会被读作包描述。
 - 主节点（或单机）控制台可对每个包「下载」（打包为 tar.gz）或「安装」（解压到临时目录后运行安装脚本）。
