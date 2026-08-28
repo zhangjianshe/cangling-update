@@ -1,6 +1,6 @@
 [package]
 name = "cangling-update"
-version = "0.1.55"
+version = "0.1.56"
 edition = "2021"
 description = "Single-binary docker-compose update console with backup and rollback"
 rust-version = "1.74"
