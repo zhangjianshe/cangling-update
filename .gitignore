@@ -14,4 +14,3 @@ repo-templates/**/*.deb
 repo-templates/**/*.rpm
 repo-templates/**/*.tar.gz
 repo-templates/**/k3s
-repo-templates/**/k9s
