@@ -136,6 +136,16 @@ fn strip_credentials(url: &str) -> String {
     }
 }
 
+/// 网络类 git 命令（clone/pull）用非交互 SSH，避免卡在主机密钥/密码提示。
+fn git_net_command() -> Command {
+    let mut c = Command::new("git");
+    c.env(
+        "GIT_SSH_COMMAND",
+        "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+    );
+    c
+}
+
 fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
@@ -206,7 +216,7 @@ fn clone_sync(paths: &AppPaths, body: &CloneBody) -> Result<String, String> {
     let password = body.password.as_deref().or(password_env.as_deref());
     let url = auth_url(&url, username, password);
 
-    let out = Command::new("git")
+    let out = git_net_command()
         .arg("clone")
         .arg(&url)
         .arg(&dir)
@@ -226,7 +236,7 @@ fn pull_sync(paths: &AppPaths) -> Result<String, String> {
     if !dir.join(".git").exists() {
         return Err("尚未克隆仓库，请先点「克隆」".to_string());
     }
-    let out = Command::new("git")
+    let out = git_net_command()
         .arg("-C")
         .arg(&dir)
         .arg("pull")
