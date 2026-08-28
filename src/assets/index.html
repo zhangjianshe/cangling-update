@@ -1391,6 +1391,18 @@
           `<span title="${esc(s.remote || "")}">${esc(s.remote || "—")}</span>` +
           `<span>${esc(s.last_commit_time || "")}</span>`
         : "";
+      const gitWarning = s.git_available === false
+        ? `<div class="card" style="border:1px solid var(--accent)">
+            <h3>⚠ 本机未安装 Git</h3>
+            <p class="hint">拉取软件仓库需要本机安装 <code>git</code>。请在主机上<b>联网</b>执行以下任一命令：</p>
+            <pre class="task-log"># Debian / Ubuntu
+sudo apt-get update && sudo apt-get install -y git
+
+# RHEL / 麒麟（dnf）
+sudo dnf install -y git</pre>
+            <p class="hint">安装说明：<a href="https://git-scm.com/downloads/linux" target="_blank" rel="noopener">https://git-scm.com/downloads/linux</a></p>
+          </div>`
+        : "";
 
       $("#main").innerHTML = `
         <div class="title-row">
@@ -1403,6 +1415,7 @@
             <button class="btn" id="btn-repo-pkg">软件包</button>
           </div>
         </div>
+        ${gitWarning}
         <div id="repo-git-msg" style="margin-bottom:16px"></div>
         ${cloned ? `<div class="meta" style="margin-bottom:12px">${statusLine}</div>` : ""}
         ${cloned ? renderGitBrowser() : renderCloneCard()}`;
@@ -1429,10 +1442,10 @@
       return `
         <div class="card">
           <h3>克隆软件仓库</h3>
-          <p class="hint">从远程仓库下载到本机 <code>repo/</code> 目录，之后即可浏览文件与安装软件包。</p>
+          <p class="hint">从远程仓库下载到本机 <code>repo/</code> 目录。已内置默认仓库地址与只读令牌，用户名/密码<b>留空即可</b>。</p>
           <div class="field"><label>仓库地址</label><input id="repo-url" type="text" value="https://code.cangling.cn:22002/operation/cangling-repo.git" /></div>
-          <div class="field"><label>用户名（私有仓库需要）</label><input id="repo-user" type="text" autocomplete="off" /></div>
-          <div class="field"><label>密码 / Token</label><input id="repo-pass" type="password" autocomplete="off" /></div>
+          <div class="field"><label>用户名（可选，默认已内置）</label><input id="repo-user" type="text" autocomplete="off" placeholder="cangling-update" /></div>
+          <div class="field"><label>密码 / Token（可选，默认已内置）</label><input id="repo-pass" type="password" autocomplete="off" /></div>
           <div class="row"><button class="btn primary" id="btn-do-clone">开始克隆</button></div>
         </div>`;
     }

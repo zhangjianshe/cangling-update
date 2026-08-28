@@ -14,6 +14,9 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 pub const DEFAULT_REPO_URL: &str = "https://code.cangling.cn:22002/operation/cangling-repo.git";
+/// 内置默认凭据（只读部署令牌）：用户名 / Token。可用环境变量覆盖。
+pub const DEFAULT_REPO_USERNAME: &str = "cangling-update";
+pub const DEFAULT_REPO_PASSWORD: &str = "2ab3f3968f50ea8650009f8f8f6f8fde20d8158a";
 /// 文件内容超过该字节数时只返回头部，避免把大文件整个塞进响应。
 const MAX_TEXT_BYTES: usize = 512 * 1024;
 
@@ -21,6 +24,7 @@ const MAX_TEXT_BYTES: usize = 512 * 1024;
 pub struct GitRepoStatus {
     pub exists: bool,
     pub is_git: bool,
+    pub git_available: bool,
     pub root: String,
     pub branch: String,
     pub remote: String,
@@ -78,15 +82,32 @@ fn env_repo_url() -> String {
         .unwrap_or_else(|| DEFAULT_REPO_URL.to_string())
 }
 
-fn env_username() -> Option<String> {
-    std::env::var("CANGLING_REPO_USERNAME").ok().filter(|s| !s.trim().is_empty())
+fn env_username() -> String {
+    std::env::var("CANGLING_REPO_USERNAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_REPO_USERNAME.to_string())
 }
 
-fn env_password() -> Option<String> {
+fn env_password() -> String {
     std::env::var("CANGLING_REPO_PASSWORD")
         .or_else(|_| std::env::var("CANGLING_REPO_TOKEN"))
         .ok()
-        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| DEFAULT_REPO_PASSWORD.to_string())
+}
+
+/// 本机是否安装了 git 命令。
+fn git_available() -> bool {
+    Command::new("git")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// 把用户名/密码（或 token）嵌入 HTTPS/HTTP 地址，供克隆与后续 pull 使用。
@@ -169,6 +190,7 @@ fn status_sync(paths: &AppPaths) -> GitRepoStatus {
     let mut s = GitRepoStatus {
         exists,
         is_git,
+        git_available: git_available(),
         root: dir.display().to_string(),
         ..Default::default()
     };
@@ -212,9 +234,19 @@ fn clone_sync(paths: &AppPaths, body: &CloneBody) -> Result<String, String> {
         .unwrap_or_else(env_repo_url);
     let username_env = env_username();
     let password_env = env_password();
-    let username = body.username.as_deref().or(username_env.as_deref());
-    let password = body.password.as_deref().or(password_env.as_deref());
-    let url = auth_url(&url, username, password);
+    let username = body
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(username_env.as_str());
+    let password = body
+        .password
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(password_env.as_str());
+    let url = auth_url(&url, Some(username), Some(password));
 
     let out = git_net_command()
         .arg("clone")
