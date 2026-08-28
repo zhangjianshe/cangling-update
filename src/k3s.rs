@@ -44,6 +44,22 @@ pub fn fix() -> Result<()> {
     }
 }
 
+/// 供集群初始化调用：确保 Traefik 端口覆盖 manifest 已写入（best-effort）。
+pub fn ensure_traefik_config() -> Result<String> {
+    let manifests = PathBuf::from(MANIFESTS_DIR);
+    if !manifests.is_dir() {
+        std::fs::create_dir_all(&manifests)
+            .with_context(|| format!("创建 {}，需要 root 权限", manifests.display()))?;
+    }
+    let dest = manifests.join(TRAEFIK_CONFIG_NAME);
+    std::fs::write(&dest, TRAEFIK_CONFIG_YAML)
+        .with_context(|| format!("写入 {}", dest.display()))?;
+    Ok(format!(
+        "已写入 Traefik 端口配置（HTTP 8020 / HTTPS 8443）：{}",
+        dest.display()
+    ))
+}
+
 fn detect() -> Option<K3sInstall> {
     let binary = find_k3s_binary();
     let data_dir = Path::new(K3S_DATA_DIR).is_dir();

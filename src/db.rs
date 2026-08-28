@@ -106,8 +106,26 @@ CREATE TABLE IF NOT EXISTS portal_items (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_portal_items_sort ON portal_items(sort_order, created_at);
+CREATE TABLE IF NOT EXISTS cluster_nodes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    addr TEXT NOT NULL DEFAULT '',
+    version TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'worker',
+    info_json TEXT NOT NULL DEFAULT '{}',
+    registered_at TEXT NOT NULL,
+    last_seen TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cluster_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#,
     )?;
+    let _ = conn.execute(
+        "ALTER TABLE cluster_nodes ADD COLUMN role TEXT NOT NULL DEFAULT 'worker'",
+        [],
+    );
     ensure_portal_seeded(&conn)?;
     Ok(conn)
 }
@@ -522,6 +540,22 @@ pub fn portal_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
 pub fn set_portal_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     conn.execute(
         "INSERT INTO portal_settings (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, value],
+    )?;
+    Ok(())
+}
+
+pub fn cluster_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM cluster_settings WHERE key = ?1")?;
+    stmt.query_row(params![key], |r| r.get(0))
+        .optional()
+        .map_err(Into::into)
+}
+
+pub fn set_cluster_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO cluster_settings (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params![key, value],
     )?;

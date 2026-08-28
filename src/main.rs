@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod backup;
+mod cluster;
 mod db;
 mod dbadmin;
 mod docker;
@@ -11,6 +12,7 @@ mod models;
 mod paths;
 mod portal;
 mod progress;
+mod repo;
 mod service;
 mod state;
 mod term;
@@ -46,6 +48,22 @@ struct Cli {
     /// Config directory (default: <executable-dir>/config)
     #[arg(long, env = "CANGLING_HOME", global = true)]
     data_dir: Option<PathBuf>,
+
+    /// 集群角色：standalone（默认）/ master / worker
+    #[arg(long, env = "CANGLING_ROLE", default_value = "standalone")]
+    role: String,
+
+    /// master 地址（worker 角色用），例如 http://10.1.1.5:5400；不填则 UDP 广播自动发现
+    #[arg(long, env = "CANGLING_MASTER")]
+    master: Option<String>,
+
+    /// 集群共享令牌（master / worker 角色必须一致）
+    #[arg(long, env = "CANGLING_CLUSTER_TOKEN")]
+    cluster_token: Option<String>,
+
+    /// UDP 发现端口（默认 5401）
+    #[arg(long, env = "CANGLING_DISCOVERY_PORT", default_value_t = cluster::DEFAULT_DISCOVERY_PORT)]
+    discovery_port: u16,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -135,6 +153,18 @@ async fn main() -> anyhow::Result<()> {
     let paths = AppPaths::resolve(cli.data_dir)?;
     init_logging(&paths.log_file);
 
+    let cluster_cfg = cluster::ClusterConfig {
+        role: cluster::Role::parse(&cli.role).map_err(|e| anyhow::anyhow!("{e}"))?,
+        token: cli.cluster_token.clone(),
+        master_url: cli.master.clone(),
+        discovery_port: cli.discovery_port,
+    };
+    if matches!(cluster_cfg.role, cluster::Role::Master | cluster::Role::Worker)
+        && cluster_cfg.token.as_deref().map(str::trim).unwrap_or("").is_empty()
+    {
+        bail!("集群角色 master/worker 需要 --cluster-token（或 CANGLING_CLUSTER_TOKEN）");
+    }
+
     let conn = db::open(&paths.db_path)?;
     let docker = Docker::detect().await;
     let docker_meta = docker.meta().await;
@@ -155,8 +185,27 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .with_context(|| format!("invalid listen address {}:{}", cli.bind, cli.port))?;
 
-    let state = AppState::new(paths, conn, docker, cli.port);
-    let app = api::router(state);
+    let state = AppState::new(paths, conn, docker, cli.port, cluster_cfg.clone());
+    let app = api::router(state.clone());
+
+    // 集群后台任务
+    if cluster_cfg.role == cluster::Role::Master {
+        tokio::spawn(cluster::server::maintain_self_node(state.clone()));
+        if let Some(cid) = cluster_cfg.cluster_id() {
+            let announce = hostinfo::primary_ip();
+            let port = cluster_cfg.discovery_port;
+            let http_port = cli.port;
+            let cid = cid.clone();
+            tokio::spawn(async move {
+                if let Err(err) = cluster::discovery::serve(port, &cid, &announce, http_port).await
+                {
+                    tracing::error!("集群发现服务退出：{err:#}");
+                }
+            });
+        }
+    } else if cluster_cfg.role == cluster::Role::Worker {
+        tokio::spawn(cluster::client::run(state.clone()));
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("web interface http://{addr}");

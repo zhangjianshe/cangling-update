@@ -9,14 +9,16 @@ use std::process::Command;
 
 const UNIT_PATH: &str = "/etc/systemd/system/cangling-update.service";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Software {
     pub name: String,
     pub version: String,
     pub path: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DiskMount {
     pub mount: String,
     pub filesystem: String,
@@ -25,7 +27,8 @@ pub struct DiskMount {
     pub avail: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct MemInfo {
     pub total: u64,
     pub used: u64,
@@ -34,7 +37,8 @@ pub struct MemInfo {
     pub swap_used: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CpuInfo {
     pub arch: String,
     pub model: String,
@@ -42,7 +46,8 @@ pub struct CpuInfo {
     pub sockets: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct GpuInfo {
     pub name: String,
     pub arch: String,
@@ -50,7 +55,8 @@ pub struct GpuInfo {
     pub source: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct HostSnapshot {
     pub generated_at: String,
     pub hostname: String,
@@ -737,7 +743,7 @@ fn hostname() -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-fn primary_ip() -> String {
+pub fn primary_ip() -> String {
     if let Some(s) = cmd_out("ip", &["-4", "route", "get", "1.1.1.1"]) {
         let parts: Vec<&str> = s.split_whitespace().collect();
         if let Some(i) = parts.iter().position(|p| *p == "src") {

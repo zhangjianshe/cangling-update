@@ -28,6 +28,14 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     ) {
         return true;
     }
+    // 机器间接口由 cluster::require_cluster_token 单独认证，不走登录会话。
+    if matches!(path, "/api/cluster/register" | "/api/cluster/heartbeat")
+        || path == "/api/cluster/repo"
+        || path == "/api/cluster/init/run"
+        || (path.starts_with("/api/cluster/repo/") && path.ends_with("/download"))
+    {
+        return true;
+    }
     method == Method::GET && path == "/api/portal"
 }
 
@@ -303,5 +311,13 @@ mod tests {
         assert!(is_hostinfo_path("/hostinfo.md"));
         assert!(!is_hostinfo_path("/hostinfo?color=0"));
         assert!(!is_public(&Method::GET, "/api/projects"));
+        assert!(is_public(&Method::POST, "/api/cluster/register"));
+        assert!(is_public(&Method::POST, "/api/cluster/heartbeat"));
+        assert!(is_public(&Method::GET, "/api/cluster/repo"));
+        assert!(is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo/download"));
+        assert!(!is_public(&Method::GET, "/api/cluster/nodes"));
+        assert!(!is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo"));
+        assert!(!is_public(&Method::GET, "/api/cluster/packages/abc/file"));
+        assert!(!is_public(&Method::POST, "/api/cluster/tasks/run"));
     }
 }

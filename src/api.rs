@@ -40,6 +40,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/jobs", post(create_job))
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/meta", get(meta))
+        .route("/api/repo", get(crate::repo::list))
+        .route(
+            "/api/repo/{tab}/{package}/download",
+            get(crate::repo::download),
+        )
+        .route("/api/repo/install", post(crate::repo::install))
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/orphans", get(list_orphans))
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
@@ -116,6 +122,27 @@ pub fn router(state: AppState) -> Router {
             get(vendor_iosevka_regular),
         )
         .route("/vendor/iosevka-term-bold.woff2", get(vendor_iosevka_bold))
+        .route(
+            "/api/cluster/nodes",
+            get(crate::cluster::server::list_nodes),
+        )
+        .route(
+            "/api/cluster/status",
+            get(crate::cluster::server::cluster_status),
+        )
+        .route(
+            "/api/cluster/init",
+            post(crate::cluster::init::start_init),
+        )
+        .route(
+            "/api/cluster/check",
+            post(crate::cluster::init::start_check),
+        )
+        .route(
+            "/api/cluster/init/status",
+            get(crate::cluster::init::status),
+        )
+        .merge(crate::cluster::server::m2m_routes(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

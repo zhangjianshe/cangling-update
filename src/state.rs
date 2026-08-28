@@ -1,3 +1,4 @@
+use crate::cluster::ClusterConfig;
 use crate::docker::Docker;
 use crate::paths::AppPaths;
 use crate::progress::JobHub;
@@ -16,10 +17,21 @@ pub struct AppState {
     pub jobs: JobHub,
     pub port: u16,
     pub login_guard: LoginGuard,
+    pub cluster: ClusterConfig,
+    /// worker 侧当前发现的 master 地址（无则 None），供仓库代理等复用。
+    pub master_url: Arc<Mutex<Option<String>>>,
+    /// 集群初始化进度。
+    pub init: crate::cluster::init::InitState,
 }
 
 impl AppState {
-    pub fn new(paths: AppPaths, db: Connection, docker: Docker, port: u16) -> Self {
+    pub fn new(
+        paths: AppPaths,
+        db: Connection,
+        docker: Docker,
+        port: u16,
+        cluster: ClusterConfig,
+    ) -> Self {
         Self {
             paths,
             db: Arc::new(Mutex::new(db)),
@@ -28,6 +40,9 @@ impl AppState {
             jobs: JobHub::default(),
             port,
             login_guard: LoginGuard::new(),
+            master_url: Arc::new(Mutex::new(cluster.master_url.clone())),
+            init: Arc::new(Mutex::new(crate::cluster::init::InitStatus::default())),
+            cluster,
         }
     }
 

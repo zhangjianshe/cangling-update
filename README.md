@@ -98,15 +98,82 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 | `--bind` / `CANGLING_BIND` | `0.0.0.0` | 监听地址 |
 | `--port` / `CANGLING_PORT` | `5400` | 监听端口 |
 | `--data-dir` / `CANGLING_HOME` | `<程序目录>/config` | 数据目录 |
+| `--role` / `CANGLING_ROLE` | `standalone` | 集群角色：standalone / master / worker |
+| `--master` / `CANGLING_MASTER` | （无） | master 地址（worker 角色用）；不填则 UDP 广播发现 |
+| `--cluster-token` / `CANGLING_CLUSTER_TOKEN` | （无） | 集群共享令牌（master/worker 必须一致） |
+| `--discovery-port` / `CANGLING_DISCOVERY_PORT` | `5401` | UDP 发现端口 |
 
 ```bash
 ./cangling-update --bind 0.0.0.0 --port 5400
 ./cangling-update --data-dir /var/lib/cangling-update
 ```
 
+## 集群（多节点）
+
+同一个可执行文件可以组成「主节点 + 工作节点」的集群：主节点收集各节点信息（主机名、IP、磁盘/内存/CPU/GPU、软件、项目列表），网页控制台左侧「集群」入口可查看节点在线状态与每台主机的信息。主节点启动后也会把自己登记进节点列表并保持在线。
+
+- 所有节点使用**相同的 `--cluster-token`**（机器间认证，与网页登录账号无关）。
+- 工作节点每 15 秒向主节点发一次心跳，45 秒无心跳判定为离线；完整主机信息在注册时采集、之后每 5 分钟刷新一次。
+- 工作节点不填 `--master` 时，通过 **UDP 广播**（端口 `5401`，可用 `--discovery-port` 修改）自动发现主节点；广播里只携带令牌哈希，不发送令牌明文。子网屏蔽广播时请显式指定 `--master`。
+
+```bash
+# 主节点
+./cangling-update --role master --cluster-token '共享口令'
+
+# 工作节点（自动发现主节点）
+./cangling-update --role worker --cluster-token '共享口令'
+
+# 工作节点（显式指定主节点）
+./cangling-update --role worker --cluster-token '共享口令' --master http://主节点IP:5400
+```
+
+> master / worker 角色必须设置令牌，否则拒绝启动。节点身份保存在各节点数据目录的 `node-id` 文件中，重启后保持不变。
+
+### 集群初始化（离线）
+
+主节点控制台的「集群」页面提供**初始化集群**按钮：填写集群名称后一键完成各节点基线软件安装。目标集群可完全离线，所有软件包都从主节点的 `repo/<本机平台>/` 里读取安装脚本执行。
+
+- 主节点：`git`、`samba`、`docker`、`k3s-server`、`k9s`，并在安装 k3s 后写入 Traefik 入口端口覆盖（HTTP 8020 / HTTPS 8443）。
+- 工作节点：`git`、`samba`、`docker`、`k3s-agent`（自动携带 `K3S_URL` / `K3S_TOKEN` 加入集群）。
+- 各软件对应 `repo/<平台>/<软件名>/install.sh`（如 `repo/linux-x86/docker/install.sh`）；安装脚本可通过环境变量 `CANGLING_CLUSTER_NAME`、`K3S_URL`、`K3S_TOKEN` 获取集群信息。
+- 主节点会把 k3s 的 node-token（`/var/lib/rancher/k3s/server/node-token`）下发给各工作节点用于加入。
+
 进程需要对 Docker 有权限（加入 `docker` 组，或用 root）。备份/恢复要保留文件属主时，建议用 root 跑。
 
 本程序启动时若 Docker 守护进程还没起来，页面会显示「守护进程未就绪」，此时不能做基线备份或 Compose 操作。Docker 启动后页面会自动恢复，不必重启本程序。已安装过服务的机器请再执行一次 `install-service`，以便开机时先拉起 docker。
+
+## 软件仓库（repo）
+
+主节点在可执行文件旁边建立 `repo/` 目录即可启用软件仓库。仓库按平台分 3 个 Tab：**麒麟 OS (ARM)**、**通用 Linux x86**、**Windows**，每个平台子目录下再放软件包。
+
+- `repo/kylin-arm/`、`repo/linux-x86/`、`repo/windows/` 三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
+- 包内的**安装脚本**（按优先级识别 `install.sh` / `install.bat` / `install.ps1` / `setup.sh` / `setup.bat` / `setup.ps1`）用于「安装」。脚本首行 `#!`，随后连续 `##` 行会被读作包描述。
+- 主节点（或单机）控制台可对每个包「下载」（打包为 tar.gz）或「安装」（解压到临时目录后运行安装脚本）。
+- **工作节点**的「软件仓库」入口拉取的是**主节点的仓库**：可下载，也可「下载并安装」——先通过机器间接口从主节点取包，再在本机运行安装脚本。「安装」按钮只在包平台与本机平台（按架构归入 kylin-arm / linux-x86）匹配时可用。
+
+```bash
+mkdir -p repo/linux-x86/demo
+cat > repo/linux-x86/demo/install.sh <<'EOF'
+#!/bin/bash
+## 打印一行问候语。
+echo "你好，苍灵"
+EOF
+chmod +x repo/linux-x86/demo/install.sh
+```
+
+```text
+cangling-update                 # 可执行文件
+repo/                           # 软件仓库根目录
+  kylin-arm/                    # 麒麟 OS (ARM)
+    软件包/
+      install.sh
+  linux-x86/                    # 通用 Linux x86
+    软件包/
+      install.sh
+  windows/                      # Windows
+    软件包/
+      install.bat
+```
 
 ## 安装为系统服务
 
@@ -350,6 +417,10 @@ cangling-update [选项] [命令]
   --bind               监听地址（环境变量 CANGLING_BIND，默认 0.0.0.0）
   --port               监听端口（环境变量 CANGLING_PORT，默认 5400）
   --data-dir           数据目录（环境变量 CANGLING_HOME，默认 <程序目录>/config）
+  --role               集群角色（环境变量 CANGLING_ROLE，默认 standalone）
+  --master             master 地址（环境变量 CANGLING_MASTER；worker 不填则 UDP 广播发现）
+  --cluster-token      集群共享令牌（环境变量 CANGLING_CLUSTER_TOKEN）
+  --discovery-port     UDP 发现端口（环境变量 CANGLING_DISCOVERY_PORT，默认 5401）
 ```
 
 

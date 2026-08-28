@@ -171,6 +171,27 @@
     .pitem.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
     .pitem .n { font-weight: 600; display: block; }
     .pitem .d { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cluster-nav {
+      width: calc(100% - 32px); margin: 14px 16px 0; text-align: left;
+      display: flex; align-items: center; gap: 8px; font-weight: 600;
+    }
+    .cluster-nav.active { border-color: var(--accent-emphasis); background: var(--bg-active); }
+    .cluster-table { width: 100%; border-collapse: collapse; }
+    .cluster-table th, .cluster-table td {
+      text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .cluster-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .dot.online { background: var(--success); }
+    .dot.offline { background: var(--danger); }
+    .task-log {
+      margin: 0; white-space: pre-wrap; word-break: break-all;
+      max-height: 320px; overflow: auto; background: var(--bg-input);
+      padding: 10px; font-size: 13px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .check { display: flex; align-items: center; gap: 6px; margin: 4px 0; color: var(--text); }
     main {
       min-width: 0; min-height: 0; overflow: auto; padding: 22px 26px 40px;
       display: flex; flex-direction: column;
@@ -680,6 +701,22 @@
     </header>
     <div class="shell">
       <aside>
+        <button type="button" class="btn cluster-nav" id="btn-cluster" title="集群管理">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <circle cx="3" cy="3" r="2" fill="currentColor"/>
+            <circle cx="13" cy="3" r="2" fill="currentColor"/>
+            <circle cx="8" cy="13" r="2" fill="currentColor"/>
+            <path stroke="currentColor" stroke-width="1" fill="none" d="M4.5 4.5 6.8 11.5M11.5 4.5 9.2 11.5M5 3h6"/>
+          </svg>
+          集群
+        </button>
+        <button type="button" class="btn cluster-nav" id="btn-repo" title="软件仓库">
+          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <path fill="currentColor" d="M8 1.2 14.8 4.4v7.2L8 14.8 1.2 11.6V4.4z"/>
+            <path fill="currentColor" opacity=".55" d="M1.2 4.4 8 7.5l6.8-3.1M8 7.5v7.3"/>
+          </svg>
+          软件仓库
+        </button>
         <div class="aside-head">
           <h2>项目</h2>
           <button class="btn primary" id="btn-new">新建</button>
@@ -719,7 +756,7 @@
     <div id="combo-list" role="listbox"></div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers" };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -745,6 +782,8 @@
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null };
     const composePoll = { timer: null, inflight: false };
     const metaPoll = { timer: null, inflight: false };
+    const clusterPoll = { timer: null, inflight: false };
+    const initPoll = { timer: null, inflight: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
@@ -994,14 +1033,380 @@
 
     function route() {
       stopComposePoll();
+      stopClusterPoll();
       comboClose();
       closeDialog();
       setNav(false);
       const hash = location.hash || "#/";
+      const btn = $("#btn-cluster");
+      if (btn) btn.classList.toggle("active", hash === "#/cluster");
+      const repoBtn = $("#btn-repo");
+      if (repoBtn) repoBtn.classList.toggle("active", hash === "#/repo");
       if (hash === "#/new") return renderNew();
+      if (hash === "#/cluster") return renderCluster();
+      if (hash === "#/repo") return renderRepo();
       const m = hash.match(/^#\/p\/([^/]+)$/);
       if (m) return openProject(m[1]);
       renderHome();
+    }
+
+    function stopClusterPoll() {
+      if (clusterPoll.timer) { clearInterval(clusterPoll.timer); clusterPoll.timer = null; }
+      stopInitPoll();
+    }
+
+    function stopInitPoll() {
+      if (initPoll.timer) { clearInterval(initPoll.timer); initPoll.timer = null; }
+    }
+
+    async function renderCluster() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      await loadCluster(true);
+      startClusterPoll();
+    }
+
+    async function loadCluster(first = false) {
+      if (clusterPoll.inflight) return;
+      clusterPoll.inflight = true;
+      try {
+        const [st, nodes] = await Promise.all([
+          api("/api/cluster/status"),
+          api("/api/cluster/nodes"),
+        ]);
+        state.clusterNodes = nodes || [];
+        if (first || !document.getElementById("cluster-overview")) {
+          renderClusterLayout(st);
+        }
+        updateClusterOverview(st);
+        updateNodeTable();
+        loadInitStatus();
+      } catch (e) {
+        $("#main").innerHTML = `<div class="card"><h3>集群</h3><p class="hint">${esc(e.message)}</p></div>`;
+      } finally {
+        clusterPoll.inflight = false;
+      }
+    }
+
+    function startClusterPoll() {
+      stopClusterPoll();
+      clusterPoll.timer = setInterval(loadCluster, 5000);
+    }
+
+    function fmtDateTime(s) {
+      if (!s) return "—";
+      const d = new Date(s);
+      if (isNaN(d)) return s;
+      const p = (x) => String(x).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    function renderClusterLayout(st) {
+      const roleName = { standalone: "单机", master: "主节点", worker: "工作节点" }[st.role] || st.role;
+      if (st.role === "standalone") {
+        $("#main").innerHTML = `
+          <div class="title-row"><div><h2>集群</h2><div class="path">多机部署与节点管理</div></div></div>
+          <div class="card">
+            <h3>当前为单机模式</h3>
+            <p class="hint">本程序未启用集群。以不同角色启动即可组成集群：</p>
+            <p class="hint">
+              主节点：<code>./cangling-update --role master --cluster-token 共享口令</code><br/>
+              工作节点：<code>./cangling-update --role worker --cluster-token 共享口令</code><br/>
+              工作节点不填 <code>--master</code> 时，会通过 UDP 广播（端口 5401）自动发现主节点；也可用 <code>--master http://主节点:5400</code> 显式指定。
+            </p>
+          </div>`;
+        return;
+      }
+      const workerNote = st.role === "worker"
+        ? `<div class="card"><h3>工作节点</h3><p class="hint">本机作为工作节点运行，向主节点上报主机信息与心跳。</p></div>`
+        : "";
+      const initCard = st.role === "master"
+        ? `<div class="card">
+            <h3>初始化 / 检查修复</h3>
+            <div class="row" style="margin-bottom:8px">
+              <input id="cluster-name" type="text" placeholder="集群名称" value="${esc(st.name || "")}" style="max-width:240px" />
+              <button class="btn primary" id="btn-init-cluster">初始化集群</button>
+              <button class="btn" id="btn-check-cluster">检查并修复</button>
+            </div>
+            <p class="hint">初始化：全新安装各节点基线软件。检查并修复：对每个节点检查缺失软件并补装（含新加入节点），已安装的会自动跳过。软件来自离线仓库。</p>
+            <div id="cluster-init-body"></div>
+          </div>`
+        : "";
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>集群</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
+        </div>
+        <div id="flash" hidden></div>
+        <div class="card"><h3>概览</h3><p class="hint" id="cluster-overview"></p></div>
+        ${initCard}
+        <div class="card"><h3>节点列表</h3><div id="nodes-body"></div></div>
+        ${workerNote}`;
+      const initBtn = $("#btn-init-cluster");
+      if (initBtn) initBtn.onclick = startClusterInit;
+      const checkBtn = $("#btn-check-cluster");
+      if (checkBtn) checkBtn.onclick = startClusterCheck;
+    }
+
+    function updateClusterOverview(st) {
+      const el = $("#cluster-overview");
+      if (el) el.textContent = `节点 ${st.node_count} 个 · 在线 ${st.online} 个 · 离线 ${st.node_count - st.online} 个`;
+    }
+
+    async function loadInitStatus() {
+      const body = $("#cluster-init-body");
+      if (!body || initPoll.inflight) return;
+      initPoll.inflight = true;
+      try {
+        const init = await api("/api/cluster/init/status");
+        state.initStatus = init;
+        renderInitStatus(init);
+      } catch (e) {
+        body.innerHTML = `<p class="hint">${esc(e.message)}</p>`;
+      } finally {
+        initPoll.inflight = false;
+      }
+    }
+
+    function renderInitStatus(init) {
+      const body = $("#cluster-init-body");
+      if (!body) return;
+      if (!init.running && !init.started_at) {
+        stopInitPoll();
+        body.innerHTML = `<p class="hint">尚未初始化。填写集群名称后点击「初始化集群」。</p>`;
+        return;
+      }
+      if (!init.running) stopInitPoll();
+      const badgeMap = { pending: "待执行", running: "进行中", ok: "成功", failed: "失败" };
+      const clsMap = { ok: "ok", failed: "bad", running: "", pending: "" };
+      const rows = (init.steps || []).map(s => `
+        <tr>
+          <td class="path">${esc(s.node)}</td>
+          <td>${s.role === "master" ? "主节点" : "工作节点"}</td>
+          <td>${esc(s.package)}</td>
+          <td><span class="${clsMap[s.state] || ""}">${badgeMap[s.state] || esc(s.state)}</span></td>
+          <td>${s.elapsed_ms ? s.elapsed_ms + " ms" : "—"}</td>
+          <td>${s.output ? `<pre class="task-log" style="max-height:140px">${esc(s.output)}</pre>` : "—"}</td>
+        </tr>`).join("");
+      body.innerHTML = `
+        ${init.error ? `<p class="hint"><span class="bad">${esc(init.error)}</span></p>` : ""}
+        ${init.running ? `<p class="hint">${init.mode === "check" ? "正在检查并修复" : "正在初始化"}集群「${esc(init.cluster_name)}」…</p>` : ""}
+        <table class="cluster-table">
+          <thead><tr><th>节点</th><th>角色</th><th>软件</th><th>状态</th><th>耗时</th><th>输出</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="6" class="hint">暂无步骤</td></tr>`}</tbody>
+        </table>`;
+    }
+
+    async function startClusterInit() {
+      const nameEl = $("#cluster-name");
+      const name = (nameEl && nameEl.value || "").trim();
+      if (!name) { flash("err", "请填写集群名称"); return; }
+      const btn = $("#btn-init-cluster");
+      if (btn) btn.disabled = true;
+      try {
+        await api("/api/cluster/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        flash("ok", "已开始初始化集群，请稍候…");
+        await loadInitStatus();
+        initPoll.timer = setInterval(() => { loadInitStatus(); }, 3000);
+      } catch (e) {
+        flash("err", e.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    async function startClusterCheck() {
+      const btn = $("#btn-check-cluster");
+      if (btn) btn.disabled = true;
+      try {
+        await api("/api/cluster/check", { method: "POST" });
+        flash("ok", "已开始检查并修复各节点…");
+        await loadInitStatus();
+        initPoll.timer = setInterval(() => { loadInitStatus(); }, 3000);
+      } catch (e) {
+        flash("err", e.message);
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    function updateNodeTable() {
+      const el = $("#nodes-body");
+      if (!el) return;
+      const rows = (state.clusterNodes || []).map(n => {
+        const h = n.host || {};
+        const disks = h.disks || [];
+        const rootDisk = disks.length ? disks[0].total : 0;
+        const gpus = h.gpus || [];
+        const gpuText = gpus.length
+          ? gpus.map(g => `${esc(g.name)} ×${g.count}`).join(" · ")
+          : "—";
+        return `<tr>
+          <td><span class="dot ${n.status}"></span>${n.status === "online" ? "在线" : "离线"}</td>
+          <td><span class="hint">${esc(n.role || "—")}</span></td>
+          <td>${esc(n.name)}</td>
+          <td>${esc(n.addr || "—")}</td>
+          <td>${esc(n.version || "—")}</td>
+          <td>${esc(h.primary_ip || "—")}</td>
+          <td>${h.cpu ? esc(h.cpu.model || "") + " · " + h.cpu.logical_cpus + " 核" : "—"}</td>
+          <td>${h.mem && h.mem.total ? fmtBytes(h.mem.total) : "—"}</td>
+          <td>${rootDisk ? fmtBytes(rootDisk) : "—"}</td>
+          <td>${gpuText}</td>
+          <td>${(h.projects || []).length}</td>
+          <td>${fmtDateTime(n.last_seen)}</td>
+        </tr>`;
+      }).join("");
+      el.innerHTML = `<table class="cluster-table">
+        <thead><tr><th>状态</th><th>类型</th><th>名称</th><th>地址</th><th>版本</th><th>主 IP</th><th>CPU</th><th>内存</th><th>磁盘</th><th>GPU</th><th>项目</th><th>最后心跳</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="12" class="hint">暂无节点</td></tr>`}</tbody>
+      </table>`;
+    }
+
+    async function loadRepo() {
+      try {
+        const data = await api("/api/repo");
+        state.repo = data;
+        renderRepoLayout(data);
+      } catch (e) {
+        $("#main").innerHTML = `<div class="card"><h3>软件仓库</h3><p class="hint">${esc(e.message)}</p></div>`;
+      }
+    }
+
+    function renderRepo() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      loadRepo();
+    }
+
+    function activeRepoTab(data) {
+      const tabs = data.tabs || [];
+      if (state.repoTab && tabs.some(t => t.id === state.repoTab)) return state.repoTab;
+      if (tabs.some(t => t.id === data.host_platform)) return data.host_platform;
+      return (tabs[0] && tabs[0].id) || "";
+    }
+
+    function renderRepoLayout(data) {
+      const tabs = data.tabs || [];
+      const source = data.remote
+        ? `来自主节点 ${esc(data.master || "")}`
+        : `本地仓库 ${esc(data.root)}`;
+      const empty = (!data.exists && !data.remote);
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>软件仓库</h2><div class="path">${source}</div></div>
+          <button class="btn" onclick="loadRepo()">刷新</button>
+        </div>
+        <div id="repo-run-out" style="margin-bottom:16px"></div>
+        ${empty ? `
+          <div class="card">
+            <h3>未找到仓库目录</h3>
+            <p class="hint">在可执行文件旁建立 <code>repo/</code>，按平台分子目录，每个子目录是一个软件包：</p>
+            <pre class="task-log">repo/
+  kylin-arm/     # 麒麟 OS (ARM)
+  linux-x86/     # 通用 Linux x86
+  windows/       # Windows
+    └── 软件包/
+         ├── install.sh   # 安装脚本
+         └── ...</pre>
+            <button class="btn primary" onclick="loadRepo()">重新扫描</button>
+          </div>` : `
+          <div class="tabs">
+            ${tabs.map(t => `<button type="button" class="tab repo-tab${t.id === activeRepoTab(data) ? " active" : ""}" data-tab="${esc(t.id)}">${esc(t.name)}</button>`).join("")}
+          </div>
+          <div id="repo-tab-body"></div>`}`;
+
+      document.querySelectorAll(".repo-tab").forEach(b => {
+        b.onclick = () => { state.repoTab = b.dataset.tab; renderRepoLayout(data); };
+      });
+      if (!empty) renderRepoTab(activeRepoTab(data));
+    }
+
+    function renderRepoTab(tabId) {
+      const data = state.repo;
+      const tab = (data.tabs || []).find(t => t.id === tabId);
+      const body = $("#repo-tab-body");
+      if (!body) return;
+      if (!tab) { body.innerHTML = `<div class="card"><p class="hint">暂无内容</p></div>`; return; }
+      const packages = tab.packages || [];
+      const cards = packages.map(pkg => {
+        const installable = !!pkg.install && tab.id === data.host_platform;
+        return `<div class="card">
+          <h3>${esc(pkg.name)}</h3>
+          <div class="hint" style="white-space:pre-line;margin-bottom:8px">${esc(pkg.description || "—")}</div>
+          <p class="path">${pkg.file_count} 个文件 · ${fmtBytes(pkg.bytes)}${pkg.install ? ` · 安装脚本 <code>${esc(pkg.install)}</code>` : ""}</p>
+          <div class="row" style="margin-top:10px">
+            <button class="btn" data-download="${esc(tab.id)}|${esc(pkg.name)}">下载</button>
+            <button class="btn primary" data-install="${esc(tab.id)}|${esc(pkg.name)}" ${installable ? "" : "disabled"} title="${installable ? "下载并运行安装脚本" : "该平台与当前节点不匹配"}">安装</button>
+          </div>
+        </div>`;
+      }).join("");
+      body.innerHTML = packages.length ? cards : `<div class="card"><p class="hint">该平台暂无软件包，请在 <code>repo/${esc(tab.id)}/</code> 下建立软件包子目录（内含安装脚本 install.sh）。</p></div>`;
+
+      body.querySelectorAll("[data-download]").forEach(b => {
+        b.onclick = () => downloadRepoPkg(b.dataset.download);
+      });
+      body.querySelectorAll("[data-install]").forEach(b => {
+        b.onclick = () => installRepoPkg(b.dataset.install);
+      });
+    }
+
+    async function downloadRepoPkg(key) {
+      const [tab, pkg] = key.split("|");
+      const out = $("#repo-run-out");
+      if (out) out.innerHTML = `<pre class="task-log">正在打包 ${esc(pkg)} …</pre>`;
+      try {
+        const res = await fetch(`/api/repo/${encodeURIComponent(tab)}/${encodeURIComponent(pkg)}/download`, { credentials: "same-origin" });
+        if (res.status === 401) {
+          showGate("请先登录或登录已过期");
+          throw new Error("请先登录或登录已过期");
+        }
+        if (!res.ok) {
+          const text = await res.text();
+          let msg = text;
+          try { msg = JSON.parse(text).error || text; } catch {}
+          throw new Error(msg || res.statusText);
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${pkg}.tar.gz`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        if (out) out.innerHTML = `<p class="hint ok">已开始下载 ${esc(pkg)}.tar.gz</p>`;
+      } catch (e) {
+        if (out) out.innerHTML = `<pre class="task-log">下载失败：${esc(e.message)}</pre>`;
+      }
+    }
+
+    async function installRepoPkg(key) {
+      const [tab, pkg] = key.split("|");
+      const out = $("#repo-run-out");
+      if (!out) return;
+      out.innerHTML = `<pre class="task-log">正在下载并安装 ${esc(pkg)} …</pre>`;
+      document.querySelectorAll("#repo-tab-body [data-install], #repo-tab-body [data-download]").forEach(b => { b.disabled = true; });
+      try {
+        const r = await api("/api/repo/install", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ tab, package: pkg }),
+        });
+        const body = ((r.stdout || "") + (r.stderr || "")).trim();
+        const exit = r.exit_code == null ? "无" : r.exit_code;
+        out.innerHTML = `<pre class="task-log">${esc(body || "（无输出）")}</pre>
+          <p class="hint">安装脚本 <code>${esc(r.installer)}</code> · 退出码 ${exit} · 耗时 ${r.elapsed_ms} ms${r.timed_out ? " · 已超时" : ""}</p>`;
+      } catch (e) {
+        out.innerHTML = `<pre class="task-log">安装失败：${esc(e.message)}</pre>`;
+      } finally {
+        document.querySelectorAll("#repo-tab-body [data-install], #repo-tab-body [data-download]").forEach(b => { b.disabled = false; });
+      }
     }
 
     function renderHome() {
@@ -1290,7 +1695,7 @@
               <tbody>${items.map(o => `<tr>
                 <td class="path">${esc(o.id)}</td>
                 <td>${fmtBytes(o.bytes || 0)}</td>
-                <td>${esc((o.modified || "").replace("T", " ").slice(0, 19) || "—")}</td>
+                <td>${esc(fmtDateTime(o.modified))}</td>
                 <td class="path">${esc(o.path)}</td>
                 <td><button class="btn danger" data-orphan="${esc(o.id)}">清理</button></td>
               </tr>`).join("")}</tbody>
@@ -1513,7 +1918,7 @@
           ].join("<br/>") || "—"}</td>
           <td>${fmtBytes(v.app_bytes || 0)}</td>
           <td>${fmtBytes(v.backup_bytes || 0)}</td>
-          <td>${esc((v.created_at || "").replace("T", " ").slice(0, 19))}</td>
+          <td>${esc(fmtDateTime(v.created_at))}</td>
           <td>${v.is_current ? "" : `<button class="btn" data-restore="${esc(v.id)}" ${state.busy ? "disabled" : ""}>${state.busy === "restore" ? "恢复中…" : "恢复"}</button>`}</td>
         </tr>`).join("");
       const sizeHint = state.versions.length
@@ -3060,7 +3465,7 @@
         return `<button type="button" class="rev-item${active ? " active" : ""}" data-rev="${esc(r.id)}">
           <span class="rev-h">r${r.rev_no} ${esc(COMPOSE_REV_KIND[r.kind] || r.kind)}${onDisk ? ` <span class="pill latest">当前</span>` : ""}</span>
           <span class="rev-n">${esc(r.note || "（无备注）")}</span>
-          <span class="rev-t">${esc((r.created_at || "").replace("T", " ").slice(0, 19))} · ${fmtBytes(r.bytes || 0)}</span>
+          <span class="rev-t">${esc(fmtDateTime(r.created_at))} · ${fmtBytes(r.bytes || 0)}</span>
           ${onDisk ? "" : `<span class="row" style="margin-top:6px;justify-content:flex-start"><span class="btn" data-restore-rev="${esc(r.id)}">恢复此版本</span></span>`}
         </button>`;
       }).join("");
@@ -3381,6 +3786,8 @@
     $("#dialog-close").onclick = requestCloseDialog;
     $("#dialog-foot-close").onclick = requestCloseDialog;
     $("#btn-new").onclick = () => location.hash = "#/new";
+    $("#btn-cluster").onclick = () => location.hash = "#/cluster";
+    $("#btn-repo").onclick = () => location.hash = "#/repo";
     $("#btn-logout").onclick = () => logout();
     function setNav(open) {
       const aside = document.querySelector("aside");
