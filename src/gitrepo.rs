@@ -125,7 +125,11 @@ fn auth_url(base: &str, username: Option<&str>, password: Option<&str>) -> Strin
     let Some(rest) = rest else {
         return base.to_string();
     };
-    let scheme = if base.starts_with("https://") { "https" } else { "http" };
+    let scheme = if base.starts_with("https://") {
+        "https"
+    } else {
+        "http"
+    };
     format!("{scheme}://{}:{}@{}", url_encode(u), url_encode(p), rest)
 }
 
@@ -150,7 +154,11 @@ fn strip_credentials(url: &str) -> String {
         return url.to_string();
     };
     if let Some(at) = rest.find('@') {
-        let scheme = if url.starts_with("https://") { "https" } else { "http" };
+        let scheme = if url.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        };
         format!("{scheme}://{}", &rest[at + 1..])
     } else {
         url.to_string()
@@ -177,7 +185,11 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
-        let msg = if stderr.is_empty() { stdout.clone() } else { stderr };
+        let msg = if stderr.is_empty() {
+            stdout.clone()
+        } else {
+            stderr
+        };
         return Err(msg);
     }
     Ok(stdout)
@@ -386,7 +398,10 @@ fn file_sync(paths: &AppPaths, rel: &str) -> Result<RepoFileView, AppError> {
     let (content, truncated) = if binary {
         (String::new(), false)
     } else if bytes.len() > MAX_TEXT_BYTES {
-        (String::from_utf8_lossy(&bytes[..MAX_TEXT_BYTES]).into_owned(), true)
+        (
+            String::from_utf8_lossy(&bytes[..MAX_TEXT_BYTES]).into_owned(),
+            true,
+        )
     } else {
         (String::from_utf8_lossy(&bytes).into_owned(), false)
     };
@@ -424,7 +439,10 @@ pub async fn clone_repo(
     };
     tokio::task::spawn_blocking(move || match clone_sync(&paths, &body) {
         Ok(output) => GitOpResult { ok: true, output },
-        Err(e) => GitOpResult { ok: false, output: e },
+        Err(e) => GitOpResult {
+            ok: false,
+            output: e,
+        },
     })
     .await
     .map(Json)
@@ -435,7 +453,10 @@ pub async fn pull(State(state): State<AppState>) -> Result<Json<GitOpResult>, Ap
     let paths = state.paths.clone();
     tokio::task::spawn_blocking(move || match pull_sync(&paths) {
         Ok(output) => GitOpResult { ok: true, output },
-        Err(e) => GitOpResult { ok: false, output: e },
+        Err(e) => GitOpResult {
+            ok: false,
+            output: e,
+        },
     })
     .await
     .map(Json)
@@ -517,7 +538,10 @@ mod tests {
     fn resolve_rel_rejects_traversal() {
         let root = Path::new("/tmp/repo");
         assert_eq!(resolve_rel(root, "").unwrap(), root);
-        assert_eq!(resolve_rel(root, "kylin-arm/git").unwrap(), root.join("kylin-arm/git"));
+        assert_eq!(
+            resolve_rel(root, "kylin-arm/git").unwrap(),
+            root.join("kylin-arm/git")
+        );
         assert!(resolve_rel(root, "/etc").is_err());
         assert!(resolve_rel(root, "../evil").is_err());
         assert!(resolve_rel(root, "a/../../b").is_err());

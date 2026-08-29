@@ -28,6 +28,7 @@ pub async fn run(state: AppState) {
     let mut registered = false;
     let mut failures: u32 = 0;
     let mut last_snapshot: Option<Instant> = None;
+    let mut upgrade_backoff_until: Option<Instant> = None;
 
     tracing::info!(
         node_id = %node_id,
@@ -55,14 +56,41 @@ pub async fn run(state: AppState) {
                 .map(|t| t.elapsed() >= SNAPSHOT_REFRESH)
                 .unwrap_or(true);
             match tick(&state, &node_id, m, registered, want_snapshot).await {
-                Ok(Tick::Ok) => {
+                Ok((Tick::Ok, upgrade)) => {
                     registered = true;
                     failures = 0;
                     if want_snapshot {
                         last_snapshot = Some(Instant::now());
                     }
+                    if let Some(offer) = upgrade {
+                        let blocked = upgrade_backoff_until
+                            .map(|t| Instant::now() < t)
+                            .unwrap_or(false);
+                        if blocked {
+                            tracing::debug!("升级失败后冷却中，暂不重试");
+                        } else {
+                            let token = state.cluster.token.as_deref().unwrap_or_default();
+                            tracing::info!(
+                                "master 要求升级到 v{}（{}）",
+                                offer.version,
+                                offer.arch
+                            );
+                            match crate::cluster::self_update::apply(m, token, &offer).await {
+                                Ok(crate::cluster::self_update::ApplyOutcome::Done) => {
+                                    tracing::info!("程序已写入 v{}，等待重启生效", offer.version);
+                                }
+                                Ok(crate::cluster::self_update::ApplyOutcome::InProgress) => {}
+                                Err(err) => {
+                                    tracing::warn!("自动升级失败：{err:#}");
+                                    upgrade_backoff_until = Some(
+                                        Instant::now() + crate::cluster::self_update::retry_delay(),
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
-                Ok(Tick::Reregister) => {
+                Ok((Tick::Reregister, _)) => {
                     registered = false;
                 }
                 Err(err) => {
@@ -89,7 +117,7 @@ async fn tick(
     master: &str,
     registered: bool,
     want_snapshot: bool,
-) -> Result<Tick> {
+) -> Result<(Tick, Option<crate::cluster::self_update::UpgradeOffer>)> {
     let token = state.cluster.token.as_deref().unwrap_or_default();
 
     if !registered {
@@ -99,6 +127,7 @@ async fn tick(
             "name": snap.hostname,
             "addr": format!("{}:{}", snap.primary_ip, state.port),
             "version": env!("CARGO_PKG_VERSION"),
+            "arch": std::env::consts::ARCH,
             "host": snap,
         });
         let url = format!("{master}/api/cluster/register");
@@ -114,7 +143,8 @@ async fn tick(
             bail!("注册失败 {status}: {resp}");
         }
         tracing::info!("已注册到 master {master}（{node_id}）");
-        return Ok(Tick::Ok);
+        let upgrade = crate::cluster::self_update::parse_offer(&resp);
+        return Ok((Tick::Ok, upgrade));
     }
 
     let host = if want_snapshot {
@@ -122,24 +152,26 @@ async fn tick(
     } else {
         None
     };
-    let body = json!({ "id": node_id, "host": host });
+    let body = json!({
+        "id": node_id,
+        "version": env!("CARGO_PKG_VERSION"),
+        "arch": std::env::consts::ARCH,
+        "host": host,
+    });
     let url = format!("{master}/api/cluster/heartbeat");
     let (status, resp) = http::post_json(&url, token, &body)
         .await
         .with_context(|| format!("心跳到 {url}"))?;
-    if status == axum::http::StatusCode::UNAUTHORIZED
-        || status == axum::http::StatusCode::FORBIDDEN
+    if status == axum::http::StatusCode::UNAUTHORIZED || status == axum::http::StatusCode::FORBIDDEN
     {
         tracing::error!("心跳被 master 拒绝（集群令牌可能不一致）：{resp}");
     }
     if !status.is_success() {
         bail!("心跳失败 {status}: {resp}");
     }
-    let known = resp
-        .get("known")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    Ok(if known { Tick::Ok } else { Tick::Reregister })
+    let known = resp.get("known").and_then(|v| v.as_bool()).unwrap_or(true);
+    let upgrade = crate::cluster::self_update::parse_offer(&resp);
+    Ok((if known { Tick::Ok } else { Tick::Reregister }, upgrade))
 }
 
 async fn collect_snapshot(paths: &AppPaths) -> HostSnapshot {

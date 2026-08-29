@@ -196,8 +196,8 @@ async fn remote_index(state: &AppState) -> Result<RepoIndex, AppError> {
             json_error(&value)
         )));
     }
-    let mut idx: RepoIndex =
-        serde_json::from_value(value).map_err(|e| AppError::bad(format!("解析仓库数据失败：{e}")))?;
+    let mut idx: RepoIndex = serde_json::from_value(value)
+        .map_err(|e| AppError::bad(format!("解析仓库数据失败：{e}")))?;
     idx.remote = true;
     idx.master = Some(master);
     idx.host_platform = host_platform().to_string();
@@ -350,7 +350,11 @@ pub fn scan_index(paths: &AppPaths) -> RepoIndex {
 
 fn scan_tab(dir: &FsPath) -> Vec<RepoPackage> {
     let mut packages = Vec::new();
-    let mut entries: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
     entries.sort_by_key(|e| e.path());
     for entry in entries {
         let path = entry.path();
@@ -424,11 +428,7 @@ fn find_installer(files: &[String]) -> Option<String> {
     }
     // 兜底：install* / setup*
     for f in files {
-        let base = f
-            .rsplit('/')
-            .next()
-            .unwrap_or(f)
-            .to_ascii_lowercase();
+        let base = f.rsplit('/').next().unwrap_or(f).to_ascii_lowercase();
         if base.starts_with("install") || base.starts_with("setup") {
             return Some(f.clone());
         }
@@ -513,7 +513,9 @@ pub fn build_tarball(root: &FsPath, tab: &str, package: &str) -> Result<Vec<u8>,
     let mut tar = tar::Builder::new(enc);
     tar.follow_symlinks(false);
     append_dir_recursive(&mut tar, &dir, "")?;
-    let enc = tar.into_inner().map_err(|e| AppError::internal(e.to_string()))?;
+    let enc = tar
+        .into_inner()
+        .map_err(|e| AppError::internal(e.to_string()))?;
     enc.finish().map_err(|e| AppError::internal(e.to_string()))
 }
 
@@ -682,7 +684,10 @@ fn first_line(path: &FsPath) -> Option<String> {
     let mut reader = std::io::BufReader::new(file);
     let mut line = String::new();
     reader.read_line(&mut line).ok()?;
-    Some(line.trim_end_matches(|c| c == '\n' || c == '\r').to_string())
+    Some(
+        line.trim_end_matches(|c| c == '\n' || c == '\r')
+            .to_string(),
+    )
 }
 
 fn is_executable_path(path: &FsPath) -> bool {
@@ -764,7 +769,10 @@ mod tests {
             "README.md".to_string(),
         ];
         assert_eq!(find_installer(&files).as_deref(), Some("install.sh"));
-        assert_eq!(find_installer(&["setup.bat".to_string()]).as_deref(), Some("setup.bat"));
+        assert_eq!(
+            find_installer(&["setup.bat".to_string()]).as_deref(),
+            Some("setup.bat")
+        );
         assert!(find_installer(&["readme.txt".to_string()]).is_none());
     }
 

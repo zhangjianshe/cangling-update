@@ -162,10 +162,7 @@ fn spawn_pty(
     let mut child = pair.slave.spawn_command(cmd)?;
     drop(pair.slave);
 
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .context("clone pty reader")?;
+    let mut reader = pair.master.try_clone_reader().context("clone pty reader")?;
     let mut writer = pair.master.take_writer().context("take pty writer")?;
     let master = Arc::new(Mutex::new(pair.master));
 

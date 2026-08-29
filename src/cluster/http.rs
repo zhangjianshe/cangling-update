@@ -50,10 +50,7 @@ pub async fn post_json(
 }
 
 /// GET 到 master，返回 (状态码, 响应 JSON)。
-pub async fn get_json(
-    url: &str,
-    token: &str,
-) -> Result<(StatusCode, serde_json::Value)> {
+pub async fn get_json(url: &str, token: &str) -> Result<(StatusCode, serde_json::Value)> {
     let (status, bytes) = get_bytes(url, token).await?;
     let json = if bytes.is_empty() {
         serde_json::Value::Null

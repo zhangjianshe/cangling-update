@@ -1160,6 +1160,7 @@
           api("/api/cluster/nodes"),
         ]);
         state.clusterNodes = nodes || [];
+        state.clusterStatus = st;
         if (first || !document.getElementById("cluster-overview")) {
           renderClusterLayout(st);
         }
@@ -1222,7 +1223,7 @@
           <div><h2>集群</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
         </div>
         <div id="flash" hidden></div>
-        <div class="card"><h3>概览</h3><p class="hint" id="cluster-overview"></p></div>
+        <div class="card"><h3>概览</h3><p class="hint" id="cluster-overview"></p><p class="hint" id="cluster-binaries-hint" hidden></p></div>
         <div class="card"><h3>节点列表</h3><div id="nodes-body"></div></div>
         ${initCard}
         ${workerNote}`;
@@ -1234,7 +1235,28 @@
 
     function updateClusterOverview(st) {
       const el = $("#cluster-overview");
-      if (el) el.textContent = `节点 ${st.node_count} 个 · 在线 ${st.online} 个 · 离线 ${st.node_count - st.online} 个`;
+      if (!el) return;
+      let text = `节点 ${st.node_count} 个 · 在线 ${st.online} 个 · 离线 ${st.node_count - st.online} 个`;
+      if (st.version) text += ` · 主程序 v${st.version}`;
+      const bins = st.binaries || [];
+      if (bins.length) {
+        const parts = bins.map(b => b.available
+          ? `${b.label} 已就绪`
+          : `${b.label} 缺失`);
+        text += ` · 升级包 ${parts.join(" / ")}`;
+      }
+      el.textContent = text;
+      const hint = $("#cluster-binaries-hint");
+      if (hint) {
+        const missing = bins.filter(b => !b.available);
+        if (st.role === "master" && missing.length) {
+          hint.hidden = false;
+          hint.innerHTML = `缺少 ${missing.map(b => esc(b.label)).join("、")} 升级包，该架构的工作节点无法自动升级。把对应二进制放到程序目录 <code>updates/</code>（<code>cangling-update-linux-amd64</code> / <code>cangling-update-linux-arm64</code>），或在主节点执行 <code>cangling-update update</code> / <code>update --import 文件</code>。`;
+        } else {
+          hint.hidden = true;
+          hint.textContent = "";
+        }
+      }
     }
 
     async function loadInitStatus() {
@@ -1321,6 +1343,7 @@
     function updateNodeTable() {
       const el = $("#nodes-body");
       if (!el) return;
+      const masterVer = ((state.clusterStatus || {}).version || "").replace(/^v/, "");
       const rows = (state.clusterNodes || []).map(n => {
         const h = n.host || {};
         const disks = h.disks || [];
@@ -1329,12 +1352,17 @@
         const gpuText = gpus.length
           ? gpus.map(g => `${esc(g.name)} ×${g.count}`).join(" · ")
           : "—";
+        const nodeVer = String(n.version || "").replace(/^v/, "");
+        const outdated = n.role === "worker" && masterVer && nodeVer && nodeVer !== masterVer;
+        const verCell = outdated
+          ? `<span class="bad" title="低于主节点，注册/心跳时将自动升级">${esc(n.version)} → ${esc(masterVer)}</span>`
+          : esc(n.version || "—");
         return `<tr>
           <td><span class="dot ${n.status}"></span>${n.status === "online" ? "在线" : "离线"}</td>
           <td><span class="hint">${esc(n.role || "—")}</span></td>
           <td>${esc(n.name)}</td>
           <td>${esc(n.addr || "—")}</td>
-          <td>${esc(n.version || "—")}</td>
+          <td>${verCell}</td>
           <td>${esc(h.primary_ip || "—")}</td>
           <td>${h.cpu ? esc(h.cpu.model || "") + " · " + h.cpu.logical_cpus + " 核" : "—"}</td>
           <td>${h.mem && h.mem.total ? fmtBytes(h.mem.total) : "—"}</td>

@@ -106,7 +106,9 @@ pub fn require_absolute_dir(path: &str) -> Result<PathBuf> {
     if !p.is_absolute() {
         bail!("目录必须是本机绝对路径");
     }
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
         bail!("目录路径不能包含 '..'");
     }
     if !p.exists() {
@@ -251,8 +253,7 @@ pub fn compose_draft_path(path: &Path) -> PathBuf {
 pub fn write_text_atomic(path: &Path, content: &str) -> Result<()> {
     let draft = compose_draft_path(path);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     std::fs::write(&draft, content).with_context(|| format!("write {}", draft.display()))?;
     commit_compose_draft(path, &draft)
@@ -332,7 +333,10 @@ pub fn parse_compose_jar_mounts(compose_text: &str) -> Vec<JarMount> {
     for raw in compose_text.lines() {
         if leading_spaces(raw) == 2 {
             if let Some(name) = raw.trim().strip_suffix(':') {
-                if !name.is_empty() && !name.contains(' ') && !name.contains(':') && !name.starts_with('#')
+                if !name.is_empty()
+                    && !name.contains(' ')
+                    && !name.contains(':')
+                    && !name.starts_with('#')
                 {
                     current_service = name.to_string();
                 }

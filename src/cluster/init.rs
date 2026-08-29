@@ -17,11 +17,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 pub const MASTER_SOFTWARE: &[&str] = &[
-    "git", "samba", "docker", "docker-compose", "k3s-server", "k9s",
+    "git",
+    "samba",
+    "docker",
+    "docker-compose",
+    "k3s-server",
+    "k9s",
 ];
-pub const WORKER_SOFTWARE: &[&str] = &[
-    "git", "samba", "docker", "docker-compose", "k3s-agent",
-];
+pub const WORKER_SOFTWARE: &[&str] = &["git", "samba", "docker", "docker-compose", "k3s-agent"];
 pub const CLUSTER_NAME_KEY: &str = "cluster_name";
 const TRAEFIK_STEP: &str = "traefik-8020/8443";
 const KUBECONFIG_STEP: &str = "~/.kube/config";
@@ -89,7 +92,9 @@ pub async fn start_init(
 }
 
 /// 控制台（登录态）入口：检查各节点并修复（含新加入节点），使用已保存的集群名。
-pub async fn start_check(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
+pub async fn start_check(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
     let name = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         db::cluster_setting(&conn, CLUSTER_NAME_KEY)?.unwrap_or_default()
@@ -146,7 +151,10 @@ pub async fn run_worker_init(
     let mut ok = true;
     for pkg in &body.software {
         let envs = vec![
-            ("CANGLING_CLUSTER_NAME".to_string(), body.cluster_name.clone()),
+            (
+                "CANGLING_CLUSTER_NAME".to_string(),
+                body.cluster_name.clone(),
+            ),
             ("K3S_URL".to_string(), body.k3s_url.clone()),
             ("K3S_TOKEN".to_string(), body.k3s_token.clone()),
         ];
@@ -406,7 +414,14 @@ fn mark_worker_failed(state: &AppState, wname: &str, msg: String) {
     }
 }
 
-fn update_step(state: &AppState, node: &str, package: &str, new_state: &str, output: String, elapsed_ms: u64) {
+fn update_step(
+    state: &AppState,
+    node: &str,
+    package: &str,
+    new_state: &str,
+    output: String,
+    elapsed_ms: u64,
+) {
     if let Ok(mut st) = state.init.lock() {
         for s in st.steps.iter_mut() {
             if s.node == node && s.package == package {

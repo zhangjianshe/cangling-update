@@ -144,11 +144,17 @@ fn strip_sql_lead(sql: &str) -> String {
     let mut s = sql.trim();
     loop {
         if s.starts_with("--") {
-            s = s.split_once('\n').map(|(_, rest)| rest.trim()).unwrap_or("");
+            s = s
+                .split_once('\n')
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
             continue;
         }
         if s.starts_with("/*") {
-            s = s.split_once("*/").map(|(_, rest)| rest.trim()).unwrap_or("");
+            s = s
+                .split_once("*/")
+                .map(|(_, rest)| rest.trim())
+                .unwrap_or("");
             continue;
         }
         break;
@@ -252,7 +258,8 @@ async fn probe_conn(docker: &Docker, dir: &Path, service: &str) -> Result<PgConn
     let env = printenv(docker, dir, service).await.unwrap_or_default();
     let default_database = env_value(&env, "POSTGRES_DB").unwrap_or_else(|| "postgres".into());
     let user = env_value(&env, "POSTGRES_USER").unwrap_or_else(|| "postgres".into());
-    let password = env_value(&env, "POSTGRES_PASS").or_else(|| env_value(&env, "POSTGRES_PASSWORD"));
+    let password =
+        env_value(&env, "POSTGRES_PASS").or_else(|| env_value(&env, "POSTGRES_PASSWORD"));
 
     let candidates = [
         PgConn {
@@ -283,10 +290,17 @@ async fn probe_conn(docker: &Docker, dir: &Path, service: &str) -> Result<PgConn
         match try_psql(docker, dir, service, &conn, "postgres", "SELECT 1").await {
             Ok(s) if s.trim().starts_with('1') => return Ok(conn),
             Ok(_) => {
-                if try_psql(docker, dir, service, &conn, &conn.default_database, "SELECT 1")
-                    .await
-                    .map(|s| s.trim().starts_with('1'))
-                    .unwrap_or(false)
+                if try_psql(
+                    docker,
+                    dir,
+                    service,
+                    &conn,
+                    &conn.default_database,
+                    "SELECT 1",
+                )
+                .await
+                .map(|s| s.trim().starts_with('1'))
+                .unwrap_or(false)
                 {
                     return Ok(conn);
                 }
@@ -500,8 +514,13 @@ pub async fn update_row(
     dir: &Path,
     body: &UpdateRowBody,
 ) -> Result<UpdateRowResult, AppError> {
-    crate::docker::validate_service_name(&body.service).map_err(|e| AppError::bad(e.to_string()))?;
-    let fq = format!("{}.{}", quote_ident(&body.schema)?, quote_ident(&body.table)?);
+    crate::docker::validate_service_name(&body.service)
+        .map_err(|e| AppError::bad(e.to_string()))?;
+    let fq = format!(
+        "{}.{}",
+        quote_ident(&body.schema)?,
+        quote_ident(&body.table)?
+    );
     let _ = quote_ident(&body.database)?;
     if body.values.is_empty() || body.keys.is_empty() {
         return Err(AppError::bad("缺少要更新的行"));
@@ -566,7 +585,8 @@ pub async fn delete_row(
     dir: &Path,
     body: &DeleteRowBody,
 ) -> Result<DeleteRowResult, AppError> {
-    crate::docker::validate_service_name(&body.service).map_err(|e| AppError::bad(e.to_string()))?;
+    crate::docker::validate_service_name(&body.service)
+        .map_err(|e| AppError::bad(e.to_string()))?;
     let _ = quote_ident(&body.database)?;
     let sql = delete_row_sql(&body.schema, &body.table, &body.keys)?;
     let conn = probe_conn(docker, dir, &body.service).await?;
@@ -714,31 +734,52 @@ mod tests {
 
     #[test]
     fn json_rows() {
-        let (cols, rows) = rows_from_json_agg(r#"[{"id":1,"name":"a"},{"id":2,"name":"b"}]"#).unwrap();
+        let (cols, rows) =
+            rows_from_json_agg(r#"[{"id":1,"name":"a"},{"id":2,"name":"b"}]"#).unwrap();
         assert!(cols.contains(&"id".into()));
         assert_eq!(rows.len(), 2);
     }
 
     #[test]
     fn filter_clauses() {
-        let f = RowFilter { column: "name".into(), op: "contains".into(), value: "Ab".into() };
+        let f = RowFilter {
+            column: "name".into(),
+            op: "contains".into(),
+            value: "Ab".into(),
+        };
         assert_eq!(
             row_filter_clause(&f).unwrap(),
             "strpos(lower(\"name\"::text), lower('Ab')) > 0"
         );
-        let f = RowFilter { column: "name".into(), op: "eq".into(), value: "a'b".into() };
+        let f = RowFilter {
+            column: "name".into(),
+            op: "eq".into(),
+            value: "a'b".into(),
+        };
         assert_eq!(
             row_filter_clause(&f).unwrap(),
             "lower(\"name\"::text) = lower('a''b')"
         );
-        let f = RowFilter { column: "x".into(), op: "prefix".into(), value: "Ab".into() };
+        let f = RowFilter {
+            column: "x".into(),
+            op: "prefix".into(),
+            value: "Ab".into(),
+        };
         assert_eq!(
             row_filter_clause(&f).unwrap(),
             "left(lower(\"x\"::text), char_length('Ab')) = lower('Ab')"
         );
-        let f = RowFilter { column: "x".into(), op: "unknown".into(), value: "z".into() };
+        let f = RowFilter {
+            column: "x".into(),
+            op: "unknown".into(),
+            value: "z".into(),
+        };
         assert!(row_filter_clause(&f).unwrap().contains("strpos"));
-        let f = RowFilter { column: "x".into(), op: "contains".into(), value: "   ".into() };
+        let f = RowFilter {
+            column: "x".into(),
+            op: "contains".into(),
+            value: "   ".into(),
+        };
         assert_eq!(row_filter_clause(&f).unwrap(), "");
     }
 

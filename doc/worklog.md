@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-08-29 — worker 注册时自动升级 cangling-update（双架构）
+
+### 做了什么
+1. 主节点在程序目录 `updates/` 同时保存 x86_64 / ARM64 两份 `cangling-update` 二进制。启动时把正在运行的本机架构写入对应槽位；另一架构通过 `cangling-update update`（GitHub 一次拉两份）或 `update --import` / 手工拷贝补齐。
+2. worker 注册与心跳携带 `version` + `arch`。master 若发现 worker 版本更旧，且 `updates/` 里有对应架构文件，则在响应里下发升级要约。
+3. worker 按要约从 `GET /api/cluster/self-update/{linux-amd64|linux-arm64}` 下载，校验 ELF 架构与 `version` 子命令后替换本机程序，再 `systemctl restart --no-block`（未装服务则延迟 re-exec）。失败 5 分钟后再试，不降级。
+4. 控制台集群概览显示两份升级包是否就绪；工作节点版本落后时标红。
+
+### 涉及文件
+- `src/binaries.rs`（新）、`src/cluster/self_update.rs`（新）
+- `src/cluster/{server,client,mod}.rs`、`src/update.rs`、`src/service.rs`、`src/auth.rs`、`src/main.rs`
+- `src/assets/index.html`、`README.md`
+
+### 验证
+- 单元测试：架构别名、ELF 识别、版本比较、导入/库存、有包才要约、解析升级要约。
+- `cargo test`：82 个全部通过；`cargo clippy` 无新增告警（既有 too_many_arguments 等仍在）。
+
+---
+
 ## 2026-08-28 — 检查并修复：补齐 k3s kubeconfig 拷贝
 
 ### 做了什么

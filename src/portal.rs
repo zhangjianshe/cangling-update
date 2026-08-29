@@ -48,11 +48,9 @@ pub fn routes() -> Router<AppState> {
 }
 
 pub async fn page() -> impl IntoResponse {
-    let html = include_str!("assets/portal.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"));
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        html,
-    )
+    let html =
+        include_str!("assets/portal.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"));
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html)
 }
 
 async fn get_portal(
@@ -73,7 +71,12 @@ async fn get_portal(
             .into_iter()
             .filter(|it| !db::is_builtin_portal_url(&it.url))
             .collect();
-        (title, subtitle, background_view(&kind, &file, &updated), items)
+        (
+            title,
+            subtitle,
+            background_view(&kind, &file, &updated),
+            items,
+        )
     };
     Ok(Json(PortalPage {
         title,
@@ -137,7 +140,12 @@ async fn create_item(
 ) -> Result<Json<PortalPage>, AppError> {
     let name = normalize_text(body.name.as_deref().unwrap_or(""), "名称", 1, NAME_MAX)?;
     let url = validate_user_item_url(body.url.as_deref().unwrap_or(""))?;
-    let summary = normalize_text(body.summary.as_deref().unwrap_or(""), "简介", 0, SUMMARY_MAX)?;
+    let summary = normalize_text(
+        body.summary.as_deref().unwrap_or(""),
+        "简介",
+        0,
+        SUMMARY_MAX,
+    )?;
     let icon = normalize_text(body.icon.as_deref().unwrap_or(""), "图标", 0, ICON_TEXT_MAX)?;
     let now = db::now_rfc3339();
     let item = {
@@ -202,7 +210,8 @@ async fn delete_item(
 ) -> Result<Json<PortalPage>, AppError> {
     let item = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        let item = db::get_portal_item(&conn, &id)?.ok_or_else(|| AppError::not_found("入口不存在"))?;
+        let item =
+            db::get_portal_item(&conn, &id)?.ok_or_else(|| AppError::not_found("入口不存在"))?;
         if !db::delete_portal_item(&conn, &id)? {
             return Err(AppError::not_found("入口不存在"));
         }
@@ -227,7 +236,9 @@ async fn reorder_items(
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         let existing = db::list_portal_items(&conn)?;
         if existing.len() != body.ids.len()
-            || !existing.iter().all(|it| body.ids.iter().any(|id| id == &it.id))
+            || !existing
+                .iter()
+                .all(|it| body.ids.iter().any(|id| id == &it.id))
         {
             return Err(AppError::bad("排序列表与现有入口不一致"));
         }
@@ -242,7 +253,10 @@ async fn upload_background(
     multipart: Multipart,
 ) -> Result<Json<PortalPage>, AppError> {
     let saved = receive_media(&state, multipart, BACKGROUND_MAX_BYTES, false).await?;
-    let dest = state.paths.portal_dir.join(format!("background.{}", saved.ext));
+    let dest = state
+        .paths
+        .portal_dir
+        .join(format!("background.{}", saved.ext));
     tokio::fs::rename(&saved.path, &dest).await?;
     if let Some(parent) = saved.path.parent() {
         let _ = tokio::fs::remove_dir_all(parent).await;
@@ -626,10 +640,7 @@ mod tests {
     #[test]
     fn sniff_common_media() {
         assert_eq!(sniff_media(&[0xff, 0xd8, 0xff, 0xe0]).unwrap().ext, "jpg");
-        assert_eq!(
-            sniff_media(b"\x89PNG\r\n\x1a\nxxxx").unwrap().ext,
-            "png"
-        );
+        assert_eq!(sniff_media(b"\x89PNG\r\n\x1a\nxxxx").unwrap().ext, "png");
         assert_eq!(sniff_media(b"GIF89a........").unwrap().kind, "image");
         let mut webp = [0u8; 12];
         webp[..4].copy_from_slice(b"RIFF");
@@ -648,10 +659,7 @@ mod tests {
         assert_eq!(bg.url.as_deref(), Some(DEFAULT_BACKGROUND_URL));
         let custom = background_view("video", "background.mp4", "v1");
         assert_eq!(custom.kind, "video");
-        assert_eq!(
-            custom.url.as_deref(),
-            Some("/media/portal/background?v=v1")
-        );
+        assert_eq!(custom.url.as_deref(), Some("/media/portal/background?v=v1"));
         assert!(!DEFAULT_BACKGROUND_JPEG.is_empty());
         assert_eq!(&DEFAULT_BACKGROUND_JPEG[..3], &[0xff, 0xd8, 0xff]);
     }

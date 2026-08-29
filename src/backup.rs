@@ -111,12 +111,8 @@ fn snapshot_git(
     gitref: &Path,
     on_progress: &mut impl FnMut(u64, u64, &str),
 ) -> Result<u64> {
-    let version_dir = gitref
-        .parent()
-        .context("gitref has no parent")?;
-    let project_dir = version_dir
-        .parent()
-        .context("version dir has no parent")?;
+    let version_dir = gitref.parent().context("gitref has no parent")?;
+    let project_dir = version_dir.parent().context("version dir has no parent")?;
     let repo = project_dir.join("repo.git");
     ensure_git_repo(&repo)?;
 
@@ -206,7 +202,11 @@ fn snapshot_git(
         current_paths.insert(rel.clone());
         let sha = git_hash_object_file(&repo, abs, rel, done, total, on_progress)
             .with_context(|| format!("读取 {rel} 失败，请先停止应用后再全量备份"))?;
-        let git_mode = if mode & 0o111 != 0 { "100755" } else { "100644" };
+        let git_mode = if mode & 0o111 != 0 {
+            "100755"
+        } else {
+            "100644"
+        };
         index_lines.push(format!("{git_mode} blob {sha}\t{rel}"));
         done = done.saturating_add(*len);
         on_progress(done, total, rel);
@@ -273,16 +273,12 @@ fn git_hash_object_file(
         if n == 0 {
             break;
         }
-        stdin
-            .write_all(&buf[..n])
-            .context("写入 git hash-object")?;
+        stdin.write_all(&buf[..n]).context("写入 git hash-object")?;
         copied += n as u64;
         on_progress(start.saturating_add(copied), total, rel);
     }
     drop(stdin);
-    let output = child
-        .wait_with_output()
-        .context("等待 git hash-object")?;
+    let output = child.wait_with_output().context("等待 git hash-object")?;
     if !output.status.success() {
         bail!(
             "git hash-object {} 失败：{}",
@@ -362,11 +358,7 @@ fn prune_index(
     for (i, path) in extras.iter().enumerate() {
         let _ = git_run(repo, None, &["rm", "--cached", "-f", "--", path]);
         if i % 200 == 0 || i + 1 == extras.len() {
-            on_progress(
-                i as u64 + 1,
-                n,
-                &format!("正在清理过期索引 {}/{n}", i + 1),
-            );
+            on_progress(i as u64 + 1, n, &format!("正在清理过期索引 {}/{n}", i + 1));
         }
     }
     Ok(())
@@ -377,8 +369,7 @@ fn restore_gitref(
     live: &Path,
     on_progress: &mut impl FnMut(u64, u64, &str),
 ) -> Result<()> {
-    let text = fs::read_to_string(gitref)
-        .with_context(|| format!("read {}", gitref.display()))?;
+    let text = fs::read_to_string(gitref).with_context(|| format!("read {}", gitref.display()))?;
     let mut lines = text.lines();
     let first = lines.next().unwrap_or("").trim();
     if first == "tar" {
@@ -448,7 +439,11 @@ fn ensure_git_repo(repo: &Path) -> Result<()> {
         fs::create_dir_all(repo)?;
         git_run(repo, None, &["init", "--bare"])?;
         git_run(repo, None, &["config", "user.name", "cangling-update"])?;
-        git_run(repo, None, &["config", "user.email", "cangling-update@localhost"])?;
+        git_run(
+            repo,
+            None,
+            &["config", "user.email", "cangling-update@localhost"],
+        )?;
         let exclude = repo.join("info").join("exclude");
         if let Some(parent) = exclude.parent() {
             fs::create_dir_all(parent)?;
@@ -574,9 +569,8 @@ fn snapshot_tar_gz(
         if ft.is_dir() {
             append_dir(&mut tar, entry.path(), &name)?;
         } else if ft.is_symlink() {
-            tar.append_path_with_name(entry.path(), &name).with_context(|| {
-                format!("archive symlink {}", entry.path().display())
-            })?;
+            tar.append_path_with_name(entry.path(), &name)
+                .with_context(|| format!("archive symlink {}", entry.path().display()))?;
         } else if ft.is_file() {
             let mut f = File::open(entry.path())
                 .with_context(|| format!("open {}", entry.path().display()))?;
@@ -592,7 +586,10 @@ fn snapshot_tar_gz(
     let mut writer = encoder.finish().context("finish gzip")?;
     writer.flush().context("flush snapshot")?;
 
-    let meta = ArchiveMeta { bytes: total, files };
+    let meta = ArchiveMeta {
+        bytes: total,
+        files,
+    };
     let _ = fs::write(
         meta_path(dst),
         serde_json::to_vec(&meta).unwrap_or_else(|_| b"{}".to_vec()),
@@ -628,8 +625,8 @@ fn restore_tar_gz(
         .unwrap_or_else(|| estimate_archive_bytes(archive_path).unwrap_or(0));
     on_progress(0, total, "开始恢复");
 
-    let file = File::open(archive_path)
-        .with_context(|| format!("open {}", archive_path.display()))?;
+    let file =
+        File::open(archive_path).with_context(|| format!("open {}", archive_path.display()))?;
     let mut archive = Archive::new(GzDecoder::new(BufReader::new(file)));
     archive.set_overwrite(true);
     archive.set_preserve_permissions(true);
@@ -659,10 +656,7 @@ fn restore_tar_gz(
     Ok(())
 }
 
-fn unpack_entry<R: std::io::Read>(
-    entry: &mut tar::Entry<'_, R>,
-    dest: &Path,
-) -> Result<()> {
+fn unpack_entry<R: std::io::Read>(entry: &mut tar::Entry<'_, R>, dest: &Path) -> Result<()> {
     let header = entry.header().clone();
     let kind = header.entry_type();
     let mode = header.mode().unwrap_or(0o644);
@@ -680,10 +674,9 @@ fn unpack_entry<R: std::io::Read>(
             if dest.exists() {
                 let _ = fs::remove_file(dest);
             }
-            let mut out = File::create(dest)
-                .with_context(|| format!("create {}", dest.display()))?;
-            std::io::copy(entry, &mut out)
-                .with_context(|| format!("write {}", dest.display()))?;
+            let mut out =
+                File::create(dest).with_context(|| format!("create {}", dest.display()))?;
+            std::io::copy(entry, &mut out).with_context(|| format!("write {}", dest.display()))?;
             out.flush()?;
         }
         EntryType::Symlink => {
@@ -699,9 +692,8 @@ fn unpack_entry<R: std::io::Read>(
             let _ = fs::remove_file(dest);
             let _ = fs::remove_dir(dest);
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&target, dest).with_context(|| {
-                format!("symlink {} -> {}", dest.display(), target.display())
-            })?;
+            std::os::unix::fs::symlink(&target, dest)
+                .with_context(|| format!("symlink {} -> {}", dest.display(), target.display()))?;
             #[cfg(not(unix))]
             {
                 let _ = target;
@@ -714,7 +706,13 @@ fn unpack_entry<R: std::io::Read>(
     Ok(())
 }
 
-fn apply_meta(path: &Path, mode: u32, uid: Option<u32>, gid: Option<u32>, is_dir: bool) -> Result<()> {
+fn apply_meta(
+    path: &Path,
+    mode: u32,
+    uid: Option<u32>,
+    gid: Option<u32>,
+    is_dir: bool,
+) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -756,8 +754,12 @@ fn meta_path(archive: &Path) -> PathBuf {
 }
 
 fn is_safe_rel(rel: &Path) -> bool {
-    rel.components()
-        .all(|c| !matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir))
+    rel.components().all(|c| {
+        !matches!(
+            c,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )
+    })
 }
 
 fn snapshot_copy_tree(
@@ -872,7 +874,9 @@ const SKIP_DIR_NAMES: &[&str] = &[".git", "lost+found"];
 
 const GIT_EXCLUDE: &str = ".git\nlost+found\n";
 
-fn walk_project(src: &Path) -> walkdir::FilterEntry<walkdir::IntoIter, impl FnMut(&walkdir::DirEntry) -> bool + '_> {
+fn walk_project(
+    src: &Path,
+) -> walkdir::FilterEntry<walkdir::IntoIter, impl FnMut(&walkdir::DirEntry) -> bool + '_> {
     WalkDir::new(src)
         .follow_links(false)
         .into_iter()

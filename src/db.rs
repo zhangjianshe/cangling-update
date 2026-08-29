@@ -47,8 +47,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 "#;
 
 pub fn open(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)
-        .with_context(|| format!("open sqlite {}", path.display()))?;
+    let conn = Connection::open(path).with_context(|| format!("open sqlite {}", path.display()))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "busy_timeout", 5000)?;
@@ -156,7 +155,8 @@ FROM projects p
 pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
     let mut stmt = conn.prepare(&format!("{PROJECT_SELECT} ORDER BY p.updated_at DESC"))?;
     let rows = stmt.query_map([], map_project)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn get_project(conn: &Connection, id: &str) -> Result<Option<Project>> {
@@ -170,7 +170,14 @@ pub fn insert_project(conn: &Connection, p: &Project) -> Result<()> {
     conn.execute(
         "INSERT INTO projects (id, name, description, directory, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![p.id, p.name, p.description, p.directory, p.created_at, p.updated_at],
+        params![
+            p.id,
+            p.name,
+            p.description,
+            p.directory,
+            p.created_at,
+            p.updated_at
+        ],
     )?;
     Ok(())
 }
@@ -248,10 +255,15 @@ pub fn list_versions(conn: &Connection, project_id: &str) -> Result<Vec<Version>
          FROM versions WHERE project_id = ?1 ORDER BY version_no DESC",
     )?;
     let rows = stmt.query_map(params![project_id], map_version)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
-pub fn get_version(conn: &Connection, project_id: &str, version_id: &str) -> Result<Option<Version>> {
+pub fn get_version(
+    conn: &Connection,
+    project_id: &str,
+    version_id: &str,
+) -> Result<Option<Version>> {
     let mut stmt = conn.prepare(
         "SELECT id, project_id, version_no, label, note, backup_path, images_json, is_current, kind, created_at, jars_json
          FROM versions WHERE project_id = ?1 AND id = ?2",
@@ -368,7 +380,8 @@ pub fn delete_session(conn: &Connection, token: &str) -> Result<()> {
 pub fn list_usernames(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare("SELECT username FROM users ORDER BY username")?;
     let rows = stmt.query_map([], |r| r.get(0))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn list_users(conn: &Connection) -> Result<Vec<UserRow>> {
@@ -381,7 +394,8 @@ pub fn list_users(conn: &Connection) -> Result<Vec<UserRow>> {
             password_hash: r.get(2)?,
         })
     })?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn update_password_hash(conn: &Connection, user_id: &str, password_hash: &str) -> Result<bool> {
@@ -432,7 +446,8 @@ pub fn list_compose_revisions(conn: &Connection, project_id: &str) -> Result<Vec
          FROM compose_revisions WHERE project_id = ?1 ORDER BY rev_no DESC",
     )?;
     let rows = stmt.query_map(params![project_id], map_compose_revision_meta)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn get_compose_revision(
@@ -497,7 +512,8 @@ pub fn list_env_revisions(conn: &Connection, project_id: &str) -> Result<Vec<Com
          FROM env_revisions WHERE project_id = ?1 ORDER BY rev_no DESC",
     )?;
     let rows = stmt.query_map(params![project_id], map_compose_revision_meta)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn get_env_revision(
@@ -514,10 +530,7 @@ pub fn get_env_revision(
         .map_err(Into::into)
 }
 
-pub fn latest_env_revision(
-    conn: &Connection,
-    project_id: &str,
-) -> Result<Option<ComposeRevision>> {
+pub fn latest_env_revision(conn: &Connection, project_id: &str) -> Result<Option<ComposeRevision>> {
     let mut stmt = conn.prepare(
         "SELECT id, project_id, rev_no, filename, note, kind, etag, created_at, content
          FROM env_revisions WHERE project_id = ?1 ORDER BY rev_no DESC LIMIT 1",
@@ -606,7 +619,8 @@ pub fn list_portal_items(conn: &Connection) -> Result<Vec<PortalItem>> {
          FROM portal_items ORDER BY sort_order ASC, created_at ASC",
     )?;
     let rows = stmt.query_map([], map_portal_item)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 pub fn get_portal_item(conn: &Connection, id: &str) -> Result<Option<PortalItem>> {
@@ -942,5 +956,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-
-

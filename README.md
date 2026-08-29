@@ -116,6 +116,7 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 - 所有节点使用**相同的 `--cluster-token`**（机器间认证，与网页登录账号无关）。
 - 新节点注册到主节点、或从离线恢复在线时，主节点会自动把本机账号推送给它，使各节点保持同一套登录账号密码（详见「登录与忘记密码」）。
 - 工作节点每 15 秒向主节点发一次心跳，45 秒无心跳判定为离线；完整主机信息在注册时采集、之后每 5 分钟刷新一次。
+- 工作节点注册或心跳时，主节点比较双方的 `cangling-update` 版本。若工作节点更旧，按对方架构（x86_64 / ARM64）从本机 `updates/` 取出对应二进制，工作节点下载、替换后重启。不降级。
 - 工作节点不填 `--master` 时，通过 **UDP 广播**（端口 `5401`，可用 `--discovery-port` 修改）自动发现主节点；广播里只携带令牌哈希，不发送令牌明文。子网屏蔽广播时请显式指定 `--master`。
 
 ```bash
@@ -130,6 +131,25 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 ```
 
 > master / worker 角色必须设置令牌，否则拒绝启动。节点身份保存在各节点数据目录的 `node-id` 文件中，重启后保持不变。
+
+主节点在程序目录下同时保存两份升级二进制（x86_64 与 ARM64 工作节点各用各的）：
+
+```text
+cangling-update                      # 主节点正在运行的程序
+updates/
+  cangling-update-linux-amd64        # x86_64
+  cangling-update-linux-arm64        # ARM64
+```
+
+主节点启动时会把**正在运行的本机架构**程序写入对应槽位。另一架构需要另外准备，否则该架构的工作节点无法自动升级：
+
+```bash
+# 有网：一次下载两个架构（同时替换本机正在运行的程序）
+./cangling-update update
+
+# 离线：把另一架构的二进制拷进 updates/，或
+./cangling-update update --import /path/to/cangling-update-linux-arm64
+```
 
 ### 集群初始化（离线）
 
@@ -219,15 +239,16 @@ sudo ./cangling-update uninstall-service
 
 ### 自我更新
 
-从 [GitHub Releases](https://github.com/zhangjianshe/cangling-update/releases) 检查并下载对应架构的二进制，保存为程序目录下的 `cangling-update`。**不会**重启 systemd 服务，当前进程继续跑旧文件，下次启动或手动 `restart` 后才用新版本。
+从 [GitHub Releases](https://github.com/zhangjianshe/cangling-update/releases) 检查并下载 **x86_64 与 ARM64** 两份二进制，写入程序目录 `updates/`；本机架构的那份同时覆盖正在运行的 `cangling-update`。**不会**重启 systemd 服务，当前进程继续跑旧文件，下次启动或手动 `restart` 后才用新版本。主节点保存两份，是为了给不同架构的工作节点自动升级。
 
 ```bash
-./cangling-update update --check    # 只看有没有新版本
-sudo ./cangling-update update       # 下载并替换文件
+./cangling-update update --check    # 只看有没有新版本 / 缺哪份架构
+sudo ./cangling-update update       # 下载两份到 updates/，并替换本机程序
+sudo ./cangling-update update --import ./cangling-update-linux-arm64   # 离线导入
 sudo ./cangling-update restart      # 需要时再重启服务
 ```
 
-x86_64 下载 `cangling-update-linux-amd64`，ARM64 下载 `cangling-update-linux-arm64`。需要本机能访问 GitHub，并安装 `curl` 或 `wget`。走代理时请带 `http://`：
+x86_64 对应 `cangling-update-linux-amd64`，ARM64 对应 `cangling-update-linux-arm64`。从 GitHub 下载时需要本机能访问 GitHub，并安装 `curl` 或 `wget`。走代理时请带 `http://`：
 
 ```bash
 https_proxy=http://10.1.1.2:7890 sudo -E ./cangling-update update
@@ -443,10 +464,11 @@ cangling-update [选项] [命令]
   install-service      安装 systemd 服务，并在 /usr/local/bin 创建命令符号链接
   uninstall-service    卸载 systemd 服务，并删除该符号链接
   restart              重启本服务
-  update               从 GitHub 下载新版本（不重启服务）
+  update               从 GitHub 下载新版本（同时保存 x86_64 与 ARM64；不重启服务）
                        --check           只检查是否有新版本
                        --force           即使版本相同或更旧也强制下载替换
                        --proxy URL       HTTP/HTTPS/SOCKS 代理（也可设 https_proxy）
+                       --import FILE     按 ELF 识别架构，导入到 updates/（离线）
   hostinfo             采集主机信息，写入程序目录下的 info.md
                        -o / --output     输出路径（默认：程序目录/info.md）
                        网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md（仅限 localhost）

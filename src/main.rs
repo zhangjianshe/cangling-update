@@ -1,6 +1,7 @@
 mod api;
 mod auth;
 mod backup;
+mod binaries;
 mod cluster;
 mod db;
 mod dbadmin;
@@ -101,7 +102,7 @@ enum Command {
     Version,
     /// 重启本服务
     Restart,
-    /// 检查 GitHub Release 并按当前架构下载新版本（不重启服务）
+    /// 检查 GitHub Release 并下载新版本（同时保存 x86_64 与 ARM64，供 master 给 worker 升级；不重启服务）
     Update {
         /// 只检查是否有新版本，不下载
         #[arg(long)]
@@ -112,6 +113,9 @@ enum Command {
         /// HTTP/HTTPS/SOCKS 代理，例如 http://10.1.1.2:7890（也可设 https_proxy）
         #[arg(long, env = "HTTPS_PROXY")]
         proxy: Option<String>,
+        /// 把一份二进制导入 updates/（按 ELF 识别架构），离线时给 master 补齐另一架构
+        #[arg(long, value_name = "FILE")]
+        import: Option<PathBuf>,
     },
     /// 采集主机信息，写入程序目录下的 info.md
     Hostinfo {
@@ -161,7 +165,15 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Restart) => {
             return service::restart();
         }
-        Some(Command::Update { check, force, proxy }) => {
+        Some(Command::Update {
+            check,
+            force,
+            proxy,
+            import,
+        }) => {
+            if let Some(path) = import {
+                return update::import(&path);
+            }
             return update::run(check, force, proxy);
         }
         Some(Command::Hostinfo { output }) => {
@@ -187,8 +199,15 @@ async fn main() -> anyhow::Result<()> {
         master_url: cli.master.clone(),
         discovery_port: cli.discovery_port,
     };
-    if matches!(cluster_cfg.role, cluster::Role::Master | cluster::Role::Worker)
-        && cluster_cfg.token.as_deref().map(str::trim).unwrap_or("").is_empty()
+    if matches!(
+        cluster_cfg.role,
+        cluster::Role::Master | cluster::Role::Worker
+    ) && cluster_cfg
+        .token
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
     {
         bail!("集群角色 master/worker 需要 --cluster-token（或 CANGLING_CLUSTER_TOKEN）");
     }
@@ -218,6 +237,30 @@ async fn main() -> anyhow::Result<()> {
 
     // 集群后台任务
     if cluster_cfg.role == cluster::Role::Master {
+        match crate::binaries::seed_own_binary(&state.paths.exe_dir) {
+            Ok(arch) => {
+                let missing: Vec<_> = crate::binaries::inventory(&state.paths.exe_dir)
+                    .into_iter()
+                    .filter(|b| !b.available)
+                    .map(|b| b.label)
+                    .collect();
+                if missing.is_empty() {
+                    tracing::info!(
+                        "升级二进制已就绪（本机 {}）：{}",
+                        arch.label(),
+                        crate::binaries::updates_dir(&state.paths.exe_dir).display()
+                    );
+                } else {
+                    tracing::warn!(
+                        "已写入本机 {} 升级二进制；缺少 {}。不同架构的 worker 无法自动升级。请把对应文件放到 {}，或执行 cangling-update update / update --import",
+                        arch.label(),
+                        missing.join("、"),
+                        crate::binaries::updates_dir(&state.paths.exe_dir).display()
+                    );
+                }
+            }
+            Err(err) => tracing::warn!("无法写入本机升级二进制：{err:#}"),
+        }
         tokio::spawn(cluster::server::maintain_self_node(state.clone()));
         if let Some(cid) = cluster_cfg.cluster_id() {
             let announce = hostinfo::primary_ip();
@@ -237,9 +280,12 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("web interface http://{addr}");
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

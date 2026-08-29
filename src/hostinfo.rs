@@ -1,9 +1,9 @@
 //! `cangling-update hostinfo` — write `info.md` next to the binary.
 
-use anyhow::{Context, Result};
 use crate::db;
 use crate::models::Project;
 use crate::paths::AppPaths;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -78,8 +78,7 @@ pub fn run(paths: &AppPaths, output: Option<PathBuf>) -> Result<()> {
     let md = render_markdown(&snap);
     let dest = output.unwrap_or_else(|| paths.exe_dir.join("info.md"));
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     std::fs::write(&dest, md).with_context(|| format!("write {}", dest.display()))?;
     println!("{}", dest.display());
@@ -100,7 +99,9 @@ pub fn collect(paths: &AppPaths) -> Result<HostSnapshot> {
 
 pub fn collect_with_projects(paths: &AppPaths, projects: Vec<Project>) -> HostSnapshot {
     HostSnapshot {
-        generated_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S %z").to_string(),
+        generated_at: chrono::Local::now()
+            .format("%Y-%m-%d %H:%M:%S %z")
+            .to_string(),
         hostname: hostname(),
         primary_ip: primary_ip(),
         ips: list_ips(),
@@ -169,7 +170,10 @@ pub fn render_ansi(s: &HostSnapshot, color: bool) -> String {
     let mut out = String::new();
     out.push('\n');
     out.push_str(&format!("  {}\n", p.title("主机信息")));
-    out.push_str(&format!("  {}\n\n", p.dim(&format!("生成 {}", s.generated_at))));
+    out.push_str(&format!(
+        "  {}\n\n",
+        p.dim(&format!("生成 {}", s.generated_at))
+    ));
 
     out.push_str(&format!("  {}\n  {}\n", p.head("主机"), p.rule()));
     kv(&mut out, &p, "主机名", &s.hostname);
@@ -437,7 +441,9 @@ pub fn render_markdown(s: &HostSnapshot) -> String {
     if s.disks.is_empty() {
         out.push_str("未能读取磁盘用量。\n\n");
     } else {
-        out.push_str("| 挂载点 | 文件系统 | 已用 | 可用 | 总计 | 使用率 |\n|---|---|---|---|---|---|\n");
+        out.push_str(
+            "| 挂载点 | 文件系统 | 已用 | 可用 | 总计 | 使用率 |\n|---|---|---|---|---|---|\n",
+        );
         for d in &s.disks {
             let pct = if d.total == 0 {
                 "—".into()
@@ -523,9 +529,7 @@ fn row(out: &mut String, k: &str, v: &str) {
 }
 
 fn cell(s: &str) -> String {
-    s.replace('|', "\\|")
-        .replace('\n', " ")
-        .replace('\r', "")
+    s.replace('|', "\\|").replace('\n', " ").replace('\r', "")
 }
 
 fn dash(s: &str) -> String {
@@ -570,7 +574,10 @@ fn collect_software(paths: &AppPaths) -> Vec<Software> {
         &mut list,
         "docker",
         &["docker"],
-        &[&["version", "--format", "{{.Client.Version}}"], &["version"]],
+        &[
+            &["version", "--format", "{{.Client.Version}}"],
+            &["version"],
+        ],
     );
     push_compose(&mut list);
     probe(&mut list, "k3s", &["k3s"], &[&["--version"]]);
@@ -578,7 +585,10 @@ fn collect_software(paths: &AppPaths) -> Vec<Software> {
         &mut list,
         "kubectl",
         &["kubectl"],
-        &[&["version", "--client", "--short"], &["version", "--client"]],
+        &[
+            &["version", "--client", "--short"],
+            &["version", "--client"],
+        ],
     );
     probe(
         &mut list,
@@ -635,8 +645,8 @@ fn push_compose(list: &mut Vec<Software>) {
 fn probe(list: &mut Vec<Software>, name: &str, bins: &[&str], attempts: &[&[&str]]) {
     for bin in bins {
         if let Some(path) = look_path(bin) {
-            let version = first_ok_version(bin, attempts)
-                .unwrap_or_else(|| "已安装（版本未知）".into());
+            let version =
+                first_ok_version(bin, attempts).unwrap_or_else(|| "已安装（版本未知）".into());
             list.push(Software {
                 name: name.into(),
                 version,
@@ -739,7 +749,11 @@ fn first_line(s: &str) -> String {
 
 fn hostname() -> String {
     cmd_out("hostname", &[])
-        .or_else(|| std::fs::read_to_string("/etc/hostname").ok().map(|s| s.trim().into()))
+        .or_else(|| {
+            std::fs::read_to_string("/etc/hostname")
+                .ok()
+                .map(|s| s.trim().into())
+        })
         .unwrap_or_else(|| "unknown".into())
 }
 
@@ -794,10 +808,7 @@ pub fn parse_ip_addr(raw: &str) -> Vec<String> {
 }
 
 fn skip_ip(ip: &str) -> bool {
-    ip == "127.0.0.1"
-        || ip.starts_with("127.")
-        || ip.starts_with("169.254.")
-        || ip == "::1"
+    ip == "127.0.0.1" || ip.starts_with("127.") || ip.starts_with("169.254.") || ip == "::1"
 }
 
 pub fn parse_df(raw: &str) -> Vec<DiskMount> {
@@ -883,7 +894,10 @@ pub fn parse_meminfo(raw: &str) -> MemInfo {
         }
     }
     if avail == 0 && total > 0 {
-        avail = free.saturating_add(buffers).saturating_add(cached).min(total);
+        avail = free
+            .saturating_add(buffers)
+            .saturating_add(cached)
+            .min(total);
     }
     if avail > total {
         avail = total;
@@ -928,7 +942,10 @@ pub fn parse_cpuinfo(raw: &str, fallback_arch: &str, fallback_cpus: u32) -> CpuI
         }
     }
     if model.is_empty() {
-        if let Some(line) = raw.lines().find(|l| l.to_lowercase().contains("implementer")) {
+        if let Some(line) = raw
+            .lines()
+            .find(|l| l.to_lowercase().contains("implementer"))
+        {
             model = line.trim().into();
         }
     }
@@ -998,7 +1015,8 @@ pub fn parse_lspci_display(raw: &str) -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
     for line in raw.lines() {
         let lower = line.to_lowercase();
-        if !(lower.contains("vga") || lower.contains("3d controller") || lower.contains("display")) {
+        if !(lower.contains("vga") || lower.contains("3d controller") || lower.contains("display"))
+        {
             continue;
         }
         let name = line.split(": ").nth(1).unwrap_or(line).trim();
@@ -1028,7 +1046,10 @@ pub fn parse_lspci_display(raw: &str) -> Vec<GpuInfo> {
 fn coalesce_gpus(gpus: Vec<GpuInfo>) -> Vec<GpuInfo> {
     let mut map: Vec<GpuInfo> = Vec::new();
     for g in gpus {
-        if let Some(e) = map.iter_mut().find(|e| e.name == g.name && e.arch == g.arch) {
+        if let Some(e) = map
+            .iter_mut()
+            .find(|e| e.name == g.name && e.arch == g.arch)
+        {
             e.count += g.count;
         } else {
             map.push(g);
@@ -1044,9 +1065,14 @@ fn collect_gpus() -> Vec<GpuInfo> {
             return g;
         }
     }
-    if Path::new("/dev").read_dir().ok().into_iter().flatten().flatten().any(|e| {
-        e.file_name().to_string_lossy().starts_with("davinci")
-    }) {
+    if Path::new("/dev")
+        .read_dir()
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|e| e.file_name().to_string_lossy().starts_with("davinci"))
+    {
         let n = std::fs::read_dir("/dev")
             .ok()
             .into_iter()

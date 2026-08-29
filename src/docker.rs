@@ -189,7 +189,8 @@ impl Docker {
     }
 
     pub async fn compose_up(&self, dir: &Path) -> Result<String> {
-        self.compose_run(dir, &["up", "-d", "--remove-orphans"]).await
+        self.compose_run(dir, &["up", "-d", "--remove-orphans"])
+            .await
     }
 
     pub async fn compose_up_recreate(&self, dir: &Path, services: &[String]) -> Result<String> {
@@ -210,11 +211,8 @@ impl Docker {
     pub async fn compose_restart(&self, dir: &Path) -> Result<String> {
         // `compose restart` does not take --remove-orphans and will not pick up
         // compose-file edits. Recreate the stack instead.
-        self.compose_run(
-            dir,
-            &["up", "-d", "--force-recreate", "--remove-orphans"],
-        )
-        .await
+        self.compose_run(dir, &["up", "-d", "--force-recreate", "--remove-orphans"])
+            .await
     }
 
     pub async fn compose_restart_service(&self, dir: &Path, service: &str) -> Result<String> {
@@ -247,11 +245,7 @@ impl Docker {
         service: Option<&str>,
     ) -> Result<String> {
         let tail = tail.to_string();
-        let mut args = vec![
-            "logs".to_string(),
-            "--tail".to_string(),
-            tail,
-        ];
+        let mut args = vec!["logs".to_string(), "--tail".to_string(), tail];
         if let Some(name) = service {
             validate_service_name(name)?;
             args.push(name.to_string());
@@ -378,7 +372,9 @@ impl Docker {
             ComposeKind::Plugin => {
                 let mut cmd = Command::new("docker");
                 cmd.arg("compose").args(args).current_dir(dir);
-                cmd.output().await.context("failed to spawn docker compose")?
+                cmd.output()
+                    .await
+                    .context("failed to spawn docker compose")?
             }
             ComposeKind::Standalone => {
                 let mut cmd = Command::new("docker-compose");

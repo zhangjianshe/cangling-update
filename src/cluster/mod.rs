@@ -7,6 +7,7 @@ pub mod client;
 pub mod discovery;
 pub mod http;
 pub mod init;
+pub mod self_update;
 pub mod server;
 
 use crate::paths::AppPaths;

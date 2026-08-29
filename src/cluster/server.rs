@@ -3,7 +3,9 @@
 //!
 //! 机器间接口（register/heartbeat）用集群令牌认证；控制台接口走登录会话认证。
 
-use crate::cluster::{load_or_create_node_id, HEARTBEAT_INTERVAL_SECS, OFFLINE_AFTER_SECS, TOKEN_HEADER};
+use crate::cluster::{
+    load_or_create_node_id, HEARTBEAT_INTERVAL_SECS, OFFLINE_AFTER_SECS, TOKEN_HEADER,
+};
 use crate::error::AppError;
 use crate::hostinfo::{self, HostSnapshot};
 use crate::state::AppState;
@@ -24,6 +26,9 @@ pub struct RegisterRequest {
     pub name: String,
     pub addr: String,
     pub version: String,
+    /// 工作节点架构（`x86_64` / `aarch64`）；缺省时回退到 host.cpu.arch。
+    #[serde(default)]
+    pub arch: String,
     pub host: HostSnapshot,
 }
 
@@ -32,11 +37,17 @@ pub struct RegisterResponse {
     pub ok: bool,
     pub heartbeat_interval_secs: u64,
     pub master_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrade: Option<crate::cluster::self_update::UpgradeOffer>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HeartbeatRequest {
     pub id: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub arch: String,
     #[serde(default)]
     pub host: Option<HostSnapshot>,
 }
@@ -46,6 +57,8 @@ pub struct HeartbeatResponse {
     pub ok: bool,
     /// 是否已登记该节点；false 时 worker 应重新注册。
     pub known: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrade: Option<crate::cluster::self_update::UpgradeOffer>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +96,9 @@ pub struct ClusterStatus {
     pub discovery_port: u16,
     pub node_count: usize,
     pub online: usize,
+    pub version: String,
+    #[serde(default)]
+    pub binaries: Vec<crate::binaries::StoredBinary>,
 }
 
 /// 机器间接口的令牌中间件（配合外层 auth::require_auth 放行公共路径）。
@@ -118,6 +134,14 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
             post(crate::cluster::init::run_worker_init),
         )
         .route("/api/cluster/auth/sync", post(auth_sync))
+        .route(
+            "/api/cluster/self-update",
+            get(crate::cluster::self_update::index),
+        )
+        .route(
+            "/api/cluster/self-update/{arch}",
+            get(crate::cluster::self_update::download),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_cluster_token,
@@ -138,11 +162,10 @@ pub async fn maintain_self_node(state: AppState) {
 
         if want_snapshot {
             let paths = state.paths.clone();
-            let snap = tokio::task::spawn_blocking(move || {
-                hostinfo::collect(&paths).unwrap_or_default()
-            })
-            .await
-            .unwrap_or_default();
+            let snap =
+                tokio::task::spawn_blocking(move || hostinfo::collect(&paths).unwrap_or_default())
+                    .await
+                    .unwrap_or_default();
             let now = chrono::Utc::now().to_rfc3339();
             let addr = format!("{}:{}", snap.primary_ip, state.port);
             let info = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".into());
@@ -243,10 +266,24 @@ pub async fn register(
         });
     }
 
+    let arch = worker_arch(&body.arch, Some(&body.host));
+    crate::cluster::self_update::warn_if_missing(&state.paths, &body.version, &arch, &body.name);
+    let upgrade = crate::cluster::self_update::offer_for(&state.paths, &body.version, &arch);
+    if let Some(ref offer) = upgrade {
+        tracing::info!(
+            "worker {}（{}）版本 {} 低于 master {}，将下发升级包",
+            body.name,
+            offer.arch,
+            body.version,
+            offer.version
+        );
+    }
+
     Ok(Json(RegisterResponse {
         ok: true,
         heartbeat_interval_secs: HEARTBEAT_INTERVAL_SECS,
         master_version: env!("CARGO_PKG_VERSION").to_string(),
+        upgrade,
     }))
 }
 
@@ -259,16 +296,17 @@ pub async fn heartbeat(
         .host
         .as_ref()
         .and_then(|h| serde_json::to_string(h).ok());
-    let (known, reconnect_addr) = {
+    let (known, reconnect_addr, stored) = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         let prev = node_online_state(&conn, &body.id)?;
+        let stored = node_version_and_arch(&conn, &body.id)?;
         let known = touch_node(&conn, &body.id, &now, info.as_deref())?;
         // 从离线→在线的重连，需要重新同步账号（新加入的节点走 register 分支）。
         let reconnect_addr = match (&prev, known) {
             (Some((addr, false)), true) => Some(addr.clone()),
             _ => None,
         };
-        (known, reconnect_addr)
+        (known, reconnect_addr, stored)
     };
 
     if let Some(addr) = reconnect_addr {
@@ -278,12 +316,33 @@ pub async fn heartbeat(
         });
     }
 
-    Ok(Json(HeartbeatResponse { ok: true, known }))
+    let version = if body.version.trim().is_empty() {
+        stored.0
+    } else {
+        body.version.clone()
+    };
+    let arch = {
+        let from_req = worker_arch(&body.arch, body.host.as_ref());
+        if from_req.is_empty() {
+            stored.1
+        } else {
+            from_req
+        }
+    };
+    let upgrade = if known {
+        crate::cluster::self_update::offer_for(&state.paths, &version, &arch)
+    } else {
+        None
+    };
+
+    Ok(Json(HeartbeatResponse {
+        ok: true,
+        known,
+        upgrade,
+    }))
 }
 
-pub async fn list_nodes(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<ClusterNode>>, AppError> {
+pub async fn list_nodes(State(state): State<AppState>) -> Result<Json<Vec<ClusterNode>>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     Ok(Json(list_cluster_nodes(&conn)?))
 }
@@ -299,6 +358,11 @@ pub async fn cluster_status(
         (nodes, name)
     };
     let online = nodes.iter().filter(|n| n.status == "online").count();
+    let binaries = if state.cluster.role == crate::cluster::Role::Master {
+        crate::binaries::inventory(&state.paths.exe_dir)
+    } else {
+        Vec::new()
+    };
     Ok(Json(ClusterStatus {
         name,
         role: state.cluster.role.as_str(),
@@ -307,6 +371,8 @@ pub async fn cluster_status(
         discovery_port: state.cluster.discovery_port,
         node_count: nodes.len(),
         online,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        binaries,
     }))
 }
 
@@ -333,6 +399,33 @@ pub async fn repo_download(
         .await
         .map_err(|e| AppError::internal(e.to_string()))??;
     Ok(crate::repo::tarball_response(&package, bytes))
+}
+
+fn worker_arch(explicit: &str, host: Option<&HostSnapshot>) -> String {
+    let explicit = explicit.trim();
+    if !explicit.is_empty() {
+        return explicit.to_string();
+    }
+    host.map(|h| h.cpu.arch.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+}
+
+fn node_version_and_arch(conn: &Connection, id: &str) -> rusqlite::Result<(String, String)> {
+    let mut stmt = conn.prepare("SELECT version, info_json FROM cluster_nodes WHERE id = ?1")?;
+    let row: Option<(String, String)> = stmt
+        .query_row(params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    Ok(match row {
+        Some((ver, info)) => {
+            let arch = serde_json::from_str::<HostSnapshot>(&info)
+                .ok()
+                .map(|h| h.cpu.arch)
+                .unwrap_or_default();
+            (ver, arch)
+        }
+        None => (String::new(), String::new()),
+    })
 }
 
 fn upsert_node(

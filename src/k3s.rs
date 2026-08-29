@@ -106,8 +106,13 @@ fn sync_kubeconfig(src: &Path, dest: &Path) -> Result<String> {
             let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
         }
     }
-    std::fs::copy(src, dest)
-        .with_context(|| format!("复制 {} → {}，需要 root 权限", src.display(), dest.display()))?;
+    std::fs::copy(src, dest).with_context(|| {
+        format!(
+            "复制 {} → {}，需要 root 权限",
+            src.display(),
+            dest.display()
+        )
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -135,7 +140,9 @@ fn apply(info: &K3sInstall) -> Result<()> {
     eprintln!("已检测到 k3s");
     match &info.binary {
         Some(p) => eprintln!("  程序      {}", p.display()),
-        None => eprintln!("  程序      （未在 PATH 中找到 k3s 可执行文件，但发现了数据目录或 systemd 单元）"),
+        None => eprintln!(
+            "  程序      （未在 PATH 中找到 k3s 可执行文件，但发现了数据目录或 systemd 单元）"
+        ),
     }
     match &info.version {
         Some(v) => eprintln!("  版本      {v}"),
@@ -196,13 +203,7 @@ fn restart_traefik(info: &K3sInstall, config_path: &Path) -> Result<()> {
     if kubectl_ok(&kubectl, &["-n", "kube-system", "get", "deploy/traefik"]) {
         kubectl_run(
             &kubectl,
-            &[
-                "-n",
-                "kube-system",
-                "rollout",
-                "restart",
-                "deploy/traefik",
-            ],
+            &["-n", "kube-system", "rollout", "restart", "deploy/traefik"],
             true,
         )?;
         eprintln!("等待 Traefik Deployment 滚动完成 …");
@@ -485,7 +486,8 @@ mod tests {
 
     #[test]
     fn sync_kubeconfig_updates_when_stale() {
-        let tmp = std::env::temp_dir().join(format!("cangling-kube-stale-{}", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("cangling-kube-stale-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(tmp.join(".kube")).unwrap();
         let src = tmp.join("k3s.yaml");
         let dest = tmp.join(".kube").join("config");

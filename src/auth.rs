@@ -4,7 +4,9 @@ use crate::models::{
     AuthStatus, AuthUser, ChangePasswordBody, ChangePasswordResponse, Credentials, SyncFailure,
 };
 use crate::state::AppState;
-use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{
+    rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
+};
 use argon2::Argon2;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, Request};
@@ -35,6 +37,8 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         || path == "/api/cluster/repo"
         || path == "/api/cluster/init/run"
         || path == "/api/cluster/auth/sync"
+        || path == "/api/cluster/self-update"
+        || path.starts_with("/api/cluster/self-update/")
         || (path.starts_with("/api/cluster/repo/") && path.ends_with("/download"))
     {
         return true;
@@ -53,9 +57,7 @@ pub async fn require_auth(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = request.uri().path().to_string();
-    if is_public(request.method(), &path)
-        || (is_hostinfo_path(&path) && addr.ip().is_loopback())
-    {
+    if is_public(request.method(), &path) || (is_hostinfo_path(&path) && addr.ip().is_loopback()) {
         return Ok(next.run(request).await);
     }
 
@@ -89,7 +91,10 @@ pub fn auth_status(state: &AppState, headers: &HeaderMap) -> Result<AuthStatus, 
     })
 }
 
-pub async fn status(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<AuthStatus>, AppError> {
+pub async fn status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<AuthStatus>, AppError> {
     Ok(Json(auth_status(&state, &headers)?))
 }
 
@@ -215,7 +220,10 @@ pub async fn sync_users_to_worker(state: &AppState, waddr: &str) {
                 tracing::info!("已同步账号 {} 到 {}", body["username"], waddr);
             }
             Ok((status, value)) => {
-                tracing::warn!("同步账号到 {waddr} 失败：HTTP {status}: {}", json_error(&value));
+                tracing::warn!(
+                    "同步账号到 {waddr} 失败：HTTP {status}: {}",
+                    json_error(&value)
+                );
             }
             Err(e) => {
                 tracing::warn!("同步账号到 {waddr} 失败：{e:#}");
@@ -376,9 +384,7 @@ fn read_token(headers: &HeaderMap) -> Option<String> {
 }
 
 fn set_cookie(token: &str) -> String {
-    format!(
-        "{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={IDLE_TIMEOUT_SECS}"
-    )
+    format!("{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={IDLE_TIMEOUT_SECS}")
 }
 
 fn clear_cookie() -> String {
@@ -456,8 +462,20 @@ mod tests {
         assert!(is_public(&Method::POST, "/api/cluster/register"));
         assert!(is_public(&Method::POST, "/api/cluster/heartbeat"));
         assert!(is_public(&Method::GET, "/api/cluster/repo"));
-        assert!(is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo/download"));
+        assert!(is_public(
+            &Method::GET,
+            "/api/cluster/repo/linux-x86/demo/download"
+        ));
         assert!(is_public(&Method::POST, "/api/cluster/auth/sync"));
+        assert!(is_public(&Method::GET, "/api/cluster/self-update"));
+        assert!(is_public(
+            &Method::GET,
+            "/api/cluster/self-update/linux-amd64"
+        ));
+        assert!(is_public(
+            &Method::GET,
+            "/api/cluster/self-update/linux-arm64"
+        ));
         assert!(!is_public(&Method::GET, "/api/cluster/nodes"));
         assert!(!is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo"));
         assert!(!is_public(&Method::GET, "/api/cluster/packages/abc/file"));

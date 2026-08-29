@@ -1,7 +1,8 @@
+use crate::binaries::{self, Arch};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 const REPO: &str = "zhangjianshe/cangling-update";
@@ -20,6 +21,33 @@ struct Asset {
     browser_download_url: String,
 }
 
+pub fn import(src: &Path) -> Result<()> {
+    let exe = binaries::current_exe()?;
+    let dest_dir = exe
+        .parent()
+        .map(Path::to_path_buf)
+        .context("executable has no parent directory")?;
+    let arch = binaries::import_file(&dest_dir, src)?;
+    eprintln!(
+        "已导入 {}（{}）→ {}",
+        src.display(),
+        arch.label(),
+        binaries::binary_path(&dest_dir, arch).display()
+    );
+    let missing: Vec<_> = binaries::inventory(&dest_dir)
+        .into_iter()
+        .filter(|b| !b.available)
+        .map(|b| b.label)
+        .collect();
+    if !missing.is_empty() {
+        eprintln!(
+            "仍缺少：{}。master 给该架构 worker 升级前请再 --import 对应二进制。",
+            missing.join("、")
+        );
+    }
+    Ok(())
+}
+
 pub fn run(check_only: bool, force: bool, proxy: Option<String>) -> Result<()> {
     if let Some(p) = proxy {
         apply_proxy_env(&normalize_proxy(&p));
@@ -28,17 +56,19 @@ pub fn run(check_only: bool, force: bool, proxy: Option<String>) -> Result<()> {
     }
 
     let current = env!("CARGO_PKG_VERSION");
-    let exe = current_exe()?;
+    let exe = binaries::current_exe()?;
     let dest_dir = exe
         .parent()
         .map(Path::to_path_buf)
         .context("executable has no parent directory")?;
     let dest = dest_dir.join("cangling-update");
-    let asset_name = asset_for_arch()?;
+    let host_arch = Arch::host().context("不支持的架构，仅支持 x86_64 与 aarch64")?;
+    let _ = binaries::seed_own_binary(&dest_dir);
 
     eprintln!("当前版本  v{current}");
     eprintln!("仓库      https://github.com/{REPO}");
-    eprintln!("架构资源  {asset_name}");
+    eprintln!("本机架构  {}", host_arch.label());
+    eprintln!("升级目录  {}", binaries::updates_dir(&dest_dir).display());
     match detect_proxy() {
         Some(p) => eprintln!("代理      {p}"),
         None => eprintln!("代理      未设置（示例：https_proxy=http://10.1.1.2:7890）"),
@@ -47,91 +77,94 @@ pub fn run(check_only: bool, force: bool, proxy: Option<String>) -> Result<()> {
     probe_github()?;
 
     let release = fetch_latest().map_err(annotate_network)?;
-    let latest = strip_v(&release.tag_name);
+    let latest = binaries::strip_v(&release.tag_name);
     eprintln!("最新版本  {}", release.tag_name);
 
-    if !force && !is_newer(latest, current) {
-        eprintln!("已是最新，无需下载。");
+    let version_newer = binaries::is_newer(latest, current);
+    let missing: Vec<Arch> = Arch::all()
+        .into_iter()
+        .filter(|a| binaries::stored(&dest_dir, *a).is_none())
+        .collect();
+    if !force && !version_newer && missing.is_empty() {
+        eprintln!("已是最新，且 x86_64 / ARM64 升级包都已就绪。");
         return Ok(());
     }
-
-    let asset = release
-        .assets
-        .iter()
-        .find(|a| a.name == asset_name)
-        .with_context(|| format!("最新 Release 中没有 {asset_name}"))?;
 
     if check_only {
-        eprintln!("有新版本，下载地址：{}", asset.browser_download_url);
+        if version_newer {
+            eprintln!("有新版本 {}", release.tag_name);
+        } else if !missing.is_empty() {
+            eprintln!(
+                "版本已是最新，但 updates/ 缺少：{}",
+                missing
+                    .iter()
+                    .map(|a| a.asset_name())
+                    .collect::<Vec<_>>()
+                    .join("、")
+            );
+        }
+        for arch in Arch::all() {
+            match release.assets.iter().find(|a| a.name == arch.asset_name()) {
+                Some(asset) => eprintln!("  {}  {}", arch.label(), asset.browser_download_url),
+                None => eprintln!(
+                    "  {}  （Release 中没有 {}）",
+                    arch.label(),
+                    arch.asset_name()
+                ),
+            }
+        }
         return Ok(());
     }
 
-    let tmp = dest_dir.join(format!(".{asset_name}.download"));
-    let _ = fs::remove_file(&tmp);
-    download(&asset.browser_download_url, &tmp).map_err(annotate_network)?;
+    binaries::ensure_updates_dir(&dest_dir)?;
+    let mut replaced_running = false;
+    for arch in Arch::all() {
+        let need = force || version_newer || binaries::stored(&dest_dir, arch).is_none();
+        if !need {
+            eprintln!("{}  已就绪，跳过", arch.label());
+            continue;
+        }
+        let asset_name = arch.asset_name();
+        let Some(asset) = release.assets.iter().find(|a| a.name == asset_name) else {
+            eprintln!("警告：最新 Release 中没有 {asset_name}");
+            continue;
+        };
+        let slot = binaries::binary_path(&dest_dir, arch);
+        let tmp = dest_dir.join(format!(".{asset_name}.download"));
+        let _ = fs::remove_file(&tmp);
+        download(&asset.browser_download_url, &tmp).map_err(annotate_network)?;
+        if let Some(sum_url) = release
+            .assets
+            .iter()
+            .find(|a| a.name == format!("{asset_name}.sha256"))
+            .map(|a| a.browser_download_url.as_str())
+        {
+            verify_sha256(sum_url, &tmp, asset_name)?;
+        }
+        if let Some(got) = binaries::elf_arch_file(&tmp) {
+            if got != arch {
+                let _ = fs::remove_file(&tmp);
+                bail!("{asset_name} 架构是 {}，期望 {}", got.label(), arch.label());
+            }
+        }
+        binaries::copy_executable(&tmp, &slot)?;
+        let _ = fs::remove_file(&tmp);
+        eprintln!("{}  已保存 {}", arch.label(), slot.display());
 
-    if let Some(sum_url) = release
-        .assets
-        .iter()
-        .find(|a| a.name == format!("{asset_name}.sha256"))
-        .map(|a| a.browser_download_url.as_str())
-    {
-        verify_sha256(sum_url, &tmp, asset_name)?;
+        if arch == host_arch {
+            binaries::copy_executable(&slot, &dest)?;
+            replaced_running = true;
+        }
     }
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perm = fs::metadata(&tmp)?.permissions();
-        perm.set_mode(0o755);
-        fs::set_permissions(&tmp, perm)?;
+    if replaced_running {
+        eprintln!("已更新到 {}：{}", release.tag_name, dest.display());
+        eprintln!("未重启服务。若正在以 systemd 运行，执行后再生效：");
+        eprintln!("  {} restart", dest.display());
+    } else {
+        eprintln!("本机运行中的程序未替换（版本已是最新）。");
     }
-
-    // Replace on disk only. A running systemd process keeps the old inode
-    // until the next restart — we do not restart the service here.
-    fs::rename(&tmp, &dest).with_context(|| {
-        format!(
-            "无法写入 {}（需要对该目录的写权限）",
-            dest.display()
-        )
-    })?;
-
-    eprintln!("已更新到 {}：{}", release.tag_name, dest.display());
-    eprintln!("未重启服务。若正在以 systemd 运行，执行后再生效：");
-    eprintln!("  {} restart", dest.display());
     Ok(())
-}
-
-fn current_exe() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("无法解析当前可执行文件")?;
-    Ok(fs::canonicalize(&exe).unwrap_or(exe))
-}
-
-fn asset_for_arch() -> Result<&'static str> {
-    match std::env::consts::ARCH {
-        "x86_64" => Ok("cangling-update-linux-amd64"),
-        "aarch64" => Ok("cangling-update-linux-arm64"),
-        other => bail!("不支持的架构 {other}，仅支持 x86_64 与 aarch64"),
-    }
-}
-
-fn strip_v(tag: &str) -> &str {
-    tag.strip_prefix('v').unwrap_or(tag)
-}
-
-fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = s.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
-    Some((major, minor, patch))
-}
-
-fn is_newer(remote: &str, local: &str) -> bool {
-    match (parse_semver(remote), parse_semver(local)) {
-        (Some(r), Some(l)) => r > l,
-        _ => remote != local,
-    }
 }
 
 fn fetch_latest() -> Result<Release> {
@@ -231,7 +264,10 @@ fn probe_github() -> Result<()> {
         cmd.arg("https://api.github.com");
         let output = cmd.output().context("执行 curl")?;
         if !output.status.success() {
-            bail!("{}", github_unreachable(output.status.code(), &output.stderr));
+            bail!(
+                "{}",
+                github_unreachable(output.status.code(), &output.stderr)
+            );
         }
         return Ok(());
     }
@@ -248,7 +284,10 @@ fn probe_github() -> Result<()> {
         cmd.arg("https://api.github.com");
         let output = cmd.output().context("执行 wget")?;
         if !output.status.success() {
-            bail!("{}", github_unreachable(output.status.code(), &output.stderr));
+            bail!(
+                "{}",
+                github_unreachable(output.status.code(), &output.stderr)
+            );
         }
         return Ok(());
     }
@@ -347,7 +386,10 @@ fn http_get_file(url: &str, dest: &Path) -> Result<()> {
         let status = cmd.status().context("执行 curl")?;
         if !status.success() {
             let _ = fs::remove_file(dest);
-            bail!("{}", github_unreachable(status.code(), b"curl download failed"));
+            bail!(
+                "{}",
+                github_unreachable(status.code(), b"curl download failed")
+            );
         }
         return Ok(());
     }
@@ -360,7 +402,10 @@ fn http_get_file(url: &str, dest: &Path) -> Result<()> {
         let status = cmd.status().context("执行 wget")?;
         if !status.success() {
             let _ = fs::remove_file(dest);
-            bail!("{}", github_unreachable(status.code(), b"wget download failed"));
+            bail!(
+                "{}",
+                github_unreachable(status.code(), b"wget download failed")
+            );
         }
         return Ok(());
     }
@@ -430,14 +475,6 @@ fn have(bin: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn newer_versions() {
-        assert!(is_newer("0.1.1", "0.1.0"));
-        assert!(!is_newer("0.1.0", "0.1.0"));
-        assert!(!is_newer("0.1.0", "0.1.1"));
-        assert!(is_newer("1.0.0", "0.9.9"));
-    }
 
     #[test]
     fn proxy_gets_http_scheme() {

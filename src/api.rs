@@ -19,9 +19,9 @@ use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue};
 use axum::middleware;
 use axum::response::IntoResponse;
-use serde::Deserialize;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use serde::Deserialize;
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
@@ -97,10 +97,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/projects/{id}/compose/up", post(compose_up))
         .route("/api/projects/{id}/compose/down", post(compose_down))
-        .route(
-            "/api/projects/{id}/compose/restart",
-            post(compose_restart),
-        )
+        .route("/api/projects/{id}/compose/restart", post(compose_restart))
         .route(
             "/api/projects/{id}/compose/restart/{service}",
             post(compose_restart_service),
@@ -137,10 +134,7 @@ pub fn router(state: AppState) -> Router {
             "/api/cluster/status",
             get(crate::cluster::server::cluster_status),
         )
-        .route(
-            "/api/cluster/init",
-            post(crate::cluster::init::start_init),
-        )
+        .route("/api/cluster/init", post(crate::cluster::init::start_init))
         .route(
             "/api/cluster/check",
             post(crate::cluster::init::start_check),
@@ -190,9 +184,10 @@ async fn load_host_snapshot(state: &AppState) -> Result<hostinfo::HostSnapshot, 
     };
     let paths = state.paths.clone();
     let port = state.port;
-    let mut snap = tokio::task::spawn_blocking(move || hostinfo::collect_with_projects(&paths, projects))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
+    let mut snap =
+        tokio::task::spawn_blocking(move || hostinfo::collect_with_projects(&paths, projects))
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))?;
     snap.listen = Some(("0.0.0.0".into(), port));
     Ok(snap)
 }
@@ -225,7 +220,14 @@ async fn get_job(
         .ok_or_else(|| AppError::not_found("进度任务不存在"))
 }
 
-fn job_set(state: &AppState, job_id: Option<&str>, phase: &str, message: &str, current: u64, total: u64) {
+fn job_set(
+    state: &AppState,
+    job_id: Option<&str>,
+    phase: &str,
+    message: &str,
+    current: u64,
+    total: u64,
+) {
     if let Some(id) = job_id {
         state.jobs.set(id, phase, message, current, total);
     }
@@ -309,14 +311,9 @@ fn restore_blocking(
 }
 
 async fn index() -> impl IntoResponse {
-    let html = include_str!("assets/index.html").replace(
-        "__APP_VERSION__",
-        env!("CARGO_PKG_VERSION"),
-    );
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        html,
-    )
+    let html =
+        include_str!("assets/index.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"));
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html)
 }
 
 async fn meta(State(state): State<AppState>) -> Json<Meta> {
@@ -345,7 +342,11 @@ fn inspect_directory(raw: &str) -> Result<ValidateDirResult, AppError> {
     let (images, jar_mounts, warning) = match &compose {
         Some(path) => {
             let text = std::fs::read_to_string(path).unwrap_or_default();
-            (parse_compose_images(&text), parse_compose_jar_mounts(&text), None)
+            (
+                parse_compose_images(&text),
+                parse_compose_jar_mounts(&text),
+                None,
+            )
         }
         None => (
             Vec::new(),
@@ -417,18 +418,20 @@ async fn create_project(
     let version_id = Uuid::new_v4().to_string();
     let tree = state.paths.version_tree(&id, &version_id);
     let live = PathBuf::from(&inspected.directory);
-    let stopped = compose_down_for_backup(
-        &state,
-        &live,
-        body.job_id.as_deref(),
-        body.stop_compose,
-    )
-    .await?;
+    let stopped =
+        compose_down_for_backup(&state, &live, body.job_id.as_deref(), body.stop_compose).await?;
     let tree_clone = tree.clone();
     let jobs = state.jobs.clone();
     let job_id = body.job_id.clone();
     let live_for_snap = live.clone();
-    job_set(&state, job_id.as_deref(), "snapshot", "正在建立基线快照…", 0, 0);
+    job_set(
+        &state,
+        job_id.as_deref(),
+        "snapshot",
+        "正在建立基线快照…",
+        0,
+        0,
+    );
     if let Err(err) = tokio::task::spawn_blocking(move || {
         snapshot_blocking(live_for_snap, tree_clone, jobs, job_id)
     })
@@ -440,7 +443,13 @@ async fn create_project(
         let root = state.paths.project_backup_root(&id);
         let _ = remove_dir_if_exists(&root);
         if stopped {
-            compose_up_best_effort(&state, &live, body.job_id.as_deref(), "备份失败，正在重新启动 Compose…").await;
+            compose_up_best_effort(
+                &state,
+                &live,
+                body.job_id.as_deref(),
+                "备份失败，正在重新启动 Compose…",
+            )
+            .await;
         }
         return Err(err);
     }
@@ -542,7 +551,14 @@ async fn update_project(
     };
 
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-    db::update_project(&conn, &id, &name, &description, &directory, &db::now_rfc3339())?;
+    db::update_project(
+        &conn,
+        &id,
+        &name,
+        &description,
+        &directory,
+        &db::now_rfc3339(),
+    )?;
     db::get_project(&conn, &id)?
         .map(Json)
         .ok_or_else(|| AppError::not_found("项目不存在"))
@@ -655,7 +671,9 @@ async fn delete_orphan(
             db::get_version(&conn, pid, vid)?.is_some()
         };
         if exists {
-            return Err(AppError::Conflict("该目录属于已登记版本，请用「删除项目」".into()));
+            return Err(AppError::Conflict(
+                "该目录属于已登记版本，请用「删除项目」".into(),
+            ));
         }
         state.paths.version_dir(pid, vid)
     } else {
@@ -667,7 +685,9 @@ async fn delete_orphan(
             db::get_project(&conn, &id)?.is_some()
         };
         if known {
-            return Err(AppError::Conflict("该目录属于已登记项目，请用「删除项目」".into()));
+            return Err(AppError::Conflict(
+                "该目录属于已登记项目，请用「删除项目」".into(),
+            ));
         }
         state.paths.project_backup_root(&id)
     };
@@ -701,8 +721,8 @@ async fn list_versions(
 ) -> Result<Json<Vec<Version>>, AppError> {
     let (project, mut versions) = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        let project = db::get_project(&conn, &id)?
-            .ok_or_else(|| AppError::not_found("项目不存在"))?;
+        let project =
+            db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?;
         let versions = db::list_versions(&conn, &id)?;
         (project, versions)
     };
@@ -912,7 +932,14 @@ async fn apply_update(
     let live_clone = live.clone();
     let jobs = state.jobs.clone();
     let job_for_snap = job_id.clone();
-    job_set(&state, job_id.as_deref(), "snapshot", "正在备份当前目录…", 0, 0);
+    job_set(
+        &state,
+        job_id.as_deref(),
+        "snapshot",
+        "正在备份当前目录…",
+        0,
+        0,
+    );
     if let Err(err) = tokio::task::spawn_blocking(move || {
         snapshot_blocking(live_clone, tree_clone, jobs, job_for_snap)
     })
@@ -924,7 +951,13 @@ async fn apply_update(
         let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         if stopped {
-            compose_up_best_effort(&state, &live, job_id.as_deref(), "备份失败，正在重新启动 Compose…").await;
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "备份失败，正在重新启动 Compose…",
+            )
+            .await;
         }
         return Err(err);
     }
@@ -933,14 +966,19 @@ async fn apply_update(
         let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         if stopped {
-            compose_up_best_effort(&state, &live, job_id.as_deref(), "发布失败，正在重新启动 Compose…").await;
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "发布失败，正在重新启动 Compose…",
+            )
+            .await;
         }
         return Err(err.into());
     }
 
-    let (archives, jar_files): (Vec<PathBuf>, Vec<PathBuf>) = staged_files
-        .into_iter()
-        .partition(|p| {
+    let (archives, jar_files): (Vec<PathBuf>, Vec<PathBuf>) =
+        staged_files.into_iter().partition(|p| {
             p.file_name()
                 .and_then(|s| s.to_str())
                 .map(is_image_archive_name)
@@ -958,14 +996,26 @@ async fn apply_update(
             archives.len() as u64,
         );
     }
-    if let Err(err) =
-        load_and_retag(&state, &archives, Some(&images_dir), &mut loaded, job_id.as_deref()).await
+    if let Err(err) = load_and_retag(
+        &state,
+        &archives,
+        Some(&images_dir),
+        &mut loaded,
+        job_id.as_deref(),
+    )
+    .await
     {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         if stopped {
-            compose_up_best_effort(&state, &live, job_id.as_deref(), "发布失败，正在重新启动 Compose…").await;
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "发布失败，正在重新启动 Compose…",
+            )
+            .await;
         }
         return Err(err);
     }
@@ -982,14 +1032,26 @@ async fn apply_update(
             jar_files.len() as u64,
         );
     }
-    if let Err(err) =
-        deploy_jars(&jar_files, Some(&jars_dir), &live, &mounts, &mut deployed_jars).await
+    if let Err(err) = deploy_jars(
+        &jar_files,
+        Some(&jars_dir),
+        &live,
+        &mounts,
+        &mut deployed_jars,
+    )
+    .await
     {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = remove_dir_if_exists(&version_dir);
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         if stopped {
-            compose_up_best_effort(&state, &live, job_id.as_deref(), "发布失败，正在重新启动 Compose…").await;
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "发布失败，正在重新启动 Compose…",
+            )
+            .await;
         }
         return Err(err);
     }
@@ -1039,9 +1101,15 @@ async fn apply_update(
     }
 
     if restart {
-        job_set(&state, job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
-        if let Err(err) = restart_after_update(&state, &live, &deployed_jars).await
-        {
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "compose",
+            "正在重启 Compose…",
+            0,
+            0,
+        );
+        if let Err(err) = restart_after_update(&state, &live, &deployed_jars).await {
             tracing::warn!("compose up after update failed: {err:#}");
             let msg = format!(
                 "文件已保存为版本 {}，但 Compose 启动失败：{err}",
@@ -1080,9 +1148,8 @@ async fn apply_replace(
     } = upload;
     let live = PathBuf::from(&project.directory);
 
-    let (archives, jar_files): (Vec<PathBuf>, Vec<PathBuf>) = staged_files
-        .into_iter()
-        .partition(|p| {
+    let (archives, jar_files): (Vec<PathBuf>, Vec<PathBuf>) =
+        staged_files.into_iter().partition(|p| {
             p.file_name()
                 .and_then(|s| s.to_str())
                 .map(is_image_archive_name)
@@ -1105,8 +1172,7 @@ async fn apply_replace(
             archives.len() as u64,
         );
     }
-    if let Err(err) =
-        load_and_retag(&state, &archives, None, &mut loaded, job_id.as_deref()).await
+    if let Err(err) = load_and_retag(&state, &archives, None, &mut loaded, job_id.as_deref()).await
     {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = tokio::fs::remove_dir_all(&tmp).await;
@@ -1133,7 +1199,14 @@ async fn apply_replace(
     let _ = tokio::fs::remove_dir_all(&tmp).await;
 
     if restart {
-        job_set(&state, job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "compose",
+            "正在重启 Compose…",
+            0,
+            0,
+        );
         let result = if !archives.is_empty() {
             state.docker.compose_restart(&live).await
         } else {
@@ -1328,9 +1401,7 @@ async fn rollback(
     let _guard = match gate.try_lock() {
         Ok(guard) => guard,
         Err(_) => {
-            return Err(AppError::Conflict(
-                "正在恢复或升级中，请勿重复操作".into(),
-            ));
+            return Err(AppError::Conflict("正在恢复或升级中，请勿重复操作".into()));
         }
     };
 
@@ -1343,18 +1414,20 @@ async fn rollback(
     let safety_tree = state.paths.version_tree(&id, &safety_id);
     let safety_dir = state.paths.version_dir(&id, &safety_id);
     let live = PathBuf::from(&project.directory);
-    let stopped = compose_down_for_backup(
-        &state,
-        &live,
-        body.job_id.as_deref(),
-        body.stop_compose,
-    )
-    .await?;
+    let stopped =
+        compose_down_for_backup(&state, &live, body.job_id.as_deref(), body.stop_compose).await?;
     let safety_tree_clone = safety_tree.clone();
     let live_clone = live.clone();
     let jobs = state.jobs.clone();
     let job_id = body.job_id.clone();
-    job_set(&state, job_id.as_deref(), "snapshot", "正在备份当前目录…", 0, 0);
+    job_set(
+        &state,
+        job_id.as_deref(),
+        "snapshot",
+        "正在备份当前目录…",
+        0,
+        0,
+    );
     if let Err(err) = tokio::task::spawn_blocking(move || {
         snapshot_blocking(live_clone, safety_tree_clone, jobs, job_id)
     })
@@ -1401,7 +1474,14 @@ async fn rollback(
 
     let snapshot = PathBuf::from(&target.backup_path);
     let live_restore = live.clone();
-    job_set(&state, body.job_id.as_deref(), "restore", "正在解压备份…", 0, 0);
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "restore",
+        "正在解压备份…",
+        0,
+        0,
+    );
     let jobs = state.jobs.clone();
     let job_for_restore = body.job_id.clone();
     if let Err(err) = tokio::task::spawn_blocking(move || {
@@ -1481,7 +1561,14 @@ async fn rollback(
     }
 
     if body.restart {
-        job_set(&state, body.job_id.as_deref(), "compose", "正在重启 Compose…", 0, 0);
+        job_set(
+            &state,
+            body.job_id.as_deref(),
+            "compose",
+            "正在重启 Compose…",
+            0,
+            0,
+        );
         let mounts = read_jar_mounts(&live);
         let mut services: Vec<String> = mounts.into_iter().map(|m| m.service).collect();
         services.sort();
@@ -1641,11 +1728,25 @@ fn snapshot_disk_if_needed(
     match latest {
         Some(r) if r.etag == disk_etag => Ok(()),
         Some(_) => {
-            record_compose_revision(conn, project_id, filename, disk, "磁盘上的未记录内容", "external")?;
+            record_compose_revision(
+                conn,
+                project_id,
+                filename,
+                disk,
+                "磁盘上的未记录内容",
+                "external",
+            )?;
             Ok(())
         }
         None => {
-            record_compose_revision(conn, project_id, filename, disk, "打开编辑器时的线上文件", "baseline")?;
+            record_compose_revision(
+                conn,
+                project_id,
+                filename,
+                disk,
+                "打开编辑器时的线上文件",
+                "baseline",
+            )?;
             Ok(())
         }
     }
@@ -1847,8 +1948,8 @@ async fn compose_revision_restore(
 ) -> Result<Json<ComposeFileView>, AppError> {
     let (project, rev) = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        let project = db::get_project(&conn, &id)?
-            .ok_or_else(|| AppError::not_found("项目不存在"))?;
+        let project =
+            db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?;
         let rev = db::get_compose_revision(&conn, &id, &rev_id)?
             .ok_or_else(|| AppError::not_found("该 Compose 版本不存在"))?;
         (project, rev)
@@ -1933,11 +2034,25 @@ fn snapshot_env_disk_if_needed(
     match latest {
         Some(r) if r.etag == disk_etag => Ok(()),
         Some(_) => {
-            record_env_revision(conn, project_id, filename, disk, "磁盘上的未记录内容", "external")?;
+            record_env_revision(
+                conn,
+                project_id,
+                filename,
+                disk,
+                "磁盘上的未记录内容",
+                "external",
+            )?;
             Ok(())
         }
         None => {
-            record_env_revision(conn, project_id, filename, disk, "打开编辑器时的线上文件", "baseline")?;
+            record_env_revision(
+                conn,
+                project_id,
+                filename,
+                disk,
+                "打开编辑器时的线上文件",
+                "baseline",
+            )?;
             Ok(())
         }
     }
@@ -2112,8 +2227,8 @@ async fn env_revision_restore(
 ) -> Result<Json<ComposeFileView>, AppError> {
     let (project, rev) = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        let project = db::get_project(&conn, &id)?
-            .ok_or_else(|| AppError::not_found("项目不存在"))?;
+        let project =
+            db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?;
         let rev = db::get_env_revision(&conn, &id, &rev_id)?
             .ok_or_else(|| AppError::not_found("该环境变量版本不存在"))?;
         (project, rev)
@@ -2145,14 +2260,24 @@ async fn compose_down(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<LogsResult>, AppError> {
-    compose_action(state, id, |d, dir| async move { d.compose_down(&dir).await }).await
+    compose_action(
+        state,
+        id,
+        |d, dir| async move { d.compose_down(&dir).await },
+    )
+    .await
 }
 
 async fn compose_restart(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<LogsResult>, AppError> {
-    compose_action(state, id, |d, dir| async move { d.compose_restart(&dir).await }).await
+    compose_action(
+        state,
+        id,
+        |d, dir| async move { d.compose_restart(&dir).await },
+    )
+    .await
 }
 
 async fn compose_restart_service(
@@ -2203,7 +2328,12 @@ async fn compose_logs(
         db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
     };
     let tail = q.tail.unwrap_or(200).min(2000);
-    let service = match q.service.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let service = match q
+        .service
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(name) => {
             crate::term::require_service_name(name)?;
             Some(name.to_string())
@@ -2212,11 +2342,7 @@ async fn compose_logs(
     };
     let logs = state
         .docker
-        .compose_logs(
-            &PathBuf::from(project.directory),
-            tail,
-            service.as_deref(),
-        )
+        .compose_logs(&PathBuf::from(project.directory), tail, service.as_deref())
         .await
         .map_err(|e| AppError::internal(e.to_string()))?;
     Ok(Json(LogsResult { logs }))
@@ -2267,7 +2393,12 @@ async fn db_meta(
     crate::dbadmin::require_engine(q.engine.as_deref())?;
     let project = db_project(&state, &id)?;
     Ok(Json(
-        crate::dbadmin::meta(&state.docker, std::path::Path::new(&project.directory), &q.service).await?,
+        crate::dbadmin::meta(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &q.service,
+        )
+        .await?,
     ))
 }
 
@@ -2279,7 +2410,12 @@ async fn db_databases(
     crate::dbadmin::require_engine(q.engine.as_deref())?;
     let project = db_project(&state, &id)?;
     Ok(Json(
-        crate::dbadmin::databases(&state.docker, std::path::Path::new(&project.directory), &q.service).await?,
+        crate::dbadmin::databases(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &q.service,
+        )
+        .await?,
     ))
 }
 
@@ -2289,10 +2425,20 @@ async fn db_schemas(
     Query(q): Query<DbParams>,
 ) -> Result<Json<crate::dbadmin::NameList>, AppError> {
     crate::dbadmin::require_engine(q.engine.as_deref())?;
-    let database = q.database.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择数据库"))?;
+    let database = q
+        .database
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::bad("请选择数据库"))?;
     let project = db_project(&state, &id)?;
     Ok(Json(
-        crate::dbadmin::schemas(&state.docker, std::path::Path::new(&project.directory), &q.service, database).await?,
+        crate::dbadmin::schemas(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &q.service,
+            database,
+        )
+        .await?,
     ))
 }
 
@@ -2302,11 +2448,26 @@ async fn db_objects(
     Query(q): Query<DbParams>,
 ) -> Result<Json<crate::dbadmin::ObjectList>, AppError> {
     crate::dbadmin::require_engine(q.engine.as_deref())?;
-    let database = q.database.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择数据库"))?;
-    let schema = q.schema.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择 schema"))?;
+    let database = q
+        .database
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::bad("请选择数据库"))?;
+    let schema = q
+        .schema
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::bad("请选择 schema"))?;
     let project = db_project(&state, &id)?;
     Ok(Json(
-        crate::dbadmin::objects(&state.docker, std::path::Path::new(&project.directory), &q.service, database, schema).await?,
+        crate::dbadmin::objects(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &q.service,
+            database,
+            schema,
+        )
+        .await?,
     ))
 }
 
@@ -2316,9 +2477,21 @@ async fn db_rows(
     Query(q): Query<DbParams>,
 ) -> Result<Json<crate::dbadmin::RowPage>, AppError> {
     crate::dbadmin::require_engine(q.engine.as_deref())?;
-    let database = q.database.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择数据库"))?;
-    let schema = q.schema.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择 schema"))?;
-    let name = q.name.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| AppError::bad("请选择表或视图"))?;
+    let database = q
+        .database
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::bad("请选择数据库"))?;
+    let schema = q
+        .schema
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::bad("请选择 schema"))?;
+    let name = q
+        .name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::bad("请选择表或视图"))?;
     let project = db_project(&state, &id)?;
     let filter = match (
         q.filter_col.as_deref().filter(|s| !s.is_empty()),
@@ -2355,8 +2528,12 @@ async fn db_update_row(
     crate::dbadmin::require_engine(body.engine.as_deref())?;
     let project = db_project(&state, &id)?;
     Ok(Json(
-        crate::dbadmin::update_row(&state.docker, std::path::Path::new(&project.directory), &body)
-            .await?,
+        crate::dbadmin::update_row(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &body,
+        )
+        .await?,
     ))
 }
 
@@ -2368,8 +2545,12 @@ async fn db_delete_row(
     crate::dbadmin::require_engine(body.engine.as_deref())?;
     let project = db_project(&state, &id)?;
     Ok(Json(
-        crate::dbadmin::delete_row(&state.docker, std::path::Path::new(&project.directory), &body)
-            .await?,
+        crate::dbadmin::delete_row(
+            &state.docker,
+            std::path::Path::new(&project.directory),
+            &body,
+        )
+        .await?,
     ))
 }
 
@@ -2405,7 +2586,10 @@ async fn vendor_xterm_css() -> impl IntoResponse {
 async fn vendor_xterm_js() -> impl IntoResponse {
     (
         [
-            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_str!("assets/vendor/xterm.js"),
@@ -2415,7 +2599,10 @@ async fn vendor_xterm_js() -> impl IntoResponse {
 async fn vendor_xterm_fit() -> impl IntoResponse {
     (
         [
-            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_str!("assets/vendor/xterm-addon-fit.js"),
@@ -2454,7 +2641,10 @@ async fn vendor_ace(Path(name): Path<String>) -> Result<impl IntoResponse, AppEr
     };
     Ok((
         [
-            (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         bytes,
@@ -2483,7 +2673,11 @@ mod tests {
     fn lists_failed_first_backup_dir() {
         let root = temp_root();
         fs::create_dir_all(root.join("leftover-id").join("repo.git")).unwrap();
-        fs::write(root.join("leftover-id").join("repo.git").join("HEAD"), b"ref").unwrap();
+        fs::write(
+            root.join("leftover-id").join("repo.git").join("HEAD"),
+            b"ref",
+        )
+        .unwrap();
         let items = collect_orphans(&root, &HashSet::new(), &HashMap::new());
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "leftover-id");
@@ -2497,7 +2691,11 @@ mod tests {
         fs::create_dir_all(root.join("proj").join("repo.git")).unwrap();
         fs::create_dir_all(root.join("proj").join("good-ver")).unwrap();
         fs::create_dir_all(root.join("proj").join("ghost-ver")).unwrap();
-        fs::write(root.join("proj").join("ghost-ver").join("tree.gitref"), b"dead").unwrap();
+        fs::write(
+            root.join("proj").join("ghost-ver").join("tree.gitref"),
+            b"dead",
+        )
+        .unwrap();
         let known = HashSet::from(["proj".into()]);
         let versions = HashMap::from([("proj".into(), HashSet::from(["good-ver".into()]))]);
         let items = collect_orphans(&root, &known, &versions);

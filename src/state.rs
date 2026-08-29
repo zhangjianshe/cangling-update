@@ -128,7 +128,10 @@ mod tests {
         let remaining = guard
             .lockout_remaining_secs("admin")
             .expect("locked after 3 failures");
-        assert!(remaining > 0 && remaining <= LOGIN_LOCK_SECS, "remaining = {remaining}");
+        assert!(
+            remaining > 0 && remaining <= LOGIN_LOCK_SECS,
+            "remaining = {remaining}"
+        );
 
         guard.clear("admin");
         assert!(guard.lockout_remaining_secs("admin").is_none());

@@ -103,6 +103,46 @@ pub fn restart() -> Result<()> {
     Ok(())
 }
 
+/// 进程内请求重启：已安装 systemd 时用 `--no-block`，避免服务同步 restart 自己造成死锁；
+/// 未安装服务时 delay 2 秒再 exec 自身（调用方在非 systemd 路径上应随后退出，以释放端口）。
+pub fn request_restart() -> Result<()> {
+    if is_installed() {
+        let status = Command::new("systemctl")
+            .args(["restart", "--no-block", SERVICE_NAME])
+            .status()
+            .with_context(|| format!("执行 systemctl restart --no-block {SERVICE_NAME}"))?;
+        if !status.success() {
+            bail!(
+                "systemctl restart --no-block {SERVICE_NAME} 失败，退出码 {:?}",
+                status.code()
+            );
+        }
+        tracing::info!("已请求 systemd 重启 {SERVICE_NAME}");
+        return Ok(());
+    }
+    spawn_reexec()
+}
+
+fn spawn_reexec() -> Result<()> {
+    let exe = current_exe()?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut script = String::from("sleep 2; exec ");
+    script.push_str(&shell_quote(&exe));
+    for a in &args {
+        script.push(' ');
+        script.push_str(&shell_quote(Path::new(a)));
+    }
+    Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("启动延迟重启失败")?;
+    tracing::info!("未安装 systemd 服务，将在 2 秒后以新二进制重新启动");
+    Ok(())
+}
+
 pub fn is_installed() -> bool {
     Path::new(UNIT_PATH).exists()
 }
@@ -131,10 +171,7 @@ pub fn print_installed_access() -> Result<()> {
     eprintln!("已安装为系统服务，不会在前台再次启动。");
     eprintln!();
     eprintln!("  服务     {SERVICE_NAME}");
-    eprintln!(
-        "  状态     {}",
-        if active { "运行中" } else { "已停止" }
-    );
+    eprintln!("  状态     {}", if active { "运行中" } else { "已停止" });
     eprintln!("  单元文件 {UNIT_PATH}");
     eprintln!();
     if active {
@@ -345,8 +382,7 @@ fn ensure_bin_link(exe: &Path, link: &Path) -> Result<BinLinkAction> {
                 return Ok(BinLinkAction::Unchanged);
             }
         }
-        std::fs::remove_file(link)
-            .with_context(|| format!("删除旧符号链接 {}", link.display()))?;
+        std::fs::remove_file(link).with_context(|| format!("删除旧符号链接 {}", link.display()))?;
         unix_symlink(&exe_canon, link)?;
         return Ok(BinLinkAction::Updated);
     }
@@ -431,7 +467,11 @@ fn systemctl(args: &[&str]) -> Result<()> {
         .status()
         .with_context(|| format!("执行 systemctl {}", args.join(" ")))?;
     if !status.success() {
-        bail!("systemctl {} 失败，退出码 {:?}", args.join(" "), status.code());
+        bail!(
+            "systemctl {} 失败，退出码 {:?}",
+            args.join(" "),
+            status.code()
+        );
     }
     Ok(())
 }
@@ -505,9 +545,15 @@ mod tests {
         std::fs::write(&exe, b"fake").unwrap();
         let link = dir.join("bin").join("cangling-update");
 
-        assert_eq!(ensure_bin_link(&exe, &link).unwrap(), BinLinkAction::Created);
+        assert_eq!(
+            ensure_bin_link(&exe, &link).unwrap(),
+            BinLinkAction::Created
+        );
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-        assert_eq!(std::fs::canonicalize(&link).unwrap(), std::fs::canonicalize(&exe).unwrap());
+        assert_eq!(
+            std::fs::canonicalize(&link).unwrap(),
+            std::fs::canonicalize(&exe).unwrap()
+        );
 
         assert_eq!(
             ensure_bin_link(&exe, &link).unwrap(),
@@ -528,8 +574,14 @@ mod tests {
         let link = dir.join("cangling-update-link");
         std::os::unix::fs::symlink(&old, &link).unwrap();
 
-        assert_eq!(ensure_bin_link(&exe, &link).unwrap(), BinLinkAction::Updated);
-        assert_eq!(std::fs::canonicalize(&link).unwrap(), std::fs::canonicalize(&exe).unwrap());
+        assert_eq!(
+            ensure_bin_link(&exe, &link).unwrap(),
+            BinLinkAction::Updated
+        );
+        assert_eq!(
+            std::fs::canonicalize(&link).unwrap(),
+            std::fs::canonicalize(&exe).unwrap()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
