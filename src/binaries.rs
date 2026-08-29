@@ -1,15 +1,16 @@
 //! 主节点为工作节点准备的 `cangling-update` 双架构二进制。
 //!
-//! 布局（与可执行文件同目录）：
+//! 查找顺序：
+//! 1. keeper 同步的 `repo/np4/np4-update/latest/`（任意子目录中的对应 ELF）
+//! 2. 程序旁 `updates/` 槽位（本机 `update` / `--import` / 启动时写入）
+//!
 //! ```text
 //! cangling-update
+//! repo/np4/np4-update/latest/.../cangling-update-linux-amd64
 //! updates/
 //!   cangling-update-linux-amd64
 //!   cangling-update-linux-arm64
 //! ```
-//!
-//! master 启动时会把正在运行的本机架构二进制写入对应槽位；另一架构需
-//! `cangling-update update` 从 GitHub 拉取，或 `--import` / 手工拷贝。
 
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -141,12 +142,20 @@ pub fn inventory(exe_dir: &Path) -> Vec<StoredBinary> {
 }
 
 pub fn stored(exe_dir: &Path, arch: Arch) -> Option<StoredBinary> {
-    let path = binary_path(exe_dir, arch);
-    let meta = fs::metadata(&path).ok()?;
+    if let Some(path) = find_np4_update_binary(exe_dir, arch) {
+        if let Some(info) = stored_at(&path, arch) {
+            return Some(info);
+        }
+    }
+    stored_at(&binary_path(exe_dir, arch), arch)
+}
+
+fn stored_at(path: &Path, arch: Arch) -> Option<StoredBinary> {
+    let meta = fs::metadata(path).ok()?;
     if !meta.is_file() || meta.len() < MIN_BYTES {
         return None;
     }
-    if let Some(got) = elf_arch_file(&path) {
+    if let Some(got) = elf_arch_file(path) {
         if got != arch {
             return None;
         }
@@ -160,6 +169,36 @@ pub fn stored(exe_dir: &Path, arch: Arch) -> Option<StoredBinary> {
         size: meta.len(),
         path: Some(path.display().to_string()),
     })
+}
+
+/// keeper 同步的 `repo/np4/np4-update/latest/` 下按文件名或 ELF 头匹配。
+fn find_np4_update_binary(exe_dir: &Path, arch: Arch) -> Option<PathBuf> {
+    let latest = crate::repo::np4_update_latest_dir(exe_dir);
+    if !latest.is_dir() {
+        return None;
+    }
+    let want = arch.asset_name();
+    let mut named = None;
+    let mut elf_hit = None;
+    for entry in walkdir::WalkDir::new(&latest)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let fname = entry.file_name().to_string_lossy();
+        if fname == want {
+            named = Some(path.to_path_buf());
+            break;
+        }
+        if elf_hit.is_none() && elf_arch_file(path) == Some(arch) {
+            elf_hit = Some(path.to_path_buf());
+        }
+    }
+    named.or(elf_hit)
 }
 
 pub fn elf_arch_file(path: &Path) -> Option<Arch> {
@@ -360,6 +399,32 @@ mod tests {
         let info = stored(&dir, arch).expect("seeded binary");
         assert!(info.available);
         assert!(info.size >= MIN_BYTES);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefers_np4_update_latest_over_updates_slot() {
+        let dir = temp_dir();
+        let arch = Arch::Amd64;
+        fs::create_dir_all(updates_dir(&dir)).unwrap();
+        fs::write(binary_path(&dir, arch), fake_elf(arch)).unwrap();
+
+        let latest = crate::repo::np4_update_latest_dir(&dir)
+            .join("linux")
+            .join("amd64");
+        fs::create_dir_all(&latest).unwrap();
+        let np4 = latest.join(arch.asset_name());
+        let mut elf = fake_elf(arch);
+        elf.resize(4096, 0);
+        fs::write(&np4, &elf).unwrap();
+
+        let info = stored(&dir, arch).expect("np4 binary");
+        assert!(info
+            .path
+            .unwrap()
+            .replace('\\', "/")
+            .contains("np4/np4-update/latest"));
+        assert_eq!(info.size, 4096);
         let _ = fs::remove_dir_all(&dir);
     }
 }

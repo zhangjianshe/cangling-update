@@ -1,17 +1,18 @@
-//! 软件仓库：解析可执行文件旁的 `repo/` 目录，按平台分 3 类展示。
+//! 软件仓库：解析可执行文件旁的 `repo/` 目录。
 //!
-//! 布局约定：
+//! 布局与 cangling-keeper「软件同步」一致（按软件集分子目录）：
 //! ```text
-//! cangling-update          # 可执行文件
-//! repo/                    # 软件仓库根目录
-//!   kylin-arm/             # 麒麟 OS (ARM)
-//!     <软件包>/            # 每个子目录是一个软件包（内容不限）
-//!       install.sh         # 安装脚本（可识别 install.sh / setup.sh 等）
-//!   linux-x86/             # 通用 Linux x86
-//!     <软件包>/...
-//!   windows/               # Windows
-//!     <软件包>/install.bat
+//! cangling-update
+//! repo/
+//!   cangling-repo/         # 离线安装包（原 repo-templates / git 仓库）
+//!     kylin-arm/<软件包>/install.sh
+//!     linux-x86/<软件包>/...
+//!     windows/<软件包>/...
+//!   np4/                   # 维护中心 Manifest 集
+//!     np4-update/latest/   # cangling-update 自我更新二进制
 //! ```
+//!
+//! 仍兼容旧布局（平台目录直接放在 `repo/` 下）。
 //!
 //! master 本地扫描仓库并对外提供打包下载（m2m 接口），worker 通过 master 拉取
 //! 仓库清单、下载软件包并在本机运行安装脚本。
@@ -36,6 +37,14 @@ pub const PLATFORMS: &[(&str, &str)] = &[
     ("linux-x86", "通用 Linux x86"),
     ("windows", "Windows"),
 ];
+
+/// keeper 同步的 Git 离线安装集（原 repo-templates）。
+pub const CANGLING_REPO_SET: &str = "cangling-repo";
+/// keeper 同步的维护中心 Manifest 集。
+pub const NP4_SET: &str = "np4";
+/// np4 集里的自我更新软件。
+pub const NP4_UPDATE: &str = "np4-update";
+pub const NP4_UPDATE_VERSION: &str = "latest";
 
 /// 安装脚本执行超时（安装可能比普通脚本更久）。
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -107,6 +116,25 @@ pub fn host_platform() -> &'static str {
 
 pub fn repo_root(paths: &AppPaths) -> PathBuf {
     paths.exe_dir.join("repo")
+}
+
+/// 离线安装包根：优先 `repo/cangling-repo/`，否则回退到 `repo/`（旧克隆）。
+pub fn packages_root(repo: &FsPath) -> PathBuf {
+    let nested = repo.join(CANGLING_REPO_SET);
+    if nested.is_dir() {
+        nested
+    } else {
+        repo.to_path_buf()
+    }
+}
+
+/// `repo/np4/np4-update/latest`
+pub fn np4_update_latest_dir(exe_dir: &FsPath) -> PathBuf {
+    exe_dir
+        .join("repo")
+        .join(NP4_SET)
+        .join(NP4_UPDATE)
+        .join(NP4_UPDATE_VERSION)
 }
 
 /// 控制台入口：master/standalone 扫描本地仓库；worker 拉取 master 的仓库。
@@ -323,10 +351,11 @@ async fn run_installer_in_dir(
 
 pub fn scan_index(paths: &AppPaths) -> RepoIndex {
     let root = repo_root(paths);
+    let pkg_root = packages_root(&root);
     let exists = root.is_dir();
     let mut tabs = Vec::new();
     for (id, name) in PLATFORMS {
-        let tab_dir = root.join(id);
+        let tab_dir = pkg_root.join(id);
         let packages = if tab_dir.is_dir() {
             scan_tab(&tab_dir)
         } else {
@@ -336,6 +365,14 @@ pub fn scan_index(paths: &AppPaths) -> RepoIndex {
             id: id.to_string(),
             name: name.to_string(),
             packages,
+        });
+    }
+    let np4_dir = root.join(NP4_SET);
+    if np4_dir.is_dir() {
+        tabs.push(RepoTab {
+            id: NP4_SET.to_string(),
+            name: "np4".to_string(),
+            packages: scan_tab(&np4_dir),
         });
     }
     RepoIndex {
@@ -599,6 +636,13 @@ fn package_dir(root: &FsPath, tab: &str, package: &str) -> Result<PathBuf, AppEr
     if !valid_segment(package) {
         return Err(AppError::bad("无效的软件包名"));
     }
+    if tab == NP4_SET {
+        return Ok(root.join(NP4_SET).join(package));
+    }
+    let nested = root.join(CANGLING_REPO_SET).join(tab).join(package);
+    if nested.is_dir() {
+        return Ok(nested);
+    }
     Ok(root.join(tab).join(package))
 }
 
@@ -783,6 +827,31 @@ mod tests {
         assert!(package_dir(root, "../x", "pkg").is_err());
         assert!(package_dir(root, "linux-x86", "../pkg").is_err());
         assert!(package_dir(root, "linux-x86", "a/b").is_err());
+    }
+
+    #[test]
+    fn package_dir_prefers_cangling_repo_set() {
+        let dir = tmpdir("nested");
+        let legacy = dir.join("linux-x86").join("git");
+        let nested = dir.join(CANGLING_REPO_SET).join("linux-x86").join("git");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(legacy.join("old"), "old").unwrap();
+        std::fs::write(nested.join("new"), "new").unwrap();
+        let got = package_dir(&dir, "linux-x86", "git").unwrap();
+        assert_eq!(got, nested);
+        let np4 = package_dir(&dir, NP4_SET, NP4_UPDATE).unwrap();
+        assert_eq!(np4, dir.join(NP4_SET).join(NP4_UPDATE));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn packages_root_uses_nested_when_present() {
+        let dir = tmpdir("pkgroot");
+        assert_eq!(packages_root(&dir), dir);
+        std::fs::create_dir_all(dir.join(CANGLING_REPO_SET)).unwrap();
+        assert_eq!(packages_root(&dir), dir.join(CANGLING_REPO_SET));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

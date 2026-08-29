@@ -1,4 +1,4 @@
-//! 集群初始化：master 一键安装本机与各 worker 的基线软件（全部来自离线软件仓库）。
+//! 集群初始化：master 一键安装本机与各 worker 的基线软件（全部来自 `repo/cangling-repo/`）。
 //!
 //! master 角色：git、samba、docker、k3s-server（含 Traefik 端口 8020/8443）、k9s。
 //! worker 角色：git、samba、docker、k3s-agent（携带 K3S_URL/K3S_TOKEN 加入集群）。

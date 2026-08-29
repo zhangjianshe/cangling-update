@@ -1412,13 +1412,14 @@
     function renderGitRepoLayout(status, tree) {
       const s = status || {};
       const cloned = !!s.is_git;
+      const canBrowse = cloned || !!s.exists;
       const statusLine = cloned
         ? `<span>分支 <b>${esc(s.branch || "—")}</b></span>` +
           `<span>${esc(s.last_commit || "—")}</span>` +
           (s.dirty ? `<span class="bad">有本地改动</span>` : `<span class="ok">干净</span>`) +
           `<span title="${esc(s.remote || "")}">${esc(s.remote || "—")}</span>` +
           `<span>${esc(s.last_commit_time || "")}</span>`
-        : "";
+        : (canBrowse ? `<span class="ok">维护中心已同步</span>` : "");
       const gitWarning = s.git_available === false
         ? `<div class="card" style="border:1px solid var(--accent)">
             <h3>⚠ 本机未安装 Git</h3>
@@ -1434,19 +1435,19 @@ sudo dnf install -y git</pre>
 
       $("#main").innerHTML = `
         <div class="title-row">
-          <div><h2>软件仓库</h2><div class="path">${cloned ? esc(s.root) : "尚未克隆远程仓库"}</div></div>
+          <div><h2>软件仓库</h2><div class="path">${canBrowse ? esc(s.root) : "尚未同步或克隆仓库"}</div></div>
           <div class="row">
             ${cloned
               ? `<button class="btn primary" id="btn-repo-pull">更新</button>`
-              : `<button class="btn primary" id="btn-repo-clone">克隆仓库</button>`}
+              : (canBrowse ? "" : `<button class="btn primary" id="btn-repo-clone">克隆仓库</button>`)}
             <button class="btn" id="btn-repo-refresh">刷新</button>
             <button class="btn" id="btn-repo-pkg">软件包</button>
           </div>
         </div>
         ${gitWarning}
         <div id="repo-git-msg" style="margin-bottom:16px"></div>
-        ${cloned ? `<div class="meta" style="margin-bottom:12px">${statusLine}</div>` : ""}
-        ${cloned ? renderGitBrowser() : renderCloneCard()}`;
+        ${statusLine ? `<div class="meta" style="margin-bottom:12px">${statusLine}</div>` : ""}
+        ${canBrowse ? renderGitBrowser() : renderCloneCard()}`;
 
       const cloneBtn = $("#btn-repo-clone");
       if (cloneBtn) cloneBtn.onclick = doCloneRepo;
@@ -1457,7 +1458,7 @@ sudo dnf install -y git</pre>
       const pkgBtn = $("#btn-repo-pkg");
       if (pkgBtn) pkgBtn.onclick = () => { state.repoMode = "packages"; renderRepo(); };
 
-      if (cloned) {
+      if (canBrowse) {
         renderRepoTree(tree || []);
         loadRepoDir(state.repoPath || "");
       } else {
@@ -1470,7 +1471,7 @@ sudo dnf install -y git</pre>
       return `
         <div class="card">
           <h3>克隆软件仓库</h3>
-          <p class="hint">从远程仓库下载到本机 <code>repo/</code> 目录。已内置默认仓库地址与只读令牌，用户名/密码<b>留空即可</b>。</p>
+          <p class="hint">从远程仓库下载到本机 <code>repo/cangling-repo/</code>。维护中心「软件同步」也会把同一软件集放到该目录。已内置默认仓库地址与只读令牌，用户名/密码<b>留空即可</b>。</p>
           <div class="field"><label>仓库地址</label><input id="repo-url" type="text" value="https://code.cangling.cn:22002/operation/cangling-repo.git" /></div>
           <div class="field"><label>用户名（可选，默认已内置）</label><input id="repo-user" type="text" autocomplete="off" placeholder="cangling-update" /></div>
           <div class="field"><label>密码 / Token（可选，默认已内置）</label><input id="repo-pass" type="password" autocomplete="off" /></div>
@@ -1607,14 +1608,13 @@ sudo dnf install -y git</pre>
         ${empty ? `
           <div class="card">
             <h3>未找到仓库目录</h3>
-            <p class="hint">在可执行文件旁建立 <code>repo/</code>，按平台分子目录，每个子目录是一个软件包：</p>
+            <p class="hint">由维护中心「软件同步」写入可执行文件旁的 <code>repo/</code>（按软件集分子目录）：</p>
             <pre class="task-log">repo/
-  kylin-arm/     # 麒麟 OS (ARM)
-  linux-x86/     # 通用 Linux x86
-  windows/       # Windows
-    └── 软件包/
-         ├── install.sh   # 安装脚本
-         └── ...</pre>
+  cangling-repo/          # 离线安装包（原 repo-templates）
+    kylin-arm/  linux-x86/  windows/
+      └── 软件包/install.sh
+  np4/
+    np4-update/latest/    # cangling-update 自我更新程序</pre>
             <button class="btn primary" onclick="loadRepo()">重新扫描</button>
           </div>` : `
           <div class="tabs">
@@ -1649,7 +1649,10 @@ sudo dnf install -y git</pre>
           </div>
         </div>`;
       }).join("");
-      body.innerHTML = packages.length ? cards : `<div class="card"><p class="hint">该平台暂无软件包，请在 <code>repo/${esc(tab.id)}/</code> 下建立软件包子目录（内含安装脚本 install.sh）。</p></div>`;
+      const emptyHint = tab.id === "np4"
+        ? `该软件集暂无内容，请通过维护中心同步 <code>repo/np4/</code>。`
+        : `该平台暂无软件包，请在 <code>repo/cangling-repo/${esc(tab.id)}/</code> 下建立软件包子目录（内含安装脚本 install.sh）。`;
+      body.innerHTML = packages.length ? cards : `<div class="card"><p class="hint">${emptyHint}</p></div>`;
 
       body.querySelectorAll("[data-download]").forEach(b => {
         b.onclick = () => downloadRepoPkg(b.dataset.download);

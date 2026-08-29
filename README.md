@@ -153,11 +153,11 @@ updates/
 
 ### 集群初始化（离线）
 
-主节点控制台的「集群」页面提供**初始化集群**按钮：填写集群名称后一键完成各节点基线软件安装。目标集群可完全离线，所有软件包都从主节点的 `repo/<本机平台>/` 里读取安装脚本执行。
+主节点控制台的「集群」页面提供**初始化集群**按钮：填写集群名称后一键完成各节点基线软件安装。目标集群可完全离线，所有软件包都从主节点的 `repo/cangling-repo/<本机平台>/` 里读取安装脚本执行。
 
 - 主节点：`git`、`samba`、`docker`、`k3s-server`、`k9s`，并在安装 k3s 后写入 Traefik 入口端口覆盖（HTTP 8020 / HTTPS 8443），检查 `/root/.kube/config`（缺失则从 `/etc/rancher/k3s/k3s.yaml` 拷贝）。
 - 工作节点：`git`、`samba`、`docker`、`k3s-agent`（自动携带 `K3S_URL` / `K3S_TOKEN` 加入集群）。
-- 各软件对应 `repo/<平台>/<软件名>/install.sh`（如 `repo/linux-x86/docker/install.sh`）；安装脚本可通过环境变量 `CANGLING_CLUSTER_NAME`、`K3S_URL`、`K3S_TOKEN` 获取集群信息。
+- 各软件对应 `repo/cangling-repo/<平台>/<软件名>/install.sh`（如 `repo/cangling-repo/linux-x86/docker/install.sh`）；安装脚本可通过环境变量 `CANGLING_CLUSTER_NAME`、`K3S_URL`、`K3S_TOKEN` 获取集群信息。
 - 主节点会把 k3s 的 node-token（`/var/lib/rancher/k3s/server/node-token`）下发给各工作节点用于加入。
 
 进程需要对 Docker 有权限（加入 `docker` 组，或用 root）。备份/恢复要保留文件属主时，建议用 root 跑。
@@ -166,48 +166,48 @@ updates/
 
 ## 软件仓库（repo）
 
-主节点在可执行文件旁边建立 `repo/` 目录即可启用软件仓库。仓库按平台分 3 个 Tab：**麒麟 OS (ARM)**、**通用 Linux x86**、**Windows**，每个平台子目录下再放软件包。
+主节点在可执行文件旁边建立 `repo/` 目录即可启用软件仓库。布局与 **cangling-keeper「软件同步」** 一致，按软件集分子目录：
 
-> 离线软件仓库**独立维护**在 `git@git.cangling.cn:operation/cangling-repo.git`（含各平台 install.sh 与已下载的离线包）。部署时直接克隆为程序目录下的 `repo/`：
+```text
+cangling-update
+repo/
+  cangling-repo/                # 离线安装包（原 repo-templates / git 仓库）
+    kylin-arm/<软件包>/install.sh
+    linux-x86/<软件包>/...
+    windows/<软件包>/...
+  np4/                          # 维护中心 Manifest 集
+    np4-update/latest/          # cangling-update 自我更新程序
+```
+
+控制台软件包 Tab 仍按平台展示 `cangling-repo` 下的安装包，并额外列出 `np4`。工作节点升级时优先使用 `np4/np4-update/latest/` 里对应架构的二进制，找不到再回退到 `updates/`。
+
+> 离线安装集独立维护在 `git@git.cangling.cn:operation/cangling-repo.git`。推荐由维护中心同步到 `repo/cangling-repo/`；也可在控制台克隆到同一目录：
 >
 > ```bash
 > cd /opt/cangling-update
-> git clone git@git.cangling.cn:operation/cangling-repo.git repo
+> mkdir -p repo
+> git clone git@git.cangling.cn:operation/cangling-repo.git repo/cangling-repo
 > ```
 >
-> 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。
+> 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。仍兼容旧布局（平台目录直接放在 `repo/` 下）。
 
-控制台的「软件仓库」页支持**直接管理该 Git 仓库**：可一键克隆到本机 `repo/`，左侧浏览目录、右侧查看文件，点「更新」拉取最新版本。程序已内置默认仓库地址与只读部署令牌（用户名 `cangling-update`），克隆时用户名/密码留空即可；也可用环境变量 `CANGLING_REPO_URL` / `CANGLING_REPO_USERNAME` / `CANGLING_REPO_PASSWORD` 覆盖。
+控制台的「软件仓库」页可浏览整个 `repo/`（含 np4 与 cangling-repo）。若 `cangling-repo` 是 Git 仓库，可点「更新」拉取；否则视为维护中心已同步，不必再克隆。程序已内置默认仓库地址与只读部署令牌（用户名 `cangling-update`），也可用环境变量 `CANGLING_REPO_URL` / `CANGLING_REPO_USERNAME` / `CANGLING_REPO_PASSWORD` 覆盖。
 
 > 克隆/更新依赖本机 `git` 命令；未安装时页面上会提示并给出联网安装命令。
 
-- `repo/kylin-arm/`、`repo/linux-x86/`、`repo/windows/` 三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
+- `repo/cangling-repo/` 下三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
 - 包内的**安装脚本**（按优先级识别 `install.sh` / `install.bat` / `install.ps1` / `setup.sh` / `setup.bat` / `setup.ps1`）用于「安装」。脚本首行 `#!`，随后连续 `##` 行会被读作包描述。
 - 主节点（或单机）控制台可对每个包「下载」（打包为 tar.gz）或「安装」（解压到临时目录后运行安装脚本）。
 - **工作节点**的「软件仓库」入口拉取的是**主节点的仓库**：可下载，也可「下载并安装」——先通过机器间接口从主节点取包，再在本机运行安装脚本。「安装」按钮只在包平台与本机平台（按架构归入 kylin-arm / linux-x86）匹配时可用。
 
 ```bash
-mkdir -p repo/linux-x86/demo
-cat > repo/linux-x86/demo/install.sh <<'EOF'
+mkdir -p repo/cangling-repo/linux-x86/demo
+cat > repo/cangling-repo/linux-x86/demo/install.sh <<'EOF'
 #!/bin/bash
 ## 打印一行问候语。
 echo "你好，苍灵"
 EOF
-chmod +x repo/linux-x86/demo/install.sh
-```
-
-```text
-cangling-update                 # 可执行文件
-repo/                           # 软件仓库根目录
-  kylin-arm/                    # 麒麟 OS (ARM)
-    软件包/
-      install.sh
-  linux-x86/                    # 通用 Linux x86
-    软件包/
-      install.sh
-  windows/                      # Windows
-    软件包/
-      install.bat
+chmod +x repo/cangling-repo/linux-x86/demo/install.sh
 ```
 
 ## 安装为系统服务

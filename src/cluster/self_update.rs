@@ -66,7 +66,7 @@ pub fn warn_if_missing(paths: &AppPaths, worker_version: &str, worker_arch: &str
             "worker {node} 版本 {worker_version} 低于 master {master}，但无法识别架构 {worker_arch:?}"
         ),
         Some(arch) if binaries::stored(&paths.exe_dir, arch).is_none() => tracing::warn!(
-            "worker {node}（{}）版本 {worker_version} 低于 master {master}，但 updates/{} 不存在。请把对应架构的二进制放到 {} 或执行 cangling-update update / update --import",
+            "worker {node}（{}）版本 {worker_version} 低于 master {master}，但未找到升级二进制（repo/np4/np4-update/latest 或 updates/{}）。请由维护中心同步 np4，或放到 {} / 执行 cangling-update update",
             arch.label(),
             arch.asset_name(),
             binaries::updates_dir(&paths.exe_dir).display()

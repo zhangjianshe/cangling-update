@@ -1,6 +1,7 @@
-//! Git 软件仓库：把 cangling-repo 克隆到程序目录下的 `repo/`，并提供目录/文件浏览与更新。
+//! Git 软件仓库：把 cangling-repo 克隆到 `repo/cangling-repo/`，并浏览整个 `repo/`。
 //!
-//! - 克隆目标与「软件仓库」扫描的目录一致（`<程序目录>/repo`），克隆后即可被离线安装使用。
+//! - 克隆目标是 keeper 同步布局中的软件集目录 `<程序目录>/repo/cangling-repo`。
+//! - 文件浏览根是 `<程序目录>/repo`（含 `cangling-repo/` 与 `np4/`）。
 //! - 仓库地址可用环境变量覆盖：`CANGLING_REPO_URL`；HTTPS 私有仓库可配
 //!   `CANGLING_REPO_USERNAME` / `CANGLING_REPO_PASSWORD`（或 TOKEN）。
 
@@ -70,8 +71,22 @@ pub struct PathQuery {
     pub path: Option<String>,
 }
 
-fn repo_dir(paths: &AppPaths) -> PathBuf {
+/// 整个软件仓库根（keeper 同步的 `repo/`，含各软件集）。
+fn browse_root(paths: &AppPaths) -> PathBuf {
     crate::repo::repo_root(paths)
+}
+
+/// Git 克隆/更新目录：`repo/cangling-repo/`；若旧版把 git 直接放在 `repo/` 则沿用。
+fn git_dir(paths: &AppPaths) -> PathBuf {
+    let root = browse_root(paths);
+    let nested = root.join(crate::repo::CANGLING_REPO_SET);
+    if nested.join(".git").is_dir() {
+        return nested;
+    }
+    if root.join(".git").is_dir() {
+        return root;
+    }
+    nested
 }
 
 fn env_repo_url() -> String {
@@ -195,15 +210,23 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<String, String> {
     Ok(stdout)
 }
 
+fn dir_nonempty(dir: &Path) -> bool {
+    dir.is_dir()
+        && std::fs::read_dir(dir)
+            .map(|mut it| it.next().is_some())
+            .unwrap_or(false)
+}
+
 fn status_sync(paths: &AppPaths) -> GitRepoStatus {
-    let dir = repo_dir(paths);
-    let exists = dir.exists();
-    let is_git = dir.join(".git").exists();
+    let browse = browse_root(paths);
+    let dir = git_dir(paths);
+    let exists = dir_nonempty(&browse) || dir.exists();
+    let is_git = dir.join(".git").is_dir();
     let mut s = GitRepoStatus {
         exists,
         is_git,
         git_available: git_available(),
-        root: dir.display().to_string(),
+        root: browse.display().to_string(),
         ..Default::default()
     };
     if is_git {
@@ -222,18 +245,17 @@ fn status_sync(paths: &AppPaths) -> GitRepoStatus {
 }
 
 fn clone_sync(paths: &AppPaths, body: &CloneBody) -> Result<String, String> {
-    let dir = repo_dir(paths);
-    if dir.join(".git").exists() {
+    let dir = git_dir(paths);
+    if dir.join(".git").is_dir() {
         return Err("仓库已存在，如需更新请点「更新」".to_string());
     }
-    if dir.exists() {
-        let non_empty = std::fs::read_dir(&dir)
-            .map(|mut it| it.next().is_some())
-            .unwrap_or(false);
-        if non_empty {
-            return Err(format!("目录 {} 已存在且非空，无法克隆", dir.display()));
-        }
-    } else if let Err(e) = std::fs::create_dir_all(&dir) {
+    if dir_nonempty(&dir) {
+        return Ok(format!(
+            "目录 {} 已有内容（维护中心软件同步），无需克隆",
+            dir.display()
+        ));
+    }
+    if let Err(e) = std::fs::create_dir_all(&dir) {
         return Err(format!("创建目录失败：{e}"));
     }
 
@@ -276,7 +298,7 @@ fn clone_sync(paths: &AppPaths, body: &CloneBody) -> Result<String, String> {
 }
 
 fn pull_sync(paths: &AppPaths) -> Result<String, String> {
-    let dir = repo_dir(paths);
+    let dir = git_dir(paths);
     if !dir.join(".git").exists() {
         return Err("尚未克隆仓库，请先点「克隆」".to_string());
     }
@@ -351,7 +373,7 @@ fn collect_dirs(base: &Path, rel: &Path, out: &mut Vec<String>) {
 }
 
 fn list_sync(paths: &AppPaths, rel: &str) -> Result<Vec<RepoEntry>, AppError> {
-    let dir = resolve_rel(&repo_dir(paths), rel)?;
+    let dir = resolve_rel(&browse_root(paths), rel)?;
     let mut out = Vec::new();
     for e in std::fs::read_dir(&dir).map_err(AppError::from)? {
         let e = e.map_err(AppError::from)?;
@@ -387,7 +409,7 @@ fn list_sync(paths: &AppPaths, rel: &str) -> Result<Vec<RepoEntry>, AppError> {
 }
 
 fn file_sync(paths: &AppPaths, rel: &str) -> Result<RepoFileView, AppError> {
-    let path = resolve_rel(&repo_dir(paths), rel)?;
+    let path = resolve_rel(&browse_root(paths), rel)?;
     let meta = std::fs::metadata(&path).map_err(AppError::from)?;
     if !meta.is_file() {
         return Err(AppError::bad("不是文件"));
@@ -466,7 +488,7 @@ pub async fn pull(State(state): State<AppState>) -> Result<Json<GitOpResult>, Ap
 pub async fn tree(State(state): State<AppState>) -> Result<Json<Vec<String>>, AppError> {
     let paths = state.paths.clone();
     tokio::task::spawn_blocking(move || {
-        let root = repo_dir(&paths);
+        let root = browse_root(&paths);
         let mut out = Vec::new();
         collect_dirs(&root, Path::new(""), &mut out);
         out.sort();
