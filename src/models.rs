@@ -238,6 +238,10 @@ pub struct ChangePasswordResponse {
 pub struct AuthUser {
     pub id: String,
     pub username: String,
+    /// Present on login/setup so an iframe can authenticate without cookies
+    /// (cross-site embeds cannot store SameSite=Lax cookies).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -870,6 +870,22 @@
     const $ = (sel, el = document) => el.querySelector(sel);
     const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content; };
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const SESSION_KEY = "cangling_session";
+    function sessionToken() {
+      try { return sessionStorage.getItem(SESSION_KEY) || ""; } catch (_) { return ""; }
+    }
+    function setSessionToken(token) {
+      try {
+        if (token) sessionStorage.setItem(SESSION_KEY, token);
+        else sessionStorage.removeItem(SESSION_KEY);
+      } catch (_) {}
+    }
+    function withAuth(opts = {}) {
+      const headers = Object.assign({}, opts.headers || {});
+      const token = sessionToken();
+      if (token) headers.Authorization = "Bearer " + token;
+      return Object.assign({ credentials: "same-origin" }, opts, { headers });
+    }
 
     function touchActivity() { lastActivity = Date.now(); }
     ["click", "keydown", "mousemove", "scroll"].forEach((ev) => {
@@ -882,7 +898,7 @@
     }, 15000);
 
     async function api(path, opts = {}) {
-      const res = await fetch(path, { credentials: "same-origin", ...opts });
+      const res = await fetch(path, withAuth(opts));
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
@@ -1000,6 +1016,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
           });
+          if (user && user.token) setSessionToken(user.token);
           await enterApp(user);
         } else {
           const user = await api("/api/auth/login", {
@@ -1007,6 +1024,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
           });
+          if (user && user.token) setSessionToken(user.token);
           await enterApp(user);
         }
       } catch (e) {
@@ -1018,7 +1036,8 @@
       stopComposePoll();
       stopMetaPoll();
       closeDialog();
-      try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
+      try { await fetch("/api/auth/logout", withAuth({ method: "POST" })); } catch {}
+      setSessionToken("");
       state.user = null;
       state.projects = [];
       state.current = null;
@@ -1027,7 +1046,7 @@
 
     async function boot() {
       try {
-        const st = await fetch("/api/auth/status", { credentials: "same-origin" }).then((r) => r.json());
+        const st = await fetch("/api/auth/status", withAuth()).then((r) => r.json());
         state.needsSetup = !!st.needs_setup;
         if (st.user) {
           await enterApp(st.user);
@@ -1607,7 +1626,7 @@
       const out = $("#repo-run-out");
       if (out) out.innerHTML = `<pre class="task-log">正在打包 ${esc(pkg)} …</pre>`;
       try {
-        const res = await fetch(`/api/repo/${encodeURIComponent(tab)}/${encodeURIComponent(pkg)}/download`, { credentials: "same-origin" });
+        const res = await fetch(`/api/repo/${encodeURIComponent(tab)}/${encodeURIComponent(pkg)}/download`, withAuth());
         if (res.status === 401) {
           showGate("请先登录或登录已过期");
           throw new Error("请先登录或登录已过期");
@@ -3932,7 +3951,8 @@
       dialog.fit = fit;
 
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const qs = "?cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24);
+      const qs = "?cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24) +
+        (sessionToken() ? "&token=" + encodeURIComponent(sessionToken()) : "");
       const ws = new WebSocket(
         proto + "://" + location.host + "/api/projects/" + state.current.id +
         "/compose/exec/" + encodeURIComponent(name) + qs

@@ -391,6 +391,22 @@
     }, 15000);
     const $ = (sel, el = document) => el.querySelector(sel);
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const SESSION_KEY = "cangling_session";
+    function sessionToken() {
+      try { return sessionStorage.getItem(SESSION_KEY) || ""; } catch (_) { return ""; }
+    }
+    function setSessionToken(token) {
+      try {
+        if (token) sessionStorage.setItem(SESSION_KEY, token);
+        else sessionStorage.removeItem(SESSION_KEY);
+      } catch (_) {}
+    }
+    function withAuth(opts = {}) {
+      const headers = Object.assign({}, opts.headers || {});
+      const token = sessionToken();
+      if (token) headers.Authorization = "Bearer " + token;
+      return Object.assign({ credentials: "same-origin" }, opts, { headers });
+    }
 
     function confirmDialog(message, opts = {}) {
       return new Promise((resolve) => {
@@ -434,7 +450,7 @@
     setInterval(tickClock, 1000);
 
     async function api(path, opts = {}) {
-      const res = await fetch(path, { credentials: "same-origin", ...opts });
+      const res = await fetch(path, withAuth(opts));
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
@@ -700,17 +716,19 @@
         if (setup) {
           const again = $("#login-pass2").value;
           if (password !== again) throw new Error("两次输入的密码不一致");
-          await api("/api/auth/setup", {
+          const user = await api("/api/auth/setup", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
           });
+          if (user && user.token) setSessionToken(user.token);
         } else {
-          await api("/api/auth/login", {
+          const user = await api("/api/auth/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ username, password }),
           });
+          if (user && user.token) setSessionToken(user.token);
         }
         $("#login-box").hidden = true;
         applyPage(await api("/api/portal"));
@@ -779,7 +797,8 @@
     }
 
     async function logout() {
-      try { await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }); } catch {}
+      try { await fetch("/api/auth/logout", withAuth({ method: "POST" })); } catch {}
+      setSessionToken("");
       state.editing = false;
       applyPage(await api("/api/portal"));
     }

@@ -61,7 +61,7 @@ pub async fn require_auth(
         return Ok(next.run(request).await);
     }
 
-    let token = read_token(request.headers());
+    let token = read_token(request.headers()).or_else(|| token_from_query(request.uri().query()));
     match current_user(&state, token.as_deref())? {
         Some(_) => {
             let token = token.expect("token present when user exists");
@@ -83,6 +83,7 @@ pub fn auth_status(state: &AppState, headers: &HeaderMap) -> Result<AuthStatus, 
     let user = current_user(state, read_token(headers).as_deref())?.map(|u| AuthUser {
         id: u.id,
         username: u.username,
+        token: None,
     });
     Ok(AuthStatus {
         needs_setup,
@@ -106,6 +107,7 @@ pub fn current_auth_user(
     Ok(current_user(state, token.as_deref())?.map(|u| AuthUser {
         id: u.id,
         username: u.username,
+        token: None,
     }))
 }
 
@@ -330,6 +332,7 @@ fn issue_session(
     let body = Json(AuthUser {
         id: user_id.to_string(),
         username: username.to_string(),
+        token: Some(token.clone()),
     });
     let mut res = body.into_response();
     if let Ok(value) = HeaderValue::from_str(&set_cookie(&token)) {
@@ -374,7 +377,34 @@ fn session_expired(last_seen: &str) -> bool {
     age.num_seconds() >= IDLE_TIMEOUT_SECS as i64
 }
 
+fn token_from_query(query: Option<&str>) -> Option<String> {
+    let query = query?;
+    for pair in query.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        if k == "token" || k == "access_token" {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn read_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(auth) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        let auth = auth.trim();
+        let token = auth
+            .strip_prefix("Bearer ")
+            .or_else(|| auth.strip_prefix("bearer "))
+            .map(str::trim)
+            .filter(|t| !t.is_empty());
+        if let Some(token) = token {
+            return Some(token.to_string());
+        }
+    }
     let cookie = headers.get(header::COOKIE)?.to_str().ok()?;
     cookie.split(';').find_map(|part| {
         let part = part.trim();
@@ -480,5 +510,29 @@ mod tests {
         assert!(!is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo"));
         assert!(!is_public(&Method::GET, "/api/cluster/packages/abc/file"));
         assert!(!is_public(&Method::POST, "/api/cluster/tasks/run"));
+    }
+
+    #[test]
+    fn read_token_prefers_bearer_over_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer header-token"),
+        );
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("cangling_session=cookie-token"),
+        );
+        assert_eq!(read_token(&headers).as_deref(), Some("header-token"));
+    }
+
+    #[test]
+    fn read_token_falls_back_to_cookie() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_static("other=1; cangling_session=cookie-token"),
+        );
+        assert_eq!(read_token(&headers).as_deref(), Some("cookie-token"));
     }
 }
