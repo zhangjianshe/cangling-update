@@ -116,14 +116,23 @@
     button { cursor: pointer; }
     a { color: var(--accent); }
     a.brand { text-decoration: none; color: inherit; }
-    .app { display: grid; grid-template-rows: 64px minmax(0, 1fr); height: 100%; overflow: hidden; }
+    .app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; overflow: hidden; }
     header {
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
-      padding: 0 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
+      min-height: 64px; padding: 8px 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
     }
-    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
     .nav-toggle { display: none; }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .top-nav {
+      display: flex; align-items: center; gap: 6px;
+      margin-left: 18px; flex-shrink: 0;
+    }
+    .top-nav .btn { font-weight: 600; }
+    .top-nav .btn.active {
+      border-color: var(--accent-emphasis); background: var(--bg-active); color: var(--text);
+    }
+    .top-nav .btn svg { display: block; }
     .mark {
       width: 32px; height: 32px; flex: 0 0 auto;
       color: var(--success-emphasis);
@@ -143,16 +152,35 @@
     header .btn {
       height: 34px; display: inline-flex; align-items: center; box-sizing: border-box;
     }
-    .meta {
-      color: var(--muted); display: flex; align-items: center; gap: 8px;
-      flex-wrap: wrap; justify-content: flex-end;
+    .meta-wrap { position: relative; }
+    .btn-meta.warn { border-color: var(--danger-line); color: var(--danger-text); }
+    .meta-panel {
+      position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+      width: min(420px, calc(100vw - 32px));
+      padding: 12px 14px;
+      background: var(--bg-2); border: 1px solid var(--line); box-shadow: var(--shadow);
     }
-    .meta > span, #who {
+    .meta-panel[hidden] { display: none !important; }
+    .meta-panel h3 {
+      margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--muted);
+    }
+    .meta {
+      color: var(--muted); display: flex; flex-direction: column; gap: 8px;
+    }
+    .meta-row {
+      display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px;
+      align-items: start; font-size: 13px; line-height: 1.4;
+    }
+    .meta-row span { color: var(--muted); }
+    .meta-row b {
+      color: var(--text); font-weight: 600; word-break: break-all;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    #who {
       display: inline-flex; align-items: center; height: 34px; padding: 0 10px;
       border: 1px solid var(--line); background: var(--bg-3); line-height: 1;
       box-sizing: border-box;
     }
-    .meta b { color: var(--text); font-weight: 600; }
     .ok { color: var(--success); }
     .bad { color: var(--danger); }
     .shell { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 0; }
@@ -162,7 +190,11 @@
     }
     .aside-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 10px; }
     .aside-head h2 { margin: 0; color: var(--muted); font-size: 16px; font-weight: 600; }
-    .plist { overflow: auto; padding: 6px 10px 18px; }
+    .plist { overflow: auto; padding: 6px 10px 18px; flex: 1; min-height: 0; }
+    .app[data-section="cluster"] .shell,
+    .app[data-section="repo"] .shell { grid-template-columns: 1fr; }
+    .app[data-section="cluster"] aside,
+    .app[data-section="repo"] aside { display: none; }
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
       color: var(--text); padding: 10px 12px; margin-bottom: 6px;
@@ -171,11 +203,7 @@
     .pitem.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
     .pitem .n { font-weight: 600; display: block; }
     .pitem .d { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .cluster-nav {
-      width: calc(100% - 32px); margin: 14px 16px 0; text-align: left;
-      display: flex; align-items: center; gap: 8px; font-weight: 600;
-    }
-    .cluster-nav.active { border-color: var(--accent-emphasis); background: var(--bg-active); }
+    .top-nav .btn { display: inline-flex; align-items: center; gap: 6px; }
     .cluster-table { width: 100%; border-collapse: collapse; }
     .cluster-table th, .cluster-table td {
       text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line);
@@ -643,6 +671,10 @@
     @media (max-width: 900px) {
       .shell { grid-template-columns: 1fr; }
       .nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; padding: 0; }
+      .app[data-section="cluster"] .nav-toggle,
+      .app[data-section="repo"] .nav-toggle { display: none; }
+      .top-nav { margin-left: 4px; }
+      .brand small { display: none; }
       aside {
         position: fixed; top: 64px; left: 0; bottom: 0;
         width: min(300px, 84vw); z-index: 30;
@@ -717,9 +749,20 @@
           <small>主机 Docker Compose 系统管理 · 返回首页</small>
         </div>
       </a>
+      <nav class="top-nav" aria-label="功能切换">
+        <button type="button" class="btn" id="btn-projects" title="项目">项目</button>
+        <button type="button" class="btn" id="btn-cluster" title="集群管理">集群</button>
+        <button type="button" class="btn" id="btn-repo" title="软件仓库">软件仓库</button>
+      </nav>
       </div>
       <div class="header-right">
-        <div class="meta" id="meta">加载中…</div>
+        <div class="meta-wrap">
+          <button type="button" class="btn btn-meta" id="btn-meta" aria-expanded="false" aria-haspopup="true" title="系统信息">系统信息</button>
+          <div class="meta-panel" id="meta-panel" hidden>
+            <h3>系统信息</h3>
+            <div class="meta" id="meta">加载中…</div>
+          </div>
+        </div>
         <span id="who"></span>
         <button type="button" class="btn" id="btn-pass">修改密码</button>
         <button type="button" class="btn" id="btn-logout">退出</button>
@@ -728,22 +771,6 @@
     </header>
     <div class="shell">
       <aside>
-        <button type="button" class="btn cluster-nav" id="btn-cluster" title="集群管理">
-          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-            <circle cx="3" cy="3" r="2" fill="currentColor"/>
-            <circle cx="13" cy="3" r="2" fill="currentColor"/>
-            <circle cx="8" cy="13" r="2" fill="currentColor"/>
-            <path stroke="currentColor" stroke-width="1" fill="none" d="M4.5 4.5 6.8 11.5M11.5 4.5 9.2 11.5M5 3h6"/>
-          </svg>
-          集群
-        </button>
-        <button type="button" class="btn cluster-nav" id="btn-repo" title="软件仓库">
-          <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-            <path fill="currentColor" d="M8 1.2 14.8 4.4v7.2L8 14.8 1.2 11.6V4.4z"/>
-            <path fill="currentColor" opacity=".55" d="M1.2 4.4 8 7.5l6.8-3.1M8 7.5v7.3"/>
-          </svg>
-          软件仓库
-        </button>
         <div class="aside-head">
           <h2>项目</h2>
           <button class="btn primary" id="btn-new">新建</button>
@@ -968,11 +995,26 @@
 
     function renderMetaBar(m) {
       const dockerOk = !!(m.docker && m.docker.available);
+      const compose = (m.docker && (COMPOSE[m.docker.compose] || m.docker.compose)) || "—";
       $("#meta").innerHTML =
-        `<span>程序 <b>v${esc(m.version)}</b></span>` +
-        `<span>${esc(m.os)} / <b>${esc(m.arch)}</b></span>` +
-        `<span>docker <b class="${dockerOk ? "ok" : "bad"}">${dockerLabel(m.docker)}</b> · compose ${esc(COMPOSE[m.docker.compose] || m.docker.compose)}</span>` +
-        `<span>数据库 <b>${esc(m.db_path)}</b></span>`;
+        `<div class="meta-row"><span>程序</span><b>v${esc(m.version)}</b></div>` +
+        `<div class="meta-row"><span>系统</span><b>${esc(m.os)} / ${esc(m.arch)}</b></div>` +
+        `<div class="meta-row"><span>Docker</span><b class="${dockerOk ? "ok" : "bad"}">${dockerLabel(m.docker)}</b></div>` +
+        `<div class="meta-row"><span>Compose</span><b>${esc(compose)}</b></div>` +
+        `<div class="meta-row"><span>数据库</span><b>${esc(m.db_path)}</b></div>`;
+      const btn = $("#btn-meta");
+      if (btn) {
+        btn.classList.toggle("warn", !dockerOk);
+        btn.title = dockerOk ? "系统信息" : "系统信息（Docker 未就绪）";
+      }
+    }
+
+    function setMetaPanelOpen(open) {
+      const panel = $("#meta-panel");
+      const btn = $("#btn-meta");
+      if (!panel || !btn) return;
+      panel.hidden = !open;
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
     }
 
     async function loadMeta() {
@@ -1134,17 +1176,38 @@
       }
     }
 
+    function sectionFromHash(hash) {
+      if (hash === "#/cluster") return "cluster";
+      if (hash === "#/repo") return "repo";
+      return "projects";
+    }
+
+    function syncSectionChrome() {
+      const hash = location.hash || "#/";
+      const section = sectionFromHash(hash);
+      const app = $("#app");
+      if (app) app.dataset.section = section;
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), repo: $("#btn-repo") };
+      Object.keys(map).forEach((id) => {
+        if (map[id]) map[id].classList.toggle("active", section === id);
+      });
+    }
+
+    function goHash(hash) {
+      const cur = location.hash || "#/";
+      if (cur === hash) route();
+      else location.hash = hash;
+    }
+
     function route() {
       stopComposePoll();
       stopClusterPoll();
       comboClose();
       closeDialog();
+      setMetaPanelOpen(false);
       setNav(false);
+      syncSectionChrome();
       const hash = location.hash || "#/";
-      const btn = $("#btn-cluster");
-      if (btn) btn.classList.toggle("active", hash === "#/cluster");
-      const repoBtn = $("#btn-repo");
-      if (repoBtn) repoBtn.classList.toggle("active", hash === "#/repo");
       if (hash === "#/new") return renderNew();
       if (hash === "#/cluster") return renderCluster();
       if (hash === "#/repo") return renderRepo();
@@ -4052,9 +4115,22 @@
     }
     $("#dialog-close").onclick = requestCloseDialog;
     $("#dialog-foot-close").onclick = requestCloseDialog;
-    $("#btn-new").onclick = () => location.hash = "#/new";
-    $("#btn-cluster").onclick = () => location.hash = "#/cluster";
-    $("#btn-repo").onclick = () => location.hash = "#/repo";
+    $("#btn-new").onclick = () => goHash("#/new");
+    $("#btn-projects").onclick = () => goHash("#/");
+    $("#btn-cluster").onclick = () => goHash("#/cluster");
+    $("#btn-repo").onclick = () => goHash("#/repo");
+    $("#btn-meta").onclick = (e) => {
+      e.stopPropagation();
+      const panel = $("#meta-panel");
+      setMetaPanelOpen(panel && panel.hidden);
+    };
+    document.addEventListener("click", (e) => {
+      const wrap = document.querySelector(".meta-wrap");
+      if (wrap && !wrap.contains(e.target)) setMetaPanelOpen(false);
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") setMetaPanelOpen(false);
+    });
     $("#btn-logout").onclick = () => logout();
     $("#btn-pass").onclick = openChangePassword;
     function setNav(open) {
