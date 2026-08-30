@@ -122,7 +122,6 @@
       min-height: 64px; padding: 8px 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
     }
     .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
-    .nav-toggle { display: none; }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .top-nav {
       display: flex; align-items: center; gap: 6px;
@@ -687,27 +686,9 @@
       flex: 1; max-height: none; margin: 0; border: 0;
     }
     @media (max-width: 900px) {
-      .shell { grid-template-columns: 1fr; }
-      .nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; padding: 0; }
-      .app[data-section="cluster"] .nav-toggle,
-      .app[data-section="repo"] .nav-toggle { display: none; }
+      .shell { grid-template-columns: minmax(160px, 34vw) minmax(0, 1fr); }
       .top-nav { margin-left: 4px; }
       .brand small { display: none; }
-      aside {
-        position: fixed; top: 64px; left: 0; bottom: 0;
-        width: min(300px, 84vw); z-index: 30;
-        max-height: none; border-right: 1px solid var(--line); border-bottom: 0;
-        transform: translateX(-100%);
-        transition: transform 0.22s ease;
-        box-shadow: 6px 0 24px rgba(0, 0, 0, 0.35);
-      }
-      aside.open { transform: translateX(0); }
-      .nav-scrim {
-        position: fixed; inset: 64px 0 0 0; z-index: 29;
-        display: block;
-        background: rgba(0, 0, 0, 0.4);
-      }
-      .nav-scrim[hidden] { display: none !important; }
       .modal { height: 100%; }
       .compose-edit {
         grid-template-columns: 1fr;
@@ -750,9 +731,6 @@
   <div class="app" id="app" hidden>
     <header>
       <div class="header-left">
-        <button type="button" class="btn nav-toggle" id="nav-toggle" aria-label="打开项目列表" aria-expanded="false">
-          <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1 2.75h14v1.5H1zm0 4.5h14v1.5H1zm0 4.5h14v1.5H1z"/></svg>
-        </button>
         <a class="brand" href="/" title="返回首页">
         <span class="mark" title="系统更新" aria-hidden="true">
           <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
@@ -798,7 +776,6 @@
       <main id="main"></main>
     </div>
   </div>
-  <div class="nav-scrim" id="nav-scrim" hidden></div>
   <div class="overlay" id="dialog" hidden>
     <div class="modal" id="dialog-modal">
       <div class="modal-head">
@@ -1223,7 +1200,6 @@
       comboClose();
       closeDialog();
       setMetaPanelOpen(false);
-      setNav(false);
       syncSectionChrome();
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
@@ -4220,19 +4196,6 @@
     });
     $("#btn-logout").onclick = () => logout();
     $("#btn-pass").onclick = openChangePassword;
-    function setNav(open) {
-      const aside = document.querySelector("aside");
-      const scrim = $("#nav-scrim");
-      if (aside) aside.classList.toggle("open", open);
-      if (scrim) scrim.hidden = !open;
-      const t = $("#nav-toggle");
-      if (t) t.setAttribute("aria-expanded", open ? "true" : "false");
-    }
-    $("#nav-toggle").onclick = () => {
-      const aside = document.querySelector("aside");
-      setNav(!(aside && aside.classList.contains("open")));
-    };
-    $("#nav-scrim").onclick = () => setNav(false);
     $("#gate-submit").onclick = submitGate;
     ["gate-user", "gate-pass", "gate-pass2"].forEach((id) => {
       const el = document.getElementById(id);
