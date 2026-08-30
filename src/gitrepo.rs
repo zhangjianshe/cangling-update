@@ -17,6 +17,9 @@ const MAX_TEXT_BYTES: usize = 512 * 1024;
 pub struct GitRepoStatus {
     pub exists: bool,
     pub root: String,
+    /// First-level directories under `repo/` (software sets such as `cangling-repo`, `np4`).
+    #[serde(default)]
+    pub sets: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -53,11 +56,32 @@ fn dir_nonempty(dir: &Path) -> bool {
             .unwrap_or(false)
 }
 
+fn list_set_names(root: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return names;
+    };
+    for e in rd.flatten() {
+        if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        names.push(name);
+    }
+    names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    names
+}
+
 fn status_sync(paths: &AppPaths) -> GitRepoStatus {
     let browse = browse_root(paths);
+    let sets = list_set_names(&browse);
     GitRepoStatus {
         exists: dir_nonempty(&browse),
         root: browse.display().to_string(),
+        sets,
     }
 }
 
@@ -237,5 +261,22 @@ mod tests {
         assert!(resolve_rel(root, "/etc").is_err());
         assert!(resolve_rel(root, "../evil").is_err());
         assert!(resolve_rel(root, "a/../../b").is_err());
+    }
+
+    #[test]
+    fn list_set_names_skips_dot_and_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "cangling-sets-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("cangling-repo")).unwrap();
+        std::fs::create_dir_all(dir.join("np4")).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join("README.md"), "x").unwrap();
+        assert_eq!(list_set_names(&dir), vec!["cangling-repo", "np4"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

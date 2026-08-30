@@ -400,32 +400,50 @@
     .db-obj.active .ico { color: var(--accent); }
     .db-obj .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .db-obj .k { color: var(--muted); font-size: 12px; margin-right: 6px; }
-    .repo-browser {
-      display: grid; grid-template-columns: 260px minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr);
-      border: 1px solid var(--line); min-height: 480px; background: var(--bg-2); overflow: hidden;
+    .repo-browse {
+      flex: 1; min-height: 0; display: flex; gap: 12px;
     }
-    .repo-tree { overflow: auto; border-right: 1px solid var(--line); min-height: 0; }
-    .repo-tree-item {
-      display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
-      border: 0; border-radius: 0; background: transparent; color: var(--text);
-      padding: 6px 10px; border-bottom: 1px solid var(--line-muted); font-size: 13px;
+    .repo-tree-panel, .repo-file-panel {
+      display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+      border: 1px solid var(--line); background: var(--bg-2);
     }
-    .repo-tree-item:hover { background: var(--bg-3); }
-    .repo-tree-item.active { background: var(--bg-active); }
-    .repo-tree-item .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .repo-files { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-    .repo-files-head { padding: 8px 12px; border-bottom: 1px solid var(--line); font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; color: var(--muted); font-size: 13px; flex: 0 0 auto; }
-    .repo-files-list { flex: 0 0 auto; max-height: 40%; overflow: auto; border-bottom: 1px solid var(--line); }
-    .repo-entry {
-      display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-      border: 0; border-radius: 0; background: transparent; color: var(--text);
-      padding: 7px 12px; border-bottom: 1px solid var(--line-muted);
+    .repo-tree-panel { width: 340px; min-width: 240px; flex: 0 0 auto; }
+    .repo-file-panel { flex: 1; min-width: 0; }
+    .repo-tree-toolbar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-bottom: 1px solid var(--line); flex-shrink: 0;
     }
-    .repo-entry:hover { background: var(--bg-3); }
-    .repo-entry .n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .repo-entry .s { color: var(--muted); font-size: 12px; flex: 0 0 auto; }
-    #repo-file-view { flex: 1 1 auto; overflow: auto; min-height: 0; }
+    .repo-tree-toolbar .btn { padding: 2px 8px; font-size: 13px; height: auto; }
+    .repo-path {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: 12px; color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .repo-tree-list { flex: 1; overflow-y: auto; padding: 6px; min-height: 0; }
+    .repo-item {
+      display: flex; align-items: center; gap: 8px; width: 100%;
+      padding: 6px 8px; border: 0; background: transparent; color: var(--text);
+      cursor: pointer; text-align: left; font-size: 13px;
+    }
+    .repo-item:hover { background: var(--bg-3); }
+    .repo-item-icon { flex-shrink: 0; width: 16px; height: 16px; color: var(--muted); }
+    .repo-item-icon svg { display: block; width: 16px; height: 16px; }
+    .repo-item-name {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .repo-item-size {
+      font-size: 11px; color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .repo-file-head {
+      padding: 8px 10px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+    }
+    .repo-file-content {
+      flex: 1; margin: 0; padding: 10px 12px; overflow: auto; min-height: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px; line-height: 1.5; white-space: pre; background: var(--bg-2); color: var(--text);
+    }
+    .repo-list-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 24px 8px; }
     .db-browse {
       display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden;
     }
@@ -810,7 +828,7 @@
     <div id="combo-list" role="listbox"></div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", gitrepo: null };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1478,22 +1496,58 @@
       else loadGitRepo();
     }
 
+    const REPO_ICON_DIR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
+    const REPO_ICON_FILE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
+
     async function loadGitRepo() {
       try {
-        const [status, tree] = await Promise.all([
-          api("/api/gitrepo/status"),
-          api("/api/gitrepo/tree"),
-        ]);
-        state.gitrepo = { status, tree };
-        renderGitRepoLayout(status, tree);
+        const status = await api("/api/gitrepo/status");
+        state.gitrepo = { status };
+        renderGitRepoLayout(status);
       } catch (e) {
         $("#main").innerHTML = `<div class="card"><h3>软件仓库</h3><p class="hint">${esc(e.message)}</p></div>`;
       }
     }
 
-    function renderGitRepoLayout(status, tree) {
+    function repoSetNames(status) {
+      return ((status && status.sets) || []).filter(Boolean);
+    }
+
+    function ensureRepoSet(sets) {
+      if (!sets.length) {
+        state.repoSet = "";
+        state.repoPath = "";
+        return;
+      }
+      if (!state.repoSet || !sets.includes(state.repoSet)) {
+        state.repoSet = sets.includes("cangling-repo") ? "cangling-repo" : sets[0];
+        state.repoPath = "";
+      }
+    }
+
+    function repoFullPath() {
+      const set = state.repoSet || "";
+      const rel = state.repoPath || "";
+      if (!set) return rel;
+      return rel ? set + "/" + rel : set;
+    }
+
+    function repoDisplayPath() {
+      return "/" + [state.repoSet, state.repoPath].filter(Boolean).join("/");
+    }
+
+    function resetRepoFilePreview(title) {
+      const head = $("#repo-file-title");
+      const pre = $("#repo-file-content");
+      if (head) head.textContent = title || "选择文件查看内容";
+      if (pre) pre.textContent = "";
+    }
+
+    function renderGitRepoLayout(status) {
       const s = status || {};
-      const canBrowse = !!s.exists;
+      const sets = repoSetNames(s);
+      const canBrowse = !!s.exists && sets.length > 0;
+      ensureRepoSet(sets);
       const statusLine = canBrowse ? `<span class="ok">由维护中心同步</span>` : "";
 
       $("#main").innerHTML = `
@@ -1504,18 +1558,35 @@
             <button class="btn" id="btn-repo-pkg">软件包</button>
           </div>
         </div>
-        ${statusLine ? `<div class="meta" style="margin-bottom:12px">${statusLine}</div>` : ""}
-        ${canBrowse ? renderGitBrowser() : renderRepoEmptyCard()}`;
+        ${statusLine ? `<div class="row" style="margin:-4px 0 12px">${statusLine}</div>` : ""}
+        ${canBrowse ? `
+          <div class="tabs" id="repo-set-tabs">
+            ${sets.map((name) => `<button type="button" class="tab repo-set-tab${name === state.repoSet ? " active" : ""}" data-set="${esc(name)}">${esc(name)}</button>`).join("")}
+          </div>
+          <div class="repo-browse">
+            <div class="repo-tree-panel">
+              <div class="repo-tree-toolbar">
+                <button class="btn" id="repo-up-btn" type="button" title="上级目录">↑ 上级</button>
+                <span class="repo-path" id="repo-current-path">${esc(repoDisplayPath())}</span>
+              </div>
+              <div class="repo-tree-list" id="repo-tree"></div>
+            </div>
+            <div class="repo-file-panel">
+              <div class="repo-file-head"><span class="repo-path" id="repo-file-title">选择文件查看内容</span></div>
+              <pre class="repo-file-content" id="repo-file-content"></pre>
+            </div>
+          </div>` : renderRepoEmptyCard()}`;
 
       const refreshBtn = $("#btn-repo-refresh");
       if (refreshBtn) refreshBtn.onclick = loadGitRepo;
       const pkgBtn = $("#btn-repo-pkg");
       if (pkgBtn) pkgBtn.onclick = () => { state.repoMode = "packages"; renderRepo(); };
-
-      if (canBrowse) {
-        renderRepoTree(tree || []);
-        loadRepoDir(state.repoPath || "");
-      }
+      document.querySelectorAll(".repo-set-tab").forEach((b) => {
+        b.onclick = () => selectRepoSet(b.dataset.set);
+      });
+      const upBtn = $("#repo-up-btn");
+      if (upBtn) upBtn.onclick = repoUp;
+      if (canBrowse) loadRepoDir();
     }
 
     function renderRepoEmptyCard() {
@@ -1532,77 +1603,93 @@
         </div>`;
     }
 
-    function renderGitBrowser() {
-      return `
-        <div class="repo-browser">
-          <div class="repo-tree" id="repo-tree"></div>
-          <div class="repo-files" id="repo-files"></div>
-        </div>`;
-    }
-
-    function renderRepoTree(tree) {
-      const el = $("#repo-tree");
-      if (!el) return;
-      const items = [""].concat(tree || []);
-      el.innerHTML = items.map(p => {
-        const depth = p ? p.split("/").length - 1 : 0;
-        const name = p ? p.split("/").pop() : "（根目录）";
-        const active = (state.repoPath || "") === p;
-        return `<button type="button" class="repo-tree-item${active ? " active" : ""}" data-path="${esc(p)}" style="padding-left:${10 + depth * 14}px"><span class="n">${depth > 0 ? "└ " : ""}${esc(name)}</span></button>`;
-      }).join("");
-      el.querySelectorAll(".repo-tree-item").forEach(b => {
-        b.onclick = () => loadRepoDir(b.dataset.path);
+    function selectRepoSet(name) {
+      if (!name || name === state.repoSet) return;
+      state.repoSet = name;
+      state.repoPath = "";
+      document.querySelectorAll(".repo-set-tab").forEach((b) => {
+        b.classList.toggle("active", b.dataset.set === name);
       });
+      resetRepoFilePreview();
+      loadRepoDir();
     }
 
-    async function loadRepoDir(path) {
-      const el = $("#repo-files");
+    async function loadRepoDir() {
+      const el = $("#repo-tree");
+      const pathEl = $("#repo-current-path");
+      const upBtn = $("#repo-up-btn");
+      if (pathEl) pathEl.textContent = repoDisplayPath();
+      if (upBtn) upBtn.disabled = !state.repoPath;
       if (!el) return;
-      state.repoPath = path || "";
-      renderRepoTree((state.gitrepo && state.gitrepo.tree) || []);
-      el.innerHTML = `<p class="hint" style="padding:12px">加载中…</p>`;
+      el.innerHTML = `<div class="repo-list-empty">加载中…</div>`;
+      const full = repoFullPath();
       try {
-        const entries = await api("/api/gitrepo/list" + (path ? "?path=" + encodeURIComponent(path) : ""));
-        renderRepoEntries(entries || [], path || "");
+        const entries = await api("/api/gitrepo/list" + (full ? "?path=" + encodeURIComponent(full) : ""));
+        renderRepoTree(entries || []);
       } catch (e) {
-        el.innerHTML = `<p class="hint" style="padding:12px">${esc(e.message)}</p>`;
+        el.innerHTML = `<div class="repo-list-empty">${esc(e.message)}</div>`;
       }
     }
 
-    function renderRepoEntries(entries, currentPath) {
-      const el = $("#repo-files");
+    function renderRepoTree(entries) {
+      const el = $("#repo-tree");
       if (!el) return;
-      const rows = (entries || []).map(e => {
-        const icon = e.kind === "dir" ? "📁" : "📄";
-        const attr = e.kind === "dir" ? `data-dir="${esc(e.path)}"` : `data-file="${esc(e.path)}"`;
-        return `<button type="button" class="repo-entry" ${attr}><span>${icon}</span><span class="n">${esc(e.name)}</span><span class="s">${e.kind === "dir" ? "" : fmtBytes(e.size)}</span></button>`;
+      if (!entries.length) {
+        el.innerHTML = `<div class="repo-list-empty">空目录</div>`;
+        return;
+      }
+      el.innerHTML = entries.map((entry) => {
+        const isDir = entry.kind === "dir";
+        const icon = isDir ? REPO_ICON_DIR : REPO_ICON_FILE;
+        const size = isDir ? "" : fmtBytes(entry.size);
+        const attr = isDir ? `data-dir="${esc(entry.path)}"` : `data-file="${esc(entry.path)}"`;
+        return `<button type="button" class="repo-item" ${attr} title="${esc(entry.path)}"><span class="repo-item-icon">${icon}</span><span class="repo-item-name">${esc(entry.name)}</span><span class="repo-item-size">${esc(size)}</span></button>`;
       }).join("");
-      el.innerHTML = `
-        <div class="repo-files-head">${esc(currentPath || "仓库根目录")}</div>
-        <div class="repo-files-list">${rows || `<p class="hint" style="padding:12px">空目录</p>`}</div>
-        <div id="repo-file-view"></div>`;
-      el.querySelectorAll("[data-dir]").forEach(b => {
-        b.onclick = () => loadRepoDir(b.dataset.dir);
+      el.querySelectorAll("[data-dir]").forEach((b) => {
+        b.onclick = () => {
+          state.repoPath = pathInsideSet(b.dataset.dir);
+          resetRepoFilePreview();
+          loadRepoDir();
+        };
       });
-      el.querySelectorAll("[data-file]").forEach(b => {
+      el.querySelectorAll("[data-file]").forEach((b) => {
         b.onclick = () => loadRepoFile(b.dataset.file);
       });
     }
 
+    function pathInsideSet(full) {
+      const set = state.repoSet || "";
+      const path = String(full || "").replace(/^\/+/, "");
+      if (!set) return path;
+      if (path === set) return "";
+      const prefix = set + "/";
+      return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    }
+
     async function loadRepoFile(path) {
-      const view = $("#repo-file-view");
-      if (!view) return;
-      view.innerHTML = `<p class="hint" style="padding:12px">加载中…</p>`;
+      const title = $("#repo-file-title");
+      const pre = $("#repo-file-content");
+      if (!pre) return;
+      if (title) title.textContent = "/" + path;
+      pre.textContent = "加载中…";
       try {
         const f = await api("/api/gitrepo/file?path=" + encodeURIComponent(path));
-        if (f.binary) {
-          view.innerHTML = `<div class="card"><h3>${esc(f.name)}</h3><p class="hint">二进制文件 · ${fmtBytes(f.size)}</p></div>`;
-        } else {
-          view.innerHTML = `<div class="card"><h3>${esc(f.name)} <span class="hint">${fmtBytes(f.size)}${f.truncated ? " · 内容已截断" : ""}</span></h3><pre class="task-log">${esc(f.content)}</pre></div>`;
-        }
+        if (title) title.textContent = `/${f.path} · ${fmtBytes(f.size)}${f.truncated ? " · 内容已截断" : ""}`;
+        if (f.binary) pre.textContent = `二进制文件，无法预览 · ${fmtBytes(f.size)}`;
+        else pre.textContent = f.content || "";
       } catch (e) {
-        view.innerHTML = `<p class="hint" style="padding:12px">${esc(e.message)}</p>`;
+        if (title) title.textContent = "/" + path;
+        pre.textContent = "无法预览: " + e.message;
       }
+    }
+
+    function repoUp() {
+      if (!state.repoPath) return;
+      const parts = state.repoPath.split("/").filter(Boolean);
+      parts.pop();
+      state.repoPath = parts.join("/");
+      resetRepoFilePreview();
+      loadRepoDir();
     }
 
     function activeRepoTab(data) {
