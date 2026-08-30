@@ -181,19 +181,11 @@ repo/
 
 控制台软件包 Tab 仍按平台展示 `cangling-repo` 下的安装包，并额外列出 `np4`。工作节点升级时优先使用 `np4/np4-update/latest/` 里对应架构的二进制，找不到再回退到 `updates/`。
 
-> 离线安装集独立维护在 `git@git.cangling.cn:operation/cangling-repo.git`。推荐由维护中心同步到 `repo/cangling-repo/`；也可在控制台克隆到同一目录：
->
-> ```bash
-> cd /opt/cangling-update
-> mkdir -p repo
-> git clone git@git.cangling.cn:operation/cangling-repo.git repo/cangling-repo
-> ```
+> 离线安装集独立维护在 `git@git.cangling.cn:operation/cangling-repo.git`。由维护中心「软件同步」写入 `repo/cangling-repo/`，本程序不再克隆或拉取。
 >
 > 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。仍兼容旧布局（平台目录直接放在 `repo/` 下）。
 
-控制台的「软件仓库」页可浏览整个 `repo/`（含 np4 与 cangling-repo）。若 `cangling-repo` 是 Git 仓库，可点「更新」拉取；否则视为维护中心已同步，不必再克隆。程序已内置默认仓库地址与只读部署令牌（用户名 `cangling-update`），也可用环境变量 `CANGLING_REPO_URL` / `CANGLING_REPO_USERNAME` / `CANGLING_REPO_PASSWORD` 覆盖。
-
-> 克隆/更新依赖本机 `git` 命令；未安装时页面上会提示并给出联网安装命令。
+控制台的「软件仓库」页可浏览整个 `repo/`（含 np4 与 cangling-repo）。目录为空时提示用维护中心同步，不再提供克隆按钮。
 
 - `repo/cangling-repo/` 下三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
 - 包内的**安装脚本**（按优先级识别 `install.sh` / `install.bat` / `install.ps1` / `setup.sh` / `setup.bat` / `setup.ps1`）用于「安装」。脚本首行 `#!`，随后连续 `##` 行会被读作包描述。

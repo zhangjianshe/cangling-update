@@ -118,7 +118,7 @@ pub fn repo_root(paths: &AppPaths) -> PathBuf {
     paths.exe_dir.join("repo")
 }
 
-/// 离线安装包根：优先 `repo/cangling-repo/`，否则回退到 `repo/`（旧克隆）。
+/// 离线安装包根：优先 `repo/cangling-repo/`，否则回退到 `repo/`（旧布局）。
 pub fn packages_root(repo: &FsPath) -> PathBuf {
     let nested = repo.join(CANGLING_REPO_SET);
     if nested.is_dir() {
