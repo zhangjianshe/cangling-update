@@ -73,6 +73,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// 签发控制台登录会话（供维护中心自动登录，不打印密码）
+    IssueSession {
+        /// 用户名；只有一个账号时可省略
+        #[arg(short, long)]
+        username: Option<String>,
+    },
     /// 在主机上重置登录密码（忘记密码时使用）
     ResetPassword {
         /// 用户名；只有一个账号时可省略
@@ -133,6 +139,10 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Some(Command::IssueSession { username }) => {
+            let paths = AppPaths::resolve(cli.data_dir)?;
+            return issue_session_cli(&paths, username);
+        }
         Some(Command::ResetPassword { username, password }) => {
             let paths = AppPaths::resolve(cli.data_dir)?;
             return reset_password(&paths, username, password);
@@ -366,6 +376,37 @@ async fn change_password(
         }
         eprintln!("同步完成：成功 {synced} 个，失败 {} 个。", failures.len());
     }
+    Ok(())
+}
+
+fn issue_session_cli(paths: &AppPaths, username: Option<String>) -> anyhow::Result<()> {
+    let conn = db::open(&paths.db_path)?;
+    let names = db::list_usernames(&conn)?;
+    if names.is_empty() {
+        println!("CK_SESSION|ok=0|error=needs_setup");
+        return Ok(());
+    }
+    let username = match username {
+        Some(u) => u,
+        None if names.len() == 1 => names[0].clone(),
+        None => {
+            println!("CK_SESSION|ok=0|error=multiple_users");
+            bail!(
+                "存在多个用户，请指定 --username。当前用户：{}",
+                names.join(", ")
+            );
+        }
+    };
+    let Some(user) = db::get_user_by_name(&conn, &username)? else {
+        println!("CK_SESSION|ok=0|error=no_user");
+        bail!("用户不存在：{username}");
+    };
+    let token = uuid::Uuid::new_v4().to_string();
+    db::create_session(&conn, &token, &user.id)?;
+    println!(
+        "CK_SESSION|ok=1|username={}|token={}",
+        user.username, token
+    );
     Ok(())
 }
 

@@ -902,6 +902,20 @@
         else sessionStorage.removeItem(SESSION_KEY);
       } catch (_) {}
     }
+    function takeUrlSessionToken() {
+      try {
+        const u = new URL(location.href);
+        const token = (u.searchParams.get("token") || u.searchParams.get("access_token") || "").trim();
+        if (!token) return "";
+        u.searchParams.delete("token");
+        u.searchParams.delete("access_token");
+        const qs = u.searchParams.toString();
+        history.replaceState({}, "", u.pathname + (qs ? "?" + qs : "") + u.hash);
+        return token;
+      } catch (_) {
+        return "";
+      }
+    }
     function withAuth(opts = {}) {
       const headers = Object.assign({}, opts.headers || {});
       const token = sessionToken();
@@ -1082,6 +1096,8 @@
     }
 
     async function boot() {
+      const urlToken = takeUrlSessionToken();
+      if (urlToken) setSessionToken(urlToken);
       try {
         const st = await fetch("/api/auth/status", withAuth()).then((r) => r.json());
         state.needsSetup = !!st.needs_setup;

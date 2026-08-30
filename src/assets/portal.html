@@ -407,6 +407,20 @@
       if (token) headers.Authorization = "Bearer " + token;
       return Object.assign({ credentials: "same-origin" }, opts, { headers });
     }
+    function takeUrlSessionToken() {
+      try {
+        const u = new URL(location.href);
+        const token = (u.searchParams.get("token") || u.searchParams.get("access_token") || "").trim();
+        if (!token) return "";
+        u.searchParams.delete("token");
+        u.searchParams.delete("access_token");
+        const qs = u.searchParams.toString();
+        history.replaceState({}, "", u.pathname + (qs ? "?" + qs : "") + u.hash);
+        return token;
+      } catch (_) {
+        return "";
+      }
+    }
 
     function confirmDialog(message, opts = {}) {
       return new Promise((resolve) => {
@@ -839,6 +853,8 @@
     };
 
     (async function boot() {
+      const urlToken = takeUrlSessionToken();
+      if (urlToken) setSessionToken(urlToken);
       try {
         applyPage(await api("/api/portal"));
       } catch (e) {
