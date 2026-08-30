@@ -5,7 +5,7 @@
 //! cangling-update
 //! repo/
 //!   cangling-repo/         # 离线安装包（原 repo-templates / git 仓库）
-//!     kylin-arm/<软件包>/install.sh
+//!     kylin-arm/<软件包>/     # 任意文件；install.sh 可选
 //!     linux-x86/<软件包>/...
 //!     windows/<软件包>/...
 //!   np4/                   # 维护中心 Manifest 集
@@ -15,7 +15,7 @@
 //! 仍兼容旧布局（平台目录直接放在 `repo/` 下）。
 //!
 //! master 本地扫描仓库并对外提供打包下载（m2m 接口），worker 通过 master 拉取
-//! 仓库清单、下载软件包并在本机运行安装脚本。
+//! 仓库清单、下载软件包；有安装脚本时也可在本机运行。
 
 use crate::cluster::Role;
 use crate::error::AppError;
@@ -491,8 +491,9 @@ fn find_installer_in_dir(dir: &FsPath) -> Result<String, AppError> {
         }
     }
     files.sort();
-    find_installer(&files)
-        .ok_or_else(|| AppError::bad("软件包中未找到安装脚本（install.sh / setup.sh 等）"))
+    find_installer(&files).ok_or_else(|| {
+        AppError::bad("该软件包没有安装脚本，仅可下载。安装脚本不是必须的。")
+    })
 }
 
 fn read_description(dir: &FsPath, install: Option<&str>) -> String {

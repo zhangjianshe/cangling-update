@@ -1589,7 +1589,7 @@
           <pre class="task-log">repo/
   cangling-repo/          # 离线安装包
     kylin-arm/  linux-x86/  windows/
-      └── 软件包/install.sh
+      └── 软件包/              # 任意文件；install.sh 可选
   np4/
     np4-update/latest/    # cangling-update 自我更新程序</pre>
         </div>`;
@@ -1713,7 +1713,7 @@
             <pre class="task-log">repo/
   cangling-repo/          # 离线安装包（原 repo-templates）
     kylin-arm/  linux-x86/  windows/
-      └── 软件包/install.sh
+      └── 软件包/              # 任意文件；install.sh 可选
   np4/
     np4-update/latest/    # cangling-update 自我更新程序</pre>
             <button class="btn primary" onclick="loadRepo()">重新扫描</button>
@@ -1739,20 +1739,26 @@
       if (!tab) { body.innerHTML = `<div class="card"><p class="hint">暂无内容</p></div>`; return; }
       const packages = tab.packages || [];
       const cards = packages.map(pkg => {
-        const installable = !!pkg.install && tab.id === data.host_platform;
+        const samePlatform = tab.id === data.host_platform;
+        const installable = !!pkg.install && samePlatform;
+        const installTitle = !pkg.install
+          ? "该软件包没有安装脚本，仅可下载"
+          : installable
+            ? "下载并运行安装脚本"
+            : "该平台与当前节点不匹配";
         return `<div class="card">
           <h3>${esc(pkg.name)}</h3>
           <div class="hint" style="white-space:pre-line;margin-bottom:8px">${esc(pkg.description || "—")}</div>
-          <p class="path">${pkg.file_count} 个文件 · ${fmtBytes(pkg.bytes)}${pkg.install ? ` · 安装脚本 <code>${esc(pkg.install)}</code>` : ""}</p>
+          <p class="path">${pkg.file_count} 个文件 · ${fmtBytes(pkg.bytes)}${pkg.install ? ` · 安装脚本 <code>${esc(pkg.install)}</code>` : " · 无安装脚本"}</p>
           <div class="row" style="margin-top:10px">
             <button class="btn" data-download="${esc(tab.id)}|${esc(pkg.name)}">下载</button>
-            <button class="btn primary" data-install="${esc(tab.id)}|${esc(pkg.name)}" ${installable ? "" : "disabled"} title="${installable ? "下载并运行安装脚本" : "该平台与当前节点不匹配"}">安装</button>
+            ${pkg.install ? `<button class="btn primary" data-install="${esc(tab.id)}|${esc(pkg.name)}" ${installable ? "" : "disabled"} title="${installTitle}">安装</button>` : ""}
           </div>
         </div>`;
       }).join("");
       const emptyHint = tab.id === "np4"
         ? `该软件集暂无内容，请通过维护中心同步 <code>repo/np4/</code>。`
-        : `该平台暂无软件包，请在 <code>repo/cangling-repo/${esc(tab.id)}/</code> 下建立软件包子目录（内含安装脚本 install.sh）。`;
+        : `该平台暂无软件包，请在 <code>repo/cangling-repo/${esc(tab.id)}/</code> 下建立软件包子目录（任意文件即可，install.sh 可选）。`;
       body.innerHTML = packages.length ? cards : `<div class="card"><p class="hint">${emptyHint}</p></div>`;
 
       body.querySelectorAll("[data-download]").forEach(b => {
