@@ -12,7 +12,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "### 1/3 拉取 k3s v1.30.13-rc1+k3s1"
 "$DIR/fetch-k3s.sh"
 
-echo "### 2/3 拉取 k9s（linux-x86 .deb + kylin-arm .rpm）与 kylin-arm docker-ce .rpm"
+echo "### 2/3 拉取 k9s（linux-x86 .deb + kylin-arm .rpm）与 kylin-arm docker 静态二进制 / compose"
 "$DIR/fetch-k9s.sh"
 "$DIR/fetch-kylin-docker-k9s.sh"
 

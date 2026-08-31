@@ -7,7 +7,7 @@
 | 平台目录 | 目标系统 | 包格式 | 安装器 |
 | --- | --- | --- | --- |
 | `linux-x86` | 通用 Linux x86（Ubuntu/Debian） | `.deb` | apt / dpkg |
-| `kylin-arm` | 麒麟 ARM（银河麒麟高级服务器 V10，aarch64） | `.rpm` | dnf / rpm |
+| `kylin-arm` | 麒麟 ARM（银河麒麟高级服务器 V10，aarch64） | `.rpm`（docker 为静态二进制） | dnf / rpm（docker 为 tar 解包） |
 | `windows` | Windows | 脚本 | 手动 |
 
 > k3s 是「单二进制 + airgap 镜像」，与发行版无关，两个 Linux 平台通用（仅架构不同）。
@@ -22,9 +22,9 @@ repo-templates/
   fetch-k9s.sh                # k9s v0.51.0 的 linux-x86 .deb
   fetch-apt.sh                # git/samba/docker 的 linux-x86 .deb（含依赖）
   fetch-dnf.sh                # git/samba 的 kylin-arm .rpm（含依赖，需在麒麟机器上跑）
-  fetch-kylin-docker-k9s.sh   # kylin-arm 的 docker-ce + k9s .rpm
+  fetch-kylin-docker-k9s.sh   # kylin-arm 的 docker 静态二进制 + compose + k9s .rpm
   linux-x86/                  # 各软件 install.sh（.deb 版）
-  kylin-arm/                  # 各软件 install.sh（.rpm 版，k3s 与 linux-x86 相同）
+  kylin-arm/                  # 各软件 install.sh（.rpm / 静态二进制版，k3s 与 linux-x86 相同）
 ```
 
 ## 软件清单
@@ -33,7 +33,7 @@ repo-templates/
 | --- | --- | --- | --- |
 | git | master + worker | `.deb` | `.rpm` |
 | samba | master + worker | `.deb` | `.rpm` |
-| docker | master + worker | docker-ce `.deb` | docker-ce `.rpm`（el9 aarch64） |
+| docker | master + worker | docker-ce `.deb` | docker 静态二进制 `docker-*.tgz`（musl，兼容 glibc 2.28） |
 | k3s-server | master | 二进制 + airgap | 二进制 + airgap |
 | k3s-agent | worker | 二进制 + airgap | 二进制 + airgap |
 | k9s | master | `.deb` | `.rpm` |
@@ -44,7 +44,7 @@ repo-templates/
 
 ```bash
 cd repo-templates
-# 跨架构资产（k3s / k9s / docker-ce rpm），在有网+可访问 github/docker.com 的机器上：
+# 跨架构资产（k3s / k9s / docker 静态二进制 / compose），在有网+可访问 github/docker.com 的机器上：
 PROXY=http://proxy.cangling.cn:7890 ./fetch-all.sh
 
 # linux-x86 的 git/samba/docker .deb：在 Ubuntu/Debian 干净机器/容器上：
@@ -72,4 +72,5 @@ cp -r repo-templates/kylin-arm/* /opt/cangling-update/repo/kylin-arm/
 
 - k3s：`v1.30.13-rc1+k3s1`（改 `fetch-k3s.sh` 顶部 `VERSION`/`TAG`，及各 install.sh 的 `K3S_VERSION`）
 - k9s：`v0.51.0`
-- docker-ce：`29.7.2`（kylin-arm 的 rpm 固定版本在 `fetch-kylin-docker-k9s.sh` 顶部）
+- docker-ce：`27.5.1` 静态二进制（kylin-arm 固定版本在 `fetch-kylin-docker-k9s.sh` 顶部，不能用 el9 的 rpm——麒麟 V10 的 glibc 2.28 装不上）
+- docker compose：`v2.32.4` 官方 release 静态二进制
