@@ -306,6 +306,8 @@ async fn run_installer_in_dir(
     if !script.is_file() {
         return Err(AppError::not_found("安装脚本不存在"));
     }
+    normalize_crlf(&script)
+        .map_err(|e| AppError::internal(format!("无法规范化安装脚本换行：{e}")))?;
     let (program, args) = launch_command(&script)?;
 
     let started = Instant::now();
@@ -735,6 +737,27 @@ fn first_line(path: &FsPath) -> Option<String> {
     )
 }
 
+/// 把 CRLF 行尾规范化为 LF。离线包若经 Windows 检出，安装脚本可能带 `\r`，
+/// bash 会把 `pipefail\r` 当成非法选项名（退出码 2），导致安装失败。
+fn normalize_crlf(path: &FsPath) -> std::io::Result<()> {
+    let bytes = std::fs::read(path)?;
+    if !bytes.windows(2).any(|w| w == b"\r\n") {
+        return Ok(());
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            out.push(b'\n');
+            i += 2;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    std::fs::write(path, out)
+}
+
 fn is_executable_path(path: &FsPath) -> bool {
     #[cfg(unix)]
     {
@@ -867,6 +890,19 @@ mod tests {
         assert_eq!(
             script_description(&script).as_deref(),
             Some("第一行\n第二行")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_crlf_converts_windows_line_endings() {
+        let dir = tmpdir("crlf");
+        let script = dir.join("install.sh");
+        std::fs::write(&script, "#!/bin/bash\r\nset -euo pipefail\r\necho ok\r\n").unwrap();
+        normalize_crlf(&script).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&script).unwrap(),
+            "#!/bin/bash\nset -euo pipefail\necho ok\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

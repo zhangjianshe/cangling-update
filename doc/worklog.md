@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-08-31 — 修复安装脚本 CRLF 导致 `set: pipefail` 失败
+
+### 发现
+- `hn`（麒麟 V10 aarch64，master）点「检查并修复」时 git 安装失败，退出码 `Some(2)`，报错：
+  `install.sh: 第 3 行：set: pipefail：无效的选项名`。
+- 根因：`/root/update/repo/cangling-repo/*/install.sh` 是 **CRLF 行尾**（`\r\n`），bash 把 `pipefail\r` 当成非法选项名。
+- 这些脚本权限为 `644`，程序走 shebang 回退用 `/bin/bash` 运行，因此问题集中在行尾字符，而非 shell 选项。
+
+### 做了什么
+1. `src/repo.rs` 新增 `normalize_crlf()`：安装脚本解压到临时目录后、执行前，把 CRLF 规范化为 LF，避免离线仓库经 Windows/git 检出成 CRLF 时安装失败。
+2. `run_installer_in_dir()` 在 `launch_command()` 之前调用 `normalize_crlf()`。
+3. 新增单元测试 `normalize_crlf_converts_windows_line_endings`。
+4. 现场临时解围：在 `hn` master 上把仓库里 14 个 `install.sh` 的 CRLF 规范化为 LF（`find . -name '*.sh' -print0 | xargs -0 sed -i 's/\r$//'`），旧二进制即可继续「检查并修复」。
+
+### 涉及文件
+- `src/repo.rs`
+- `doc/worklog.md`
+
+### 验证
+- 本地复现：CRLF 脚本 + bash 报 `set: pipefail: invalid option name`，退出码 2。
+- `cargo test`：87 个全部通过；`cargo build` 通过。
+- `hn` 上全部 install.sh 通过 `bash -n`；`kylin-arm/git/install.sh` 实测输出 `git 已安装：git version 2.33.0`，退出码 0。
+
+### 备注
+- 源码改动已就绪但未提交/发布；主机当前仍跑 v0.1.66 旧二进制，靠临时规范化仓库脚本解围。
+- 下次发布（CI 编 `cangling-update-linux-arm64`）后新二进制可彻底免疫 CRLF 问题。
+
+---
+
 ## 2026-08-29 — worker 注册时自动升级 cangling-update（双架构）
 
 ### 做了什么
