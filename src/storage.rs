@@ -93,11 +93,11 @@ pub struct ClusterMountRequest {
     pub options: String,
 }
 
-/// 控制台部署请求：指定目标主机（空 = 本机）。
+/// 控制台部署请求：指定一个或多个目标主机（空字符串 = 本机）。
 #[derive(Debug, Deserialize)]
 pub struct DeployBody {
     #[serde(default)]
-    pub host_id: String,
+    pub host_ids: Vec<String>,
 }
 
 /// master→worker 的卸载请求。
@@ -172,16 +172,36 @@ pub async fn deploy_storage(
     Json(body): Json<DeployBody>,
 ) -> Result<Json<Storage>, AppError> {
     let mut s = load_storage(&state, &id)?;
-    let target_host = body.host_id.trim().to_string();
     let local_id = cluster::load_or_create_node_id(&state.paths);
+    let hosts = normalize_hosts(body.host_ids);
 
-    let result = if s.kind == KIND_EXTERNAL {
-        deploy_external(&state, &s, &target_host, &local_id).await
+    let mut lines = Vec::new();
+    let mut failed = false;
+    for host in hosts {
+        let label = host_label(&state, &host);
+        let result = if s.kind == KIND_EXTERNAL {
+            deploy_external(&state, &s, &host, &local_id).await
+        } else {
+            deploy_host_share(&state, &s, &host, &local_id).await
+        };
+        match result {
+            Ok(msg) => lines.push(format!("[{label}] {msg}")),
+            Err(e) => {
+                failed = true;
+                lines.push(format!("[{label}] 失败：{e}"));
+            }
+        }
+    }
+
+    s.status = if failed {
+        "error".to_string()
     } else {
-        deploy_host_share(&state, &s, &target_host, &local_id).await
+        "deployed".to_string()
     };
-
-    set_storage_result(&state, &mut s, result, "deployed").await?;
+    s.message = lines.join("；");
+    s.updated_at = crate::db::now_rfc3339();
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    update_storage_db(&conn, &s)?;
     Ok(Json(s))
 }
 
@@ -191,17 +211,37 @@ pub async fn unmount_storage(
     Json(body): Json<DeployBody>,
 ) -> Result<Json<Storage>, AppError> {
     let mut s = load_storage(&state, &id)?;
-    let target_host = body.host_id.trim().to_string();
     let local_id = cluster::load_or_create_node_id(&state.paths);
+    let hosts = normalize_hosts(body.host_ids);
 
-    let result = if target_host.is_empty() || target_host == local_id {
-        let s2 = s.clone();
-        run_blocking(move || unmount_external(&s2)).await
+    let mut lines = Vec::new();
+    let mut failed = false;
+    for host in hosts {
+        let label = host_label(&state, &host);
+        let result = if host.is_empty() || host == local_id {
+            let s2 = s.clone();
+            run_blocking(move || unmount_external(&s2)).await
+        } else {
+            forward_unmount(&state, &s.target_dir, &host).await
+        };
+        match result {
+            Ok(msg) => lines.push(format!("[{label}] {msg}")),
+            Err(e) => {
+                failed = true;
+                lines.push(format!("[{label}] 失败：{e}"));
+            }
+        }
+    }
+
+    s.status = if failed {
+        "error".to_string()
     } else {
-        forward_unmount(&state, &s.target_dir, &target_host).await
+        "defined".to_string()
     };
-
-    set_storage_result(&state, &mut s, result, "defined").await?;
+    s.message = lines.join("；");
+    s.updated_at = crate::db::now_rfc3339();
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    update_storage_db(&conn, &s)?;
     Ok(Json(s))
 }
 
@@ -760,6 +800,38 @@ fn node_primary_ip(conn: &Connection, id: &str) -> rusqlite::Result<Option<Strin
             .ok()
             .map(|h| h.primary_ip)
     }))
+}
+
+fn normalize_hosts(host_ids: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for raw in host_ids {
+        let h = raw.trim().to_string();
+        if h.is_empty() {
+            if !out.iter().any(|x| x.is_empty()) {
+                out.push(String::new());
+            }
+        } else if !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+fn host_label(state: &AppState, host_id: &str) -> String {
+    if host_id.is_empty() {
+        return "本机".to_string();
+    }
+    if let Ok(conn) = state.db.lock() {
+        if let Ok(Some(name)) = node_name(&conn, host_id) {
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    host_id.to_string()
 }
 
 fn refresh_external_status(list: &mut [Storage]) {

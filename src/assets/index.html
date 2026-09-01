@@ -661,6 +661,18 @@
     .storage-form .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin-bottom: 16px; }
     .storage-form .form-grid .field { margin-bottom: 0; }
     .storage-form .form-grid:last-child { margin-bottom: 0; }
+    .host-check-list {
+      border: 1px solid var(--line); border-radius: 6px;
+      max-height: 240px; overflow: auto; padding: 6px;
+      display: flex; flex-direction: column; gap: 2px;
+    }
+    .host-check {
+      display: flex; align-items: center; gap: 8px;
+      padding: 7px 9px; border-radius: 6px; cursor: pointer;
+      color: var(--text); margin: 0; line-height: 1.4;
+    }
+    .host-check:hover { background: var(--bg-3); }
+    .host-check input { margin: 0; flex: 0 0 auto; }
     .modal.compose-modal { width: min(1700px, 100%); }
     .compose-edit {
       flex: 1; min-height: 0; display: grid;
@@ -2133,32 +2145,33 @@
       $("#dialog-title").textContent = `${label}存储 · ${s.name}`;
       setDialogAction(label, () => submitHostAction(action, id));
       const nodes = state.clusterNodes || [];
-      const hostOpts = `<option value="">本机</option>` + nodes.map(n =>
-        `<option value="${esc(n.id)}">${esc(n.name || n.addr)}</option>`).join("");
       const def = (action === "deploy" && s.kind === "host_share") ? (s.host_id || "") : "";
+      const isChecked = (val) => val === def ? "checked" : "";
+      const hostChecks = `<label class="check host-check"><input type="checkbox" value="" ${isChecked("")} /> 本机</label>` +
+        nodes.map(n =>
+          `<label class="check host-check"><input type="checkbox" value="${esc(n.id)}" ${isChecked(n.id)} /> ${esc(n.name || n.addr)}</label>`).join("");
       $("#dialog-body").innerHTML = `
         <div class="storage-form">
           <div id="host-action-flash" hidden></div>
           <div class="field">
-            <label>目标主机</label>
-            <select id="host-action-host">${hostOpts}</select>
-            <p class="hint">${action === "deploy" ? "将存储挂载到该主机；主机共享部署到源主机时即启动共享。" : "从该主机卸载该存储。"}</p>
+            <label>目标主机（可多选）</label>
+            <div class="host-check-list">${hostChecks}</div>
+            <p class="hint">${action === "deploy" ? "将存储部署到所选主机；主机共享部署到源主机时即启动共享。" : "从所选主机卸载该存储。"}</p>
           </div>
         </div>`;
       $("#dialog").hidden = false;
-      const sel = $("#host-action-host");
-      if (sel) { sel.value = def; sel.focus(); }
     }
 
     async function submitHostAction(action, id) {
       const box = $("#host-action-flash");
       const show = (kind, msg) => { if (box) { box.className = "flash " + kind; box.textContent = msg; box.hidden = false; } };
-      const host_id = $("#host-action-host").value;
+      const host_ids = Array.from(document.querySelectorAll("#dialog-body .host-check-list input:checked")).map(el => el.value);
+      if (!host_ids.length) { show("err", "请至少选择一台主机"); return; }
       try {
         const r = await api(`/api/storages/${id}/${action}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ host_id }),
+          body: JSON.stringify({ host_ids }),
         });
         closeDialog();
         await loadStorage();
