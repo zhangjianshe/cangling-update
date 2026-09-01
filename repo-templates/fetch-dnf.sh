@@ -22,6 +22,10 @@ dl() {
 dl "git" "git"
 # samba（麒麟源里有）
 dl "samba" "samba"
+# cifs-utils（CIFS 挂载客户端）
+dl "cifs-utils" "cifs-utils"
+# nfs 客户端（麒麟包名 nfs-utils，仓库目录名 nfs-common）
+dl "nfs-utils" "nfs-common"
 
-echo "完成，kylin-arm 的 git/samba 离线 .rpm 已就绪。"
+echo "完成，kylin-arm 的 git/samba/cifs-utils/nfs-utils 离线 .rpm 已就绪。"
 echo "docker / k9s 的 .rpm 请用 fetch-kylin-docker-k9s.sh（在可访问 download.docker.com / github 的机器上跑）。"

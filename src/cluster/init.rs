@@ -19,12 +19,22 @@ use std::time::Instant;
 pub const MASTER_SOFTWARE: &[&str] = &[
     "git",
     "samba",
+    "cifs-utils",
+    "nfs-common",
     "docker",
     "docker-compose",
     "k3s-server",
     "k9s",
 ];
-pub const WORKER_SOFTWARE: &[&str] = &["git", "samba", "docker", "docker-compose", "k3s-agent"];
+pub const WORKER_SOFTWARE: &[&str] = &[
+    "git",
+    "samba",
+    "cifs-utils",
+    "nfs-common",
+    "docker",
+    "docker-compose",
+    "k3s-agent",
+];
 pub const CLUSTER_NAME_KEY: &str = "cluster_name";
 const TRAEFIK_STEP: &str = "traefik-8020/8443";
 const KUBECONFIG_STEP: &str = "~/.kube/config";

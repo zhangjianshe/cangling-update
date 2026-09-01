@@ -883,6 +883,7 @@ fn mount_from_spec(
     }
 
     let (fstype, src, opts) = build_mount_spec_parts(protocol, server, share, username, password, options)?;
+    ensure_mount_helper(&fstype)?;
     let mut cmd = Command::new("mount");
     cmd.arg("-t").arg(&fstype);
     if !opts.is_empty() {
@@ -999,6 +1000,20 @@ fn is_mounted(mnt: &str) -> bool {
     std::fs::read_to_string("/proc/mounts")
         .map(|s| s.lines().any(|l| l.split_whitespace().nth(1) == Some(mnt)))
         .unwrap_or(false)
+}
+
+fn ensure_mount_helper(fstype: &str) -> Result<(), AppError> {
+    let (helper, pkg) = match fstype {
+        "cifs" => ("/sbin/mount.cifs", "cifs-utils"),
+        "nfs" => ("/sbin/mount.nfs", "nfs-common"),
+        _ => return Ok(()),
+    };
+    if FsPath::new(helper).exists() || FsPath::new(&format!("/usr{helper}")).exists() {
+        return Ok(());
+    }
+    Err(AppError::internal(format!(
+        "未找到 {helper}，请先在目标主机安装 {pkg}"
+    )))
 }
 
 fn persist_fstab(fstype: &str, src: &str, mnt: &str, opts: &str) -> Result<bool, String> {
