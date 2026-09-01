@@ -1067,6 +1067,32 @@ fn cmd_message(out: &std::process::Output) -> String {
 // 主机 CIFS 共享：samba 配置 + 启动
 // ---------------------------------------------------------------------------
 
+fn ensure_symlink(link: &str, target: &str) -> Result<String, AppError> {
+    let lp = FsPath::new(link);
+    let tp = FsPath::new(target);
+    if lp.is_symlink() {
+        let cur = std::fs::read_link(lp).unwrap_or_default();
+        if cur == tp {
+            return Ok(format!("软链接已存在 {link} → {target}"));
+        }
+        return Err(AppError::bad(format!(
+            "{link} 已是指向 {} 的软链接，无法覆盖",
+            cur.display()
+        )));
+    }
+    if lp.exists() {
+        return Err(AppError::bad(format!("{link} 已存在且不是软链接，无法覆盖")));
+    }
+    if let Some(parent) = lp.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::internal(format!("创建 {} 失败：{e}", parent.display())))?;
+    }
+    std::os::unix::fs::symlink(tp, lp).map_err(|e| {
+        AppError::internal(format!("创建软链接 {link} → {target} 失败：{e}"))
+    })?;
+    Ok(format!("已创建软链接 {link} → {target}"))
+}
+
 fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     let dir = s.path.trim();
     if dir.is_empty() {
@@ -1077,6 +1103,16 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
             .map_err(|e| AppError::internal(format!("创建共享目录失败 {dir}：{e}")))?;
     }
     let share_name = sanitize_share_name(&s.share)?;
+
+    // 在源主机上建立软链接，使所有节点（源主机 + 挂载节点）用同一路径访问该存储。
+    let link_note = if s.target_dir.trim().is_empty() || s.target_dir.trim() == dir {
+        String::new()
+    } else {
+        match ensure_symlink(&s.target_dir, dir) {
+            Ok(msg) => msg,
+            Err(e) => format!("未创建软链接：{e}"),
+        }
+    };
 
     if find_smbd().is_none() {
         return Err(AppError::internal(
@@ -1120,9 +1156,13 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     ensure_include(&smb_conf, &format!("include = {}", conf_file.display()))?;
 
     let note = reload_smbd()?;
-    Ok(format!(
+    let mut msg = format!(
         "共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并应用 smbd 配置：{note}"
-    ))
+    );
+    if !link_note.is_empty() {
+        msg.push_str(&format!("；{link_note}"));
+    }
+    Ok(msg)
 }
 
 fn sanitize_share_name(raw: &str) -> Result<String, AppError> {
@@ -1326,5 +1366,29 @@ mod tests {
         let (_, _, guest_opts) =
             build_mount_spec_parts("cifs", "10.0.0.2", "backup", "", "", "").unwrap();
         assert!(guest_opts.contains("guest"));
+    }
+
+    #[test]
+    fn ensure_symlink_creates_and_is_idempotent() {
+        let dir = std::env::temp_dir().join(format!("cangling-symlink-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("data");
+        let link = dir.join("mnt");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let msg = ensure_symlink(link.to_str().unwrap(), target.to_str().unwrap()).unwrap();
+        assert!(msg.contains("已创建软链接"), "{msg}");
+        assert!(link.is_symlink());
+
+        // 重复调用幂等。
+        let again = ensure_symlink(link.to_str().unwrap(), target.to_str().unwrap()).unwrap();
+        assert!(again.contains("已存在"), "{again}");
+
+        // 已存在普通目录时拒绝覆盖。
+        std::fs::remove_file(&link).unwrap();
+        std::fs::create_dir_all(&link).unwrap();
+        assert!(ensure_symlink(link.to_str().unwrap(), target.to_str().unwrap()).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
