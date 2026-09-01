@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS storages (
     server TEXT NOT NULL DEFAULT '',
     share TEXT NOT NULL DEFAULT '',
     path TEXT NOT NULL DEFAULT '',
+    target_dir TEXT NOT NULL DEFAULT '',
     username TEXT NOT NULL DEFAULT '',
     password TEXT NOT NULL DEFAULT '',
     options TEXT NOT NULL DEFAULT '',
@@ -141,6 +142,10 @@ CREATE TABLE IF NOT EXISTS storages (
     )?;
     let _ = conn.execute(
         "ALTER TABLE cluster_nodes ADD COLUMN role TEXT NOT NULL DEFAULT 'worker'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE storages ADD COLUMN target_dir TEXT NOT NULL DEFAULT ''",
         [],
     );
     ensure_portal_seeded(&conn)?;

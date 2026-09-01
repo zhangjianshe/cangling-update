@@ -13,7 +13,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path as FsPath, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use uuid::Uuid;
 
 pub const KIND_EXTERNAL: &str = "external";
@@ -30,6 +30,7 @@ pub struct Storage {
     pub server: String,
     pub share: String,
     pub path: String,
+    pub target_dir: String,
     pub username: String,
     #[serde(skip_serializing)]
     pub password: String,
@@ -57,6 +58,8 @@ pub struct StorageBody {
     #[serde(default)]
     pub path: String,
     #[serde(default)]
+    pub target_dir: String,
+    #[serde(default)]
     pub username: String,
     #[serde(default)]
     pub password: String,
@@ -73,6 +76,34 @@ pub struct ClusterShareRequest {
     pub path: String,
     #[serde(default)]
     pub options: String,
+}
+
+/// master→worker 的挂载请求（走集群令牌）。
+#[derive(Debug, Deserialize)]
+pub struct ClusterMountRequest {
+    pub protocol: String,
+    pub server: String,
+    pub share: String,
+    pub target_dir: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub options: String,
+}
+
+/// 控制台部署请求：指定目标主机（空 = 本机）。
+#[derive(Debug, Deserialize)]
+pub struct DeployBody {
+    #[serde(default)]
+    pub host_id: String,
+}
+
+/// master→worker 的卸载请求。
+#[derive(Debug, Deserialize)]
+pub struct ClusterUnmountRequest {
+    pub target_dir: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,30 +166,41 @@ pub async fn delete_storage(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-pub async fn mount_storage(
+pub async fn deploy_storage(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Json(body): Json<DeployBody>,
 ) -> Result<Json<Storage>, AppError> {
     let mut s = load_storage(&state, &id)?;
-    if s.kind != KIND_EXTERNAL {
-        return Err(AppError::bad("只有「外部存储」需要挂载"));
-    }
-    let s2 = s.clone();
-    let result = run_blocking(move || mount_external(&s2)).await;
-    set_storage_result(&state, &mut s, result, "mounted").await?;
+    let target_host = body.host_id.trim().to_string();
+    let local_id = cluster::load_or_create_node_id(&state.paths);
+
+    let result = if s.kind == KIND_EXTERNAL {
+        deploy_external(&state, &s, &target_host, &local_id).await
+    } else {
+        deploy_host_share(&state, &s, &target_host, &local_id).await
+    };
+
+    set_storage_result(&state, &mut s, result, "deployed").await?;
     Ok(Json(s))
 }
 
 pub async fn unmount_storage(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Json(body): Json<DeployBody>,
 ) -> Result<Json<Storage>, AppError> {
     let mut s = load_storage(&state, &id)?;
-    if s.kind != KIND_EXTERNAL {
-        return Err(AppError::bad("只有「外部存储」需要卸载"));
-    }
-    let s2 = s.clone();
-    let result = run_blocking(move || unmount_external(&s2)).await;
+    let target_host = body.host_id.trim().to_string();
+    let local_id = cluster::load_or_create_node_id(&state.paths);
+
+    let result = if target_host.is_empty() || target_host == local_id {
+        let s2 = s.clone();
+        run_blocking(move || unmount_external(&s2)).await
+    } else {
+        forward_unmount(&state, &s.target_dir, &target_host).await
+    };
+
     set_storage_result(&state, &mut s, result, "defined").await?;
     Ok(Json(s))
 }
@@ -198,6 +240,7 @@ pub async fn cluster_start_share(
         server: String::new(),
         share: body.share,
         path: body.path,
+        target_dir: String::new(),
         username: String::new(),
         password: String::new(),
         options: body.options,
@@ -210,12 +253,28 @@ pub async fn cluster_start_share(
     Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
 }
 
+/// worker 侧（机器间接口）：在本机执行一次挂载。
+pub async fn cluster_mount(
+    Json(body): Json<ClusterMountRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let msg = run_blocking(move || mount_from_request(&body)).await?;
+    Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
+}
+
+/// worker 侧（机器间接口）：在本机执行一次卸载。
+pub async fn cluster_unmount(
+    Json(body): Json<ClusterUnmountRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let msg = run_blocking(move || unmount_dir(&body.target_dir)).await?;
+    Ok(Json(serde_json::json!({ "ok": true, "message": msg })))
+}
+
 // ---------------------------------------------------------------------------
 // 数据库
 // ---------------------------------------------------------------------------
 
 const STORAGE_COLS: &str = "id, name, kind, protocol, host_id, host_name, server, share, \
-    path, username, password, options, status, message, created_at, updated_at";
+    path, target_dir, username, password, options, status, message, created_at, updated_at";
 
 fn map_storage(row: &rusqlite::Row<'_>) -> rusqlite::Result<Storage> {
     Ok(Storage {
@@ -228,13 +287,14 @@ fn map_storage(row: &rusqlite::Row<'_>) -> rusqlite::Result<Storage> {
         server: row.get(6)?,
         share: row.get(7)?,
         path: row.get(8)?,
-        username: row.get(9)?,
-        password: row.get(10)?,
-        options: row.get(11)?,
-        status: row.get(12)?,
-        message: row.get(13)?,
-        created_at: row.get(14)?,
-        updated_at: row.get(15)?,
+        target_dir: row.get(9)?,
+        username: row.get(10)?,
+        password: row.get(11)?,
+        options: row.get(12)?,
+        status: row.get(13)?,
+        message: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
     })
 }
 
@@ -253,9 +313,9 @@ pub fn get_storage_db(conn: &Connection, id: &str) -> rusqlite::Result<Option<St
 pub fn insert_storage_db(conn: &Connection, s: &Storage) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO storages
-            (id, name, kind, protocol, host_id, host_name, server, share, path,
+            (id, name, kind, protocol, host_id, host_name, server, share, path, target_dir,
              username, password, options, status, message, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             s.id,
             s.name,
@@ -266,6 +326,7 @@ pub fn insert_storage_db(conn: &Connection, s: &Storage) -> rusqlite::Result<()>
             s.server,
             s.share,
             s.path,
+            s.target_dir,
             s.username,
             s.password,
             s.options,
@@ -282,9 +343,9 @@ pub fn update_storage_db(conn: &Connection, s: &Storage) -> rusqlite::Result<boo
     let n = conn.execute(
         "UPDATE storages SET
             name = ?1, kind = ?2, protocol = ?3, host_id = ?4, host_name = ?5,
-            server = ?6, share = ?7, path = ?8, username = ?9, password = ?10,
-            options = ?11, status = ?12, message = ?13, updated_at = ?14
-         WHERE id = ?15",
+            server = ?6, share = ?7, path = ?8, target_dir = ?9, username = ?10,
+            password = ?11, options = ?12, status = ?13, message = ?14, updated_at = ?15
+         WHERE id = ?16",
         params![
             s.name,
             s.kind,
@@ -294,6 +355,7 @@ pub fn update_storage_db(conn: &Connection, s: &Storage) -> rusqlite::Result<boo
             s.server,
             s.share,
             s.path,
+            s.target_dir,
             s.username,
             s.password,
             s.options,
@@ -384,6 +446,7 @@ fn normalize(
         server: body.server.trim().to_string(),
         share: body.share.trim().to_string(),
         path: body.path.trim().to_string(),
+        target_dir: body.target_dir.trim().to_string(),
         username: body.username.trim().to_string(),
         password,
         options: body.options.trim().to_string(),
@@ -404,9 +467,10 @@ fn normalize(
         if s.server.is_empty() || s.share.is_empty() {
             return Err(AppError::bad("请填写服务器地址与共享路径"));
         }
-        if s.path.is_empty() {
-            return Err(AppError::bad("请填写本地挂载点"));
+        if s.target_dir.is_empty() {
+            return Err(AppError::bad("请填写目标目录（挂载点）"));
         }
+        s.path = String::new();
         s.host_id = String::new();
         s.host_name = "本机".into();
     } else {
@@ -417,6 +481,12 @@ fn normalize(
         }
         if s.path.is_empty() {
             return Err(AppError::bad("请填写要共享的主机目录"));
+        }
+        if s.target_dir.is_empty() {
+            return Err(AppError::bad("请填写目标目录（挂载点）"));
+        }
+        if !s.username.is_empty() && s.password.is_empty() {
+            return Err(AppError::bad("填写了用户名时，密码不能为空"));
         }
         if s.host_id.is_empty() {
             s.host_name = "本机".into();
@@ -506,11 +576,197 @@ async fn forward_start_share(state: &AppState, s: &Storage) -> Result<String, Ap
     }
 }
 
+async fn deploy_external(
+    state: &AppState,
+    s: &Storage,
+    target_host: &str,
+    local_id: &str,
+) -> Result<String, AppError> {
+    if target_host.is_empty() || target_host == local_id {
+        let s2 = s.clone();
+        run_blocking(move || mount_external(&s2)).await
+    } else {
+        let req = ClusterMountRequest {
+            protocol: s.protocol.clone(),
+            server: s.server.clone(),
+            share: s.share.clone(),
+            target_dir: s.target_dir.clone(),
+            username: s.username.clone(),
+            password: s.password.clone(),
+            options: s.options.clone(),
+        };
+        forward_mount(state, &req, target_host).await
+    }
+}
+
+async fn deploy_host_share(
+    state: &AppState,
+    s: &Storage,
+    target_host: &str,
+    local_id: &str,
+) -> Result<String, AppError> {
+    let owning = s.host_id.trim().to_string();
+    let owning_resolved = if owning.is_empty() {
+        local_id.to_string()
+    } else {
+        owning.clone()
+    };
+    let target_resolved = if target_host.is_empty() {
+        local_id.to_string()
+    } else {
+        target_host.to_string()
+    };
+    let owning_is_local = owning_resolved == local_id;
+    let target_is_owning = target_resolved == owning_resolved;
+
+    let start_result = if owning_is_local {
+        let s2 = s.clone();
+        run_blocking(move || start_host_share_local(&s2)).await
+    } else {
+        forward_start_share(state, s).await
+    };
+
+    // 部署到源主机本身，只需启动共享。
+    if target_is_owning {
+        return start_result;
+    }
+
+    // 部署到其它主机：先确保源主机共享已启动，再挂载。
+    start_result.map_err(|e| AppError::internal(format!("源主机共享启动失败：{e}")))?;
+
+    let owning_ip = if owning_is_local {
+        crate::hostinfo::primary_ip()
+    } else {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        node_primary_ip(&conn, &owning)?.ok_or_else(|| AppError::bad("无法获取源主机 IP"))?
+    };
+
+    let req = ClusterMountRequest {
+        protocol: "cifs".into(),
+        server: owning_ip,
+        share: s.share.clone(),
+        target_dir: s.target_dir.clone(),
+        username: s.username.clone(),
+        password: s.password.clone(),
+        options: s.options.clone(),
+    };
+
+    if target_host.is_empty() || target_host == local_id {
+        run_blocking(move || mount_from_request(&req)).await
+    } else {
+        forward_mount(state, &req, target_host).await
+    }
+}
+
+fn mount_from_request(req: &ClusterMountRequest) -> Result<String, AppError> {
+    mount_from_spec(
+        &req.protocol,
+        &req.server,
+        &req.share,
+        &req.target_dir,
+        &req.username,
+        &req.password,
+        &req.options,
+    )
+}
+
+async fn forward_mount(
+    state: &AppState,
+    req: &ClusterMountRequest,
+    target_host: &str,
+) -> Result<String, AppError> {
+    let addr = node_addr_for(state, target_host)?;
+    let token = cluster_token(state)?;
+    let url = format!("http://{addr}/api/cluster/storage/mount");
+    let body = serde_json::json!({
+        "protocol": req.protocol,
+        "server": req.server,
+        "share": req.share,
+        "target_dir": req.target_dir,
+        "username": req.username,
+        "password": req.password,
+        "options": req.options,
+    });
+    let (status, value) = cluster::http::post_json(&url, &token, &body)
+        .await
+        .map_err(|e| AppError::internal(format!("请求目标主机失败：{e}")))?;
+    if status.is_success() {
+        Ok(value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("已挂载")
+            .to_string())
+    } else {
+        let msg = value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("挂载失败");
+        Err(AppError::internal(msg.to_string()))
+    }
+}
+
+async fn forward_unmount(
+    state: &AppState,
+    target_dir: &str,
+    target_host: &str,
+) -> Result<String, AppError> {
+    let addr = node_addr_for(state, target_host)?;
+    let token = cluster_token(state)?;
+    let url = format!("http://{addr}/api/cluster/storage/unmount");
+    let body = serde_json::json!({ "target_dir": target_dir });
+    let (status, value) = cluster::http::post_json(&url, &token, &body)
+        .await
+        .map_err(|e| AppError::internal(format!("请求目标主机失败：{e}")))?;
+    if status.is_success() {
+        Ok(value
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("已卸载")
+            .to_string())
+    } else {
+        let msg = value
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("卸载失败");
+        Err(AppError::internal(msg.to_string()))
+    }
+}
+
+fn node_addr_for(state: &AppState, host_id: &str) -> Result<String, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    node_addr(&conn, host_id)?.ok_or_else(|| AppError::bad("目标主机不在集群节点列表中"))
+}
+
+fn cluster_token(state: &AppState) -> Result<String, AppError> {
+    state
+        .cluster
+        .token
+        .clone()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| AppError::bad("集群未启用或未设置令牌，无法在远程主机上执行操作"))
+}
+
+fn node_primary_ip(conn: &Connection, id: &str) -> rusqlite::Result<Option<String>> {
+    let info: Option<String> = conn
+        .query_row(
+            "SELECT info_json FROM cluster_nodes WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(info.and_then(|s| {
+        serde_json::from_str::<crate::hostinfo::HostSnapshot>(&s)
+            .ok()
+            .map(|h| h.primary_ip)
+    }))
+}
+
 fn refresh_external_status(list: &mut [Storage]) {
     let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
     for s in list.iter_mut() {
         if s.kind == KIND_EXTERNAL && s.status != "error" {
-            let mnt = s.path.trim();
+            let mnt = s.target_dir.trim();
             let mounted = !mnt.is_empty()
                 && mounts
                     .lines()
@@ -525,16 +781,36 @@ fn refresh_external_status(list: &mut [Storage]) {
 // ---------------------------------------------------------------------------
 
 fn mount_external(s: &Storage) -> Result<String, AppError> {
-    let mnt = s.path.trim();
+    mount_from_spec(
+        &s.protocol,
+        &s.server,
+        &s.share,
+        &s.target_dir,
+        &s.username,
+        &s.password,
+        &s.options,
+    )
+}
+
+fn mount_from_spec(
+    protocol: &str,
+    server: &str,
+    share: &str,
+    target_dir: &str,
+    username: &str,
+    password: &str,
+    options: &str,
+) -> Result<String, AppError> {
+    let mnt = target_dir.trim();
     if mnt.is_empty() {
-        return Err(AppError::bad("请填写本地挂载点"));
+        return Err(AppError::bad("请填写目标目录（挂载点）"));
     }
     std::fs::create_dir_all(mnt).map_err(|e| AppError::internal(format!("创建挂载点失败：{e}")))?;
     if is_mounted(mnt) {
         return Ok(format!("已挂载（无需重复挂载）：{mnt}"));
     }
 
-    let (fstype, src, opts) = build_mount_spec(s)?;
+    let (fstype, src, opts) = build_mount_spec_parts(protocol, server, share, username, password, options)?;
     let mut cmd = Command::new("mount");
     cmd.arg("-t").arg(&fstype);
     if !opts.is_empty() {
@@ -563,9 +839,13 @@ fn mount_external(s: &Storage) -> Result<String, AppError> {
 }
 
 fn unmount_external(s: &Storage) -> Result<String, AppError> {
-    let mnt = s.path.trim();
+    unmount_dir(&s.target_dir)
+}
+
+fn unmount_dir(target_dir: &str) -> Result<String, AppError> {
+    let mnt = target_dir.trim();
     if mnt.is_empty() {
-        return Err(AppError::bad("挂载点为空"));
+        return Err(AppError::bad("目标目录（挂载点）为空"));
     }
     let mounted = is_mounted(mnt);
     if mounted {
@@ -596,32 +876,46 @@ fn unmount_external(s: &Storage) -> Result<String, AppError> {
     Ok(note)
 }
 
-fn build_mount_spec(s: &Storage) -> Result<(String, String, String), AppError> {
-    match s.protocol.as_str() {
+fn build_mount_spec_parts(
+    protocol: &str,
+    server: &str,
+    share: &str,
+    username: &str,
+    password: &str,
+    options: &str,
+) -> Result<(String, String, String), AppError> {
+    match protocol.trim() {
         "nfs" => {
-            let server = s.server.trim();
-            let share = s.share.trim();
+            let server = server.trim();
+            let share = share.trim();
             if server.is_empty() || share.is_empty() {
                 return Err(AppError::bad("请填写 NFS 服务器与共享路径"));
             }
             let src = format!("{}:{}", server, share.trim_start_matches(':'));
-            Ok(("nfs".to_string(), src, s.options.trim().to_string()))
+            Ok(("nfs".to_string(), src, options.trim().to_string()))
         }
         _ => {
-            let server = s.server.trim().trim_matches('/');
-            let share = s.share.trim().trim_matches('/');
+            let server = server.trim().trim_matches('/');
+            let share = share.trim().trim_matches('/');
             if server.is_empty() || share.is_empty() {
                 return Err(AppError::bad("请填写 CIFS 服务器与共享名称"));
             }
             let src = format!("//{server}/{share}");
-            let mut opts = s.options.trim().to_string();
-            if !s.username.is_empty() {
+            let mut opts = options.trim().to_string();
+            if username.is_empty() {
+                // 未设置用户名/密码时按匿名 guest 挂载（自动带入 guest 选项）。
                 if !opts.is_empty() {
                     opts.push(',');
                 }
-                opts.push_str(&format!("username={}", s.username));
-                if !s.password.is_empty() {
-                    opts.push_str(&format!(",password={}", s.password));
+                opts.push_str("guest");
+            } else {
+                // 设置了用户名/密码时自动带入挂载凭据。
+                if !opts.is_empty() {
+                    opts.push(',');
+                }
+                opts.push_str(&format!("username={}", username));
+                if !password.is_empty() {
+                    opts.push_str(&format!(",password={}", password));
                 }
             }
             Ok(("cifs".to_string(), src, opts))
@@ -706,10 +1000,24 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     let conf_dir = FsPath::new("/etc/samba");
     std::fs::create_dir_all(conf_dir)
         .map_err(|e| AppError::internal(format!("创建 {} 失败：{e}", conf_dir.display())))?;
+
+    // 认证：填写用户名/密码时使用用户认证；否则允许匿名 guest 访问（适合集群内网）。
+    let auth_note = if s.username.is_empty() {
+        "匿名 guest 访问".to_string()
+    } else {
+        ensure_samba_user(&s.username, &s.password)?;
+        format!("用户认证（{}）", s.username)
+    };
+
     let conf_file = conf_dir.join(format!("cangling-{}.conf", s.id));
     let mut snippet = format!(
         "[{share_name}]\n   path = {dir}\n   browseable = yes\n   read only = no\n"
     );
+    if s.username.is_empty() {
+        snippet.push_str("   guest ok = yes\n");
+    } else {
+        snippet.push_str(&format!("   valid users = {}\n   guest ok = no\n", s.username));
+    }
     for line in s.options.lines() {
         let l = line.trim();
         if !l.is_empty() {
@@ -726,7 +1034,7 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
 
     let note = restart_smbd()?;
     Ok(format!(
-        "共享 [{share_name}] 已配置（目录 {dir}）并重启 smbd：{note}"
+        "共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并重启 smbd：{note}"
     ))
 }
 
@@ -804,6 +1112,55 @@ fn which(name: &str) -> Option<PathBuf> {
     None
 }
 
+fn ensure_samba_user(username: &str, password: &str) -> Result<(), AppError> {
+    let exists = samba_user_exists(username);
+    let mut cmd = Command::new("smbpasswd");
+    cmd.arg("-s");
+    if !exists {
+        cmd.arg("-a");
+    }
+    cmd.arg(username)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AppError::internal(format!("执行 smbpasswd 失败：{e}")))?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| AppError::internal("无法写入 smbpasswd 输入"))?;
+        writeln!(stdin, "{password}")
+            .map_err(|e| AppError::internal(format!("写入 smbpasswd 失败：{e}")))?;
+        writeln!(stdin, "{password}")
+            .map_err(|e| AppError::internal(format!("写入 smbpasswd 失败：{e}")))?;
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| AppError::internal(format!("等待 smbpasswd 失败：{e}")))?;
+    if !out.status.success() {
+        let msg = cmd_message(&out);
+        return Err(AppError::internal(format!(
+            "设置 samba 用户 {username} 失败：{msg}"
+        )));
+    }
+    Ok(())
+}
+
+fn samba_user_exists(username: &str) -> bool {
+    Command::new("pdbedit")
+        .arg("-L")
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.split(':').next() == Some(username))
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,36 +1176,23 @@ mod tests {
 
     #[test]
     fn mount_spec_builds_cifs_and_nfs() {
-        let s = Storage {
-            id: "1".into(),
-            name: "c".into(),
-            kind: KIND_EXTERNAL.into(),
-            protocol: "cifs".into(),
-            host_id: String::new(),
-            host_name: "本机".into(),
-            server: "10.0.0.2".into(),
-            share: "backup".into(),
-            path: "/mnt/b".into(),
-            username: "u".into(),
-            password: "p".into(),
-            options: "iocharset=utf8".into(),
-            status: String::new(),
-            message: String::new(),
-            created_at: String::new(),
-            updated_at: String::new(),
-        };
-        let (fstype, src, opts) = build_mount_spec(&s).unwrap();
+        let (fstype, src, opts) =
+            build_mount_spec_parts("cifs", "10.0.0.2", "backup", "u", "p", "iocharset=utf8")
+                .unwrap();
         assert_eq!(fstype, "cifs");
         assert_eq!(src, "//10.0.0.2/backup");
         assert!(opts.contains("username=u"));
         assert!(opts.contains("password=p"));
         assert!(opts.contains("iocharset=utf8"));
 
-        let mut n = s;
-        n.protocol = "nfs".into();
-        n.share = "/data".into();
-        let (fstype, src, _) = build_mount_spec(&n).unwrap();
+        let (fstype, src, _) =
+            build_mount_spec_parts("nfs", "10.0.0.2", "/data", "", "", "").unwrap();
         assert_eq!(fstype, "nfs");
         assert_eq!(src, "10.0.0.2:/data");
+
+        // 未设置用户名时自动带入 guest 选项。
+        let (_, _, guest_opts) =
+            build_mount_spec_parts("cifs", "10.0.0.2", "backup", "", "", "").unwrap();
+        assert!(guest_opts.contains("guest"));
     }
 }

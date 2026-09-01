@@ -152,7 +152,7 @@ pub fn router(state: AppState) -> Router {
                 .put(crate::storage::update_storage)
                 .delete(crate::storage::delete_storage),
         )
-        .route("/api/storages/{id}/mount", post(crate::storage::mount_storage))
+        .route("/api/storages/{id}/deploy", post(crate::storage::deploy_storage))
         .route("/api/storages/{id}/unmount", post(crate::storage::unmount_storage))
         .route(
             "/api/storages/{id}/start-share",

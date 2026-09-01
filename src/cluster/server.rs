@@ -139,6 +139,14 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
             post(crate::storage::cluster_start_share),
         )
         .route(
+            "/api/cluster/storage/mount",
+            post(crate::storage::cluster_mount),
+        )
+        .route(
+            "/api/cluster/storage/unmount",
+            post(crate::storage::cluster_unmount),
+        )
+        .route(
             "/api/cluster/self-update",
             get(crate::cluster::self_update::index),
         )
