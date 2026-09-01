@@ -277,6 +277,9 @@
     input[type=text]:focus, input[type=password]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
+    .dir-row { display: flex; gap: 8px; align-items: center; }
+    .dir-row input { flex: 1; min-width: 0; }
+    .dir-row .btn { flex: 0 0 auto; white-space: nowrap; }
     .title-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
     .title-row h2 {
       margin: 0 0 4px; font-size: 26px; font-weight: 650;
@@ -574,6 +577,7 @@
       display: flex; flex-direction: column; min-height: 0;
     }
     .modal.narrow { width: min(1200px, 100%); }
+    .modal.dir-modal { width: min(760px, 100%); height: min(600px, 100%); }
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
@@ -593,6 +597,37 @@
       background: var(--bg-3);
     }
     .modal-foot[hidden] { display: none !important; }
+    .dir-picker { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 14px; }
+    .dir-picker-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+    .dir-picker-bar input {
+      flex: 1; min-width: 0;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .dir-picker-bar .btn { flex: 0 0 auto; white-space: nowrap; }
+    .dir-picker-flash { margin-bottom: 10px; }
+    .dir-picker-list {
+      flex: 1; min-height: 0; overflow: auto;
+      border: 1px solid var(--line); background: var(--bg-input);
+    }
+    .dir-picker-loading, .dir-picker-empty { color: var(--muted); padding: 16px; }
+    .dir-entry {
+      display: flex; align-items: center; gap: 8px;
+      width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent; color: var(--text); padding: 8px 10px; cursor: pointer;
+    }
+    .dir-entry:hover { background: var(--bg-3); }
+    .dir-entry.active { background: var(--bg-active); }
+    .dir-ico { flex: 0 0 auto; display: inline-flex; color: var(--accent); }
+    .dir-name {
+      flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .dir-badge {
+      flex: 0 0 auto; font-size: 11px; font-weight: 600; color: var(--on-emphasis);
+      background: var(--success-emphasis); padding: 1px 6px; border-radius: 10px;
+    }
+    .dir-picker-tip { color: var(--muted); margin-top: 10px; font-size: 13px; line-height: 1.5; }
     .modal.compose-modal { width: min(1700px, 100%); }
     .compose-edit {
       flex: 1; min-height: 0; display: grid;
@@ -829,6 +864,8 @@
       },
     ];
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null };
+    const dirPicker = { path: "", selected: "", parent: null, token: 0 };
+    const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
     const composePoll = { timer: null, inflight: false };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
@@ -1857,7 +1894,12 @@
         <div class="card">
           <div class="field"><label>名称</label><input id="f-name" type="text" placeholder="边缘网关" /></div>
           <div class="field"><label>说明</label><textarea id="f-desc" placeholder="选填"></textarea></div>
-          <div class="field"><label>主机目录（绝对路径）</label><input id="f-dir" type="text" placeholder="/opt/apps/gateway" autocomplete="off" /></div>
+          <div class="field"><label>主机目录（绝对路径）</label>
+            <div class="dir-row">
+              <input id="f-dir" type="text" placeholder="/opt/apps/gateway" autocomplete="off" />
+              <button type="button" class="btn" id="btn-browse-dir">选择目录</button>
+            </div>
+          </div>
           <div class="hint" id="dir-hint">目录必须已存在于本机，并且包含 Compose 文件。</div>
           <p class="hint">创建时会全量备份该目录（含数据库数据）。正在运行的应用可能锁住文件，导致备份失败或不完整。</p>
           <label class="check"><input type="checkbox" id="f-stop" checked /> 备份前先执行 Compose Down（推荐）。备份结束后会再启动。</label>
@@ -1874,6 +1916,7 @@
         <div id="orphan-box"></div>`;
       $("#btn-check").onclick = checkDir;
       $("#btn-create").onclick = createProject;
+      $("#btn-browse-dir").onclick = openDirPicker;
       $("#f-dir").addEventListener("blur", checkDir);
       $("#f-dir").addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -1907,6 +1950,110 @@
       } catch (e) {
         if ($("#f-dir") && $("#f-dir").value.trim() !== directory) return;
         hint.innerHTML = `<span class="bad">${esc(e.message)}</span>`;
+      }
+    }
+
+    function openDirPicker() {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("dir-modal");
+      $("#dialog-title").textContent = "选择目录";
+      setDialogAction("选择此目录", () => {
+        const dir = dirPicker.selected || dirPicker.path;
+        if (!dir) return;
+        const input = $("#f-dir");
+        if (input) input.value = dir;
+        closeDialog();
+        checkDir();
+      });
+      $("#dialog-body").innerHTML = `
+        <div class="dir-picker">
+          <div class="dir-picker-bar">
+            <input id="dir-picker-path" type="text" placeholder="/" autocomplete="off" spellcheck="false" />
+            <button type="button" class="btn" id="dir-picker-go">跳转</button>
+            <button type="button" class="btn" id="dir-picker-up">上级</button>
+          </div>
+          <div class="dir-picker-flash flash err" id="dir-picker-flash" hidden></div>
+          <div class="dir-picker-list" id="dir-picker-list"></div>
+          <div class="dir-picker-tip">单击选中目录，双击进入；「选择此目录」使用当前目录或已选中的子目录。</div>
+        </div>`;
+      $("#dialog").hidden = false;
+
+      const bar = $("#dir-picker-path");
+      $("#dir-picker-go").onclick = () => renderDirPicker((bar && bar.value.trim()) || "/");
+      $("#dir-picker-up").onclick = () => {
+        if (dirPicker.parent) renderDirPicker(dirPicker.parent);
+      };
+      if (bar) {
+        bar.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            renderDirPicker(bar.value.trim() || "/");
+          }
+        });
+      }
+
+      const initial = ($("#f-dir") && $("#f-dir").value.trim()) || "/";
+      renderDirPicker(initial);
+    }
+
+    async function renderDirPicker(path) {
+      const list = $("#dir-picker-list");
+      if (!list) return;
+      const bar = $("#dir-picker-path");
+      const flash = $("#dir-picker-flash");
+      const up = $("#dir-picker-up");
+      const token = ++dirPicker.token;
+      if (bar) bar.value = path;
+      list.innerHTML = '<div class="dir-picker-loading">加载中…</div>';
+      if (flash) { flash.hidden = true; flash.textContent = ""; }
+      try {
+        const data = await api("/api/browse-directory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: path || "" }),
+        });
+        if (token !== dirPicker.token) return;
+        dirPicker.path = data.path;
+        dirPicker.parent = data.parent || null;
+        dirPicker.selected = "";
+        if (bar) bar.value = data.path;
+        if (up) up.disabled = !dirPicker.parent;
+        renderDirEntries(data.entries || []);
+      } catch (e) {
+        if (token !== dirPicker.token) return;
+        if (flash) {
+          flash.textContent = e.message;
+          flash.hidden = false;
+        }
+        list.innerHTML = "";
+      }
+    }
+
+    function renderDirEntries(entries) {
+      const list = $("#dir-picker-list");
+      if (!list) return;
+      list.innerHTML = "";
+      if (!entries.length) {
+        list.innerHTML = '<div class="dir-picker-empty">（无子目录）</div>';
+        return;
+      }
+      for (const ent of entries) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "dir-entry";
+        row.innerHTML =
+          '<span class="dir-ico">' + DIR_ICON + '</span>' +
+          '<span class="dir-name">' + esc(ent.name) + '</span>' +
+          (ent.has_compose ? '<span class="dir-badge">Compose</span>' : '');
+        row.addEventListener("click", () => {
+          dirPicker.selected = ent.path;
+          const active = list.querySelector(".dir-entry.active");
+          if (active) active.classList.remove("active");
+          row.classList.add("active");
+        });
+        row.addEventListener("dblclick", () => renderDirPicker(ent.path));
+        list.appendChild(row);
       }
     }
 
@@ -3658,6 +3805,7 @@
       if (modal) {
         modal.classList.remove("compose-modal");
         modal.classList.remove("narrow");
+        modal.classList.remove("dir-modal");
       }
       const box = $("#dialog");
       if (box) box.hidden = true;

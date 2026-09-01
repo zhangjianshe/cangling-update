@@ -52,6 +52,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/gitrepo/list", get(crate::gitrepo::list))
         .route("/api/gitrepo/file", get(crate::gitrepo::file))
         .route("/api/validate-directory", post(validate_directory))
+        .route("/api/browse-directory", post(browse_directory))
         .route("/api/orphans", get(list_orphans))
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
         .route("/api/projects", get(list_projects).post(create_project))
@@ -365,6 +366,48 @@ fn inspect_directory(raw: &str) -> Result<ValidateDirResult, AppError> {
         jar_mounts,
         warning,
     })
+}
+
+async fn browse_directory(
+    Json(body): Json<BrowseDirBody>,
+) -> Result<Json<BrowseDirResult>, AppError> {
+    let dir = if body.path.trim().is_empty() {
+        PathBuf::from("/")
+    } else {
+        require_absolute_dir(&body.path).map_err(|e| AppError::bad(e.to_string()))?
+    };
+    let dir = dir.canonicalize().unwrap_or(dir);
+
+    let mut entries = Vec::new();
+    let rd = std::fs::read_dir(&dir)
+        .map_err(|e| AppError::internal(format!("无法读取目录 {}：{e}", dir.display())))?;
+    for ent in rd.flatten() {
+        let path = ent.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = ent.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        entries.push(BrowseDirEntry {
+            has_compose: find_compose_file(&path).is_some(),
+            name,
+            path: path.display().to_string(),
+        });
+    }
+    entries.sort_by(|a, b| {
+        b.has_compose
+            .cmp(&a.has_compose)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    let parent = dir.parent().map(|p| p.display().to_string());
+    Ok(Json(BrowseDirResult {
+        path: dir.display().to_string(),
+        parent,
+        entries,
+    }))
 }
 
 async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project>>, AppError> {

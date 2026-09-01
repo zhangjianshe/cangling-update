@@ -93,6 +93,26 @@ pub struct ValidateDirResult {
     pub warning: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct BrowseDirBody {
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BrowseDirEntry {
+    pub name: String,
+    pub path: String,
+    pub has_compose: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BrowseDirResult {
+    pub path: String,
+    pub parent: Option<String>,
+    pub entries: Vec<BrowseDirEntry>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Meta {
     pub name: &'static str,
