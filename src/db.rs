@@ -119,6 +119,24 @@ CREATE TABLE IF NOT EXISTS cluster_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS storages (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'external',
+    protocol TEXT NOT NULL DEFAULT 'cifs',
+    host_id TEXT NOT NULL DEFAULT '',
+    host_name TEXT NOT NULL DEFAULT '',
+    server TEXT NOT NULL DEFAULT '',
+    share TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
+    options TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'defined',
+    message TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 "#,
     )?;
     let _ = conn.execute(

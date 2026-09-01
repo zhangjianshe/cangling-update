@@ -193,9 +193,11 @@
       width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
     }
     .app[data-section="cluster"] .shell,
-    .app[data-section="repo"] .shell { grid-template-columns: 1fr; }
+    .app[data-section="repo"] .shell,
+    .app[data-section="storage"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
-    .app[data-section="repo"] aside { display: none; }
+    .app[data-section="repo"] aside,
+    .app[data-section="storage"] aside { display: none; }
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
       color: var(--text); padding: 6px 8px; margin-bottom: 2px; border-radius: 6px;
@@ -580,6 +582,8 @@
     }
     .modal.narrow { width: min(1200px, 100%); }
     .modal.dir-modal { width: min(760px, 100%); height: min(600px, 100%); }
+    .modal.form-modal { width: min(600px, 100%); height: auto; max-height: calc(100vh - 96px); }
+    .modal.form-modal .modal-body { overflow: auto; }
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
@@ -630,6 +634,33 @@
       background: var(--success-emphasis); padding: 1px 6px; border-radius: 10px;
     }
     .dir-picker-tip { color: var(--muted); margin-top: 10px; font-size: 13px; line-height: 1.5; }
+    .storage-form { padding: 20px; }
+    .storage-form .field { margin-bottom: 16px; }
+    .storage-form label {
+      display: block; margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text);
+    }
+    .storage-form input[type=text],
+    .storage-form input[type=password],
+    .storage-form select,
+    .storage-form textarea {
+      width: 100%; background: var(--bg-input); color: var(--text);
+      border: 1px solid var(--line); padding: 8px 10px; border-radius: 6px; font-size: 14px;
+    }
+    .storage-form select { height: 38px; min-width: 0; }
+    .storage-form textarea { min-height: 64px; resize: vertical; }
+    .storage-form input:focus, .storage-form select:focus, .storage-form textarea:focus {
+      border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); outline: none;
+    }
+    .storage-form .hint { margin: 5px 0 0; font-size: 12px; color: var(--muted); line-height: 1.4; }
+    .storage-form .form-section { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+    .storage-form .form-section:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+    .storage-form .form-section-title {
+      margin: 0 0 14px; font-size: 12px; font-weight: 600;
+      color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .storage-form .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin-bottom: 16px; }
+    .storage-form .form-grid .field { margin-bottom: 0; }
+    .storage-form .form-grid:last-child { margin-bottom: 0; }
     .modal.compose-modal { width: min(1700px, 100%); }
     .compose-edit {
       flex: 1; min-height: 0; display: grid;
@@ -786,6 +817,7 @@
         <button type="button" class="btn" id="btn-projects" title="项目">项目</button>
         <button type="button" class="btn" id="btn-cluster" title="集群管理">集群</button>
         <button type="button" class="btn" id="btn-repo" title="软件仓库">软件仓库</button>
+        <button type="button" class="btn" id="btn-storage" title="存储">存储</button>
       </nav>
       </div>
       <div class="header-right">
@@ -841,7 +873,7 @@
     <div id="combo-list" role="listbox"></div>
   </div>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1228,6 +1260,7 @@
     function sectionFromHash(hash) {
       if (hash === "#/cluster") return "cluster";
       if (hash === "#/repo") return "repo";
+      if (hash === "#/storage") return "storage";
       return "projects";
     }
 
@@ -1236,7 +1269,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), repo: $("#btn-repo") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), repo: $("#btn-repo"), storage: $("#btn-storage") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -1259,6 +1292,7 @@
       if (hash === "#/new") return renderNew();
       if (hash === "#/cluster") return renderCluster();
       if (hash === "#/repo") return renderRepo();
+      if (hash === "#/storage") return renderStorage();
       const m = hash.match(/^#\/p\/([^/]+)$/);
       if (m) return openProject(m[1]);
       renderHome();
@@ -1858,6 +1892,238 @@
         out.innerHTML = `<pre class="task-log">安装失败：${esc(e.message)}</pre>`;
       } finally {
         document.querySelectorAll("#repo-tab-body [data-install], #repo-tab-body [data-download]").forEach(b => { b.disabled = false; });
+      }
+    }
+
+    function renderStorage() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      loadStorage();
+    }
+
+    async function loadStorage() {
+      try {
+        const [list, nodes] = await Promise.all([
+          api("/api/storages"),
+          api("/api/cluster/nodes").catch(() => []),
+        ]);
+        state.storages = list || [];
+        state.clusterNodes = nodes || [];
+        renderStorageLayout();
+      } catch (e) {
+        $("#main").innerHTML = `<div class="card"><h3>存储</h3><p class="hint">${esc(e.message)}</p></div>`;
+      }
+    }
+
+    function renderStorageLayout() {
+      const rows = (state.storages || []).map(storageRow).join("");
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>存储</h2><div class="path">定义外部存储（CIFS/NFS）或主机 CIFS 共享，并挂载 / 启动共享</div></div>
+        </div>
+        <div id="flash" hidden></div>
+        <div class="card">
+          <div class="row" style="margin-bottom:12px">
+            <button class="btn primary" id="btn-add-storage">＋ 添加存储</button>
+          </div>
+          <table>
+            <thead><tr><th>名称</th><th>类型</th><th>协议</th><th>主机</th><th>服务器 / 共享</th><th>路径</th><th>状态</th><th>说明</th><th>操作</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="9" class="empty">暂无存储</td></tr>`}</tbody>
+          </table>
+        </div>`;
+      const add = $("#btn-add-storage");
+      if (add) add.onclick = () => openStorageForm();
+      const tbody = $("#main table tbody");
+      if (tbody) {
+        tbody.addEventListener("click", (e) => {
+          const btn = e.target.closest("button[data-action]");
+          if (!btn) return;
+          handleStorageAction(btn.dataset.action, btn.dataset.id);
+        });
+      }
+    }
+
+    function storageRow(s) {
+      const kind = s.kind === "host_share" ? "主机 CIFS 共享" : "外部存储";
+      const protocol = s.kind === "host_share" ? "CIFS" : ((s.protocol || "—").toUpperCase());
+      const serverShare = s.kind === "host_share"
+        ? esc(s.share)
+        : `${esc(s.server || "—")} / ${esc(s.share || "—")}`;
+      return `<tr>
+        <td>${esc(s.name)}</td>
+        <td>${kind}</td>
+        <td>${protocol}</td>
+        <td>${esc(s.host_name || "—")}</td>
+        <td>${serverShare}</td>
+        <td class="path">${esc(s.path || "—")}</td>
+        <td>${storageStatusBadge(s)}</td>
+        <td class="hint">${esc(s.message || "—")}</td>
+        <td><div class="row" style="justify-content:flex-end">${storageActions(s)}</div></td>
+      </tr>`;
+    }
+
+    function storageStatusBadge(s) {
+      const map = { defined: ["已定义", ""], mounted: ["已挂载", "ok"], shared: ["共享已启动", "ok"], error: ["错误", "bad"] };
+      const [label, cls] = map[s.status] || [s.status, ""];
+      return `<span class="${cls}">${esc(label)}</span>`;
+    }
+
+    function storageActions(s) {
+      let btns = "";
+      if (s.kind === "external") {
+        btns += `<button type="button" class="btn" data-action="mount" data-id="${esc(s.id)}">挂载</button>`;
+        btns += `<button type="button" class="btn" data-action="unmount" data-id="${esc(s.id)}">卸载</button>`;
+      } else {
+        btns += `<button type="button" class="btn" data-action="start-share" data-id="${esc(s.id)}">启动共享</button>`;
+      }
+      btns += `<button type="button" class="btn" data-action="edit" data-id="${esc(s.id)}">编辑</button>`;
+      btns += `<button type="button" class="btn danger" data-action="delete" data-id="${esc(s.id)}">删除</button>`;
+      return btns;
+    }
+
+    async function handleStorageAction(action, id) {
+      if (action === "edit") { openStorageForm(id); return; }
+      if (action === "delete") {
+        const ok = await confirmDialog("确定删除该存储定义？");
+        if (!ok) return;
+        try {
+          await api("/api/storages/" + id, { method: "DELETE" });
+          await loadStorage();
+          flash("ok", "已删除");
+        } catch (e) { flash("err", e.message); }
+        return;
+      }
+      const label = { mount: "挂载", unmount: "卸载", "start-share": "启动共享" }[action];
+      const ok = await confirmDialog(`确定${label}该存储？`);
+      if (!ok) return;
+      try {
+        const r = await api(`/api/storages/${id}/${action}`, { method: "POST" });
+        await loadStorage();
+        if (r && r.status === "error") flash("err", r.message || `${label}失败`);
+        else flash("ok", (r && r.message) || `已${label}`);
+      } catch (e) { flash("err", e.message); }
+    }
+
+    function openStorageForm(id) {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("form-modal");
+      const existing = id ? (state.storages.find(s => s.id === id) || null) : null;
+      $("#dialog-title").textContent = existing ? "编辑存储" : "添加存储";
+      setDialogAction(existing ? "保存" : "创建", () => saveStorage(id));
+      $("#dialog-body").innerHTML = storageFormHtml(existing);
+      $("#dialog").hidden = false;
+
+      const kindSel = $("#st-kind");
+      if (kindSel) kindSel.onchange = toggleStorageFields;
+      const protoSel = $("#st-protocol");
+      if (protoSel) protoSel.onchange = toggleStorageFields;
+      toggleStorageFields();
+      const first = $("#st-name");
+      if (first) first.focus();
+    }
+
+    function storageFormHtml(s) {
+      const v = (k) => esc((s && s[k]) || "");
+      const kind = s ? s.kind : "external";
+      const protocol = s ? (s.protocol || "cifs") : "cifs";
+      const nodes = state.clusterNodes || [];
+      const hostOpts = `<option value="">本机</option>` + nodes.map(n =>
+        `<option value="${esc(n.id)}" ${s && s.host_id === n.id ? "selected" : ""}>${esc(n.name || n.addr)}</option>`).join("");
+      return `
+      <div class="storage-form">
+        <div id="storage-form-flash" hidden></div>
+        <div class="form-section">
+          <div class="form-section-title">基本信息</div>
+          <div class="form-grid">
+            <div class="field"><label>名称</label><input id="st-name" type="text" value="${v('name')}" placeholder="如：数据备份" /><p class="hint">用于识别该存储，需保持唯一。</p></div>
+            <div class="field"><label>类型</label>
+              <select id="st-kind">
+                <option value="external" ${kind === "external" ? "selected" : ""}>外部存储（CIFS/NFS）</option>
+                <option value="host_share" ${kind === "host_share" ? "selected" : ""}>主机 CIFS 共享</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="form-section" id="st-external">
+          <div class="form-section-title">连接信息</div>
+          <div class="field"><label>协议</label>
+            <select id="st-protocol">
+              <option value="cifs" ${protocol === "cifs" ? "selected" : ""}>CIFS/SMB</option>
+              <option value="nfs" ${protocol === "nfs" ? "selected" : ""}>NFS</option>
+            </select>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label>服务器地址</label><input id="st-server" type="text" value="${v('server')}" placeholder="192.168.1.10" /></div>
+            <div class="field"><label>共享路径</label><input id="st-share" type="text" value="${v('share')}" placeholder="/share" /></div>
+          </div>
+          <div class="field"><label>本地挂载点</label><input id="st-path" type="text" value="${v('path')}" placeholder="/mnt/storage" /><p class="hint">本机绝对路径，挂载前会自动创建。</p></div>
+          <div class="form-grid">
+            <div class="field" id="st-cifs-creds"><label>用户名（选填）</label><input id="st-username" type="text" value="${v('username')}" /></div>
+            <div class="field" id="st-cifs-pass"><label>密码（选填）</label><input id="st-password" type="password" placeholder="${s && s.password ? '已设置，留空则不修改' : ''}" /></div>
+          </div>
+        </div>
+        <div class="form-section" id="st-host-share" hidden>
+          <div class="form-section-title">共享信息</div>
+          <div class="field"><label>所在主机</label><select id="st-host-id">${hostOpts}</select></div>
+          <div class="field"><label>共享名称</label><input id="st-share-h" type="text" value="${v('share')}" placeholder="data" /><p class="hint">客户端通过该名称访问共享。</p></div>
+          <div class="field"><label>共享目录</label><input id="st-path-h" type="text" value="${v('path')}" placeholder="/data/share" /><p class="hint">主机上的绝对路径，将作为 samba 共享暴露。</p></div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title">高级选项</div>
+          <div class="field"><label>额外选项（选填）</label><textarea id="st-options" placeholder="例如 iocharset=utf8 或 samba 配置行">${v('options')}</textarea><p class="hint">CIFS/NFS 挂载选项，或 samba 共享配置行（每行一条）。</p></div>
+        </div>
+      </div>`;
+    }
+
+    function toggleStorageFields() {
+      const kindEl = $("#st-kind");
+      const kind = kindEl ? kindEl.value : "external";
+      const ext = $("#st-external");
+      const host = $("#st-host-share");
+      if (ext) ext.hidden = kind !== "external";
+      if (host) host.hidden = kind !== "host_share";
+      const protoEl = $("#st-protocol");
+      const proto = protoEl ? protoEl.value : "cifs";
+      const creds = $("#st-cifs-creds");
+      const pass = $("#st-cifs-pass");
+      if (creds) creds.hidden = proto === "nfs";
+      if (pass) pass.hidden = proto === "nfs";
+    }
+
+    async function saveStorage(id) {
+      const box = $("#storage-form-flash");
+      const show = (kind, msg) => { if (box) { box.className = "flash " + kind; box.textContent = msg; box.hidden = false; } };
+      const name = $("#st-name").value.trim();
+      const kind = $("#st-kind").value;
+      const body = { name, kind };
+      if (kind === "external") {
+        body.protocol = $("#st-protocol").value;
+        body.server = $("#st-server").value.trim();
+        body.share = $("#st-share").value.trim();
+        body.path = $("#st-path").value.trim();
+        body.username = $("#st-username").value.trim();
+        body.password = $("#st-password").value;
+      } else {
+        body.protocol = "cifs";
+        body.host_id = $("#st-host-id").value;
+        body.share = $("#st-share-h").value.trim();
+        body.path = $("#st-path-h").value.trim();
+      }
+      body.options = $("#st-options").value.trim();
+      try {
+        const url = id ? "/api/storages/" + id : "/api/storages";
+        await api(url, {
+          method: id ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        closeDialog();
+        await loadStorage();
+        flash("ok", id ? "已保存" : "已创建");
+      } catch (e) {
+        show("err", e.message);
       }
     }
 
@@ -3807,6 +4073,7 @@
         modal.classList.remove("compose-modal");
         modal.classList.remove("narrow");
         modal.classList.remove("dir-modal");
+        modal.classList.remove("form-modal");
       }
       const box = $("#dialog");
       if (box) box.hidden = true;
@@ -4353,6 +4620,7 @@
     $("#btn-projects").onclick = () => goHash("#/");
     $("#btn-cluster").onclick = () => goHash("#/cluster");
     $("#btn-repo").onclick = () => goHash("#/repo");
+    $("#btn-storage").onclick = () => goHash("#/storage");
     $("#btn-meta").onclick = (e) => {
       e.stopPropagation();
       const panel = $("#meta-panel");

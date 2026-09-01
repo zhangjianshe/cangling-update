@@ -17,6 +17,7 @@ mod progress;
 mod repo;
 mod service;
 mod state;
+mod storage;
 mod term;
 mod update;
 

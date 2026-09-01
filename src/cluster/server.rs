@@ -135,6 +135,10 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
         )
         .route("/api/cluster/auth/sync", post(auth_sync))
         .route(
+            "/api/cluster/storage/start-share",
+            post(crate::storage::cluster_start_share),
+        )
+        .route(
             "/api/cluster/self-update",
             get(crate::cluster::self_update::index),
         )

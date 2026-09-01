@@ -142,6 +142,22 @@ pub fn router(state: AppState) -> Router {
             "/api/cluster/init/status",
             get(crate::cluster::init::status),
         )
+        .route(
+            "/api/storages",
+            get(crate::storage::list_storages).post(crate::storage::create_storage),
+        )
+        .route(
+            "/api/storages/{id}",
+            get(crate::storage::get_storage)
+                .put(crate::storage::update_storage)
+                .delete(crate::storage::delete_storage),
+        )
+        .route("/api/storages/{id}/mount", post(crate::storage::mount_storage))
+        .route("/api/storages/{id}/unmount", post(crate::storage::unmount_storage))
+        .route(
+            "/api/storages/{id}/start-share",
+            post(crate::storage::start_share),
+        )
         .merge(crate::cluster::server::m2m_routes(state.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
