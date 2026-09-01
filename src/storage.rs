@@ -692,7 +692,8 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
         return Err(AppError::bad("请填写要共享的目录"));
     }
     if !FsPath::new(dir).is_dir() {
-        return Err(AppError::bad(format!("目录不存在：{dir}")));
+        std::fs::create_dir_all(dir)
+            .map_err(|e| AppError::internal(format!("创建共享目录失败 {dir}：{e}")))?;
     }
     let share_name = sanitize_share_name(&s.share)?;
 
