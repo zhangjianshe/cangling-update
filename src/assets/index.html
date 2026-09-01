@@ -187,21 +187,23 @@
       border-right: 1px solid var(--line); background: var(--bg-2);
       display: flex; flex-direction: column; min-height: 0;
     }
-    .aside-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 10px; }
-    .aside-head h2 { margin: 0; color: var(--muted); font-size: 16px; font-weight: 600; }
-    .plist { overflow: auto; padding: 6px 10px 18px; flex: 1; min-height: 0; }
+    .plist { overflow: auto; padding: 12px 8px 16px; flex: 1; min-height: 0; }
+    .aside-foot { flex: 0 0 auto; padding: 12px; border-top: 1px solid var(--line); }
+    .aside-foot .btn {
+      width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
     .app[data-section="cluster"] .shell,
     .app[data-section="repo"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
     .app[data-section="repo"] aside { display: none; }
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
-      color: var(--text); padding: 10px 12px; margin-bottom: 6px;
+      color: var(--text); padding: 6px 8px; margin-bottom: 2px; border-radius: 6px;
     }
     .pitem:hover { background: var(--bg-3); }
-    .pitem.active { background: var(--bg-active); border-color: var(--accent-emphasis); }
-    .pitem .n { font-weight: 600; display: block; }
-    .pitem .d { color: var(--muted); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pitem.active { background: var(--bg-active); }
+    .pitem .n { font-weight: 600; display: block; font-size: 14px; line-height: 1.4; }
+    .pitem .d { color: var(--muted); margin-top: 1px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .top-nav .btn { display: inline-flex; align-items: center; gap: 6px; }
     .cluster-table { width: 100%; border-collapse: collapse; }
     .cluster-table th, .cluster-table td {
@@ -802,11 +804,10 @@
     </header>
     <div class="shell">
       <aside>
-        <div class="aside-head">
-          <h2>项目</h2>
-          <button class="btn primary" id="btn-new">新建</button>
-        </div>
         <div class="plist" id="plist"><div class="empty">暂无项目</div></div>
+        <div class="aside-foot">
+          <button type="button" class="btn primary" id="btn-add-project">＋ 添加项目</button>
+        </div>
       </aside>
       <main id="main"></main>
     </div>
@@ -1153,17 +1154,17 @@
 
     function renderList() {
       const root = $("#plist");
+      root.innerHTML = "";
       if (!state.projects.length) {
         root.innerHTML = `<div class="empty">暂无项目</div>`;
-        return;
-      }
-      root.innerHTML = "";
-      for (const p of state.projects) {
-        const b = document.createElement("button");
-        b.className = "pitem" + (state.current && state.current.id === p.id ? " active" : "");
-        b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="d">${esc((p.description || "").trim() || "（无说明）")}</span>`;
-        b.onclick = () => { location.hash = "#/p/" + p.id; };
-        root.appendChild(b);
+      } else {
+        for (const p of state.projects) {
+          const b = document.createElement("button");
+          b.className = "pitem" + (state.current && state.current.id === p.id ? " active" : "");
+          b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="d">${esc((p.description || "").trim() || "（无说明）")}</span>`;
+          b.onclick = () => { location.hash = "#/p/" + p.id; };
+          root.appendChild(b);
+        }
       }
     }
 
@@ -4348,7 +4349,7 @@
     }
     $("#dialog-close").onclick = requestCloseDialog;
     $("#dialog-foot-close").onclick = requestCloseDialog;
-    $("#btn-new").onclick = () => goHash("#/new");
+    $("#btn-add-project").onclick = () => goHash("#/new");
     $("#btn-projects").onclick = () => goHash("#/");
     $("#btn-cluster").onclick = () => goHash("#/cluster");
     $("#btn-repo").onclick = () => goHash("#/repo");
