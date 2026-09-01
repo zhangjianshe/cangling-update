@@ -1119,9 +1119,9 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     let smb_conf = conf_dir.join("smb.conf");
     ensure_include(&smb_conf, &format!("include = {}", conf_file.display()))?;
 
-    let note = restart_smbd()?;
+    let note = reload_smbd()?;
     Ok(format!(
-        "共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并重启 smbd：{note}"
+        "共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并应用 smbd 配置：{note}"
     ))
 }
 
@@ -1154,24 +1154,69 @@ fn ensure_include(smb_conf: &FsPath, include_line: &str) -> Result<(), AppError>
         .map_err(|e| AppError::internal(format!("更新 {} 失败：{e}", smb_conf.display())))
 }
 
-fn restart_smbd() -> Result<String, AppError> {
-    for unit in ["smbd", "smb", "samba"] {
-        if let Ok(out) = Command::new("systemctl").args(["restart", unit]).output() {
-            if out.status.success() {
-                return Ok(format!("systemctl restart {unit}"));
+fn reload_smbd() -> Result<String, AppError> {
+    let units = ["smbd", "smb", "samba"];
+    if smbd_active() {
+        // 已运行：优先 reload，无中断地应用新配置，避免挂载时撞上重启窗口。
+        for unit in units {
+            if systemctl_ok(&["reload", unit]) {
+                return Ok(format!("systemctl reload {unit}"));
             }
+        }
+    }
+    // 未运行或 reload 不可用：启动/重启，并等待监听端口就绪。
+    for unit in units {
+        if systemctl_ok(&["restart", unit]) {
+            wait_smbd_listening(10);
+            return Ok(format!("systemctl restart {unit}"));
         }
     }
     for svc in ["smbd", "samba"] {
         if let Ok(out) = Command::new("service").args([svc, "restart"]).output() {
             if out.status.success() {
+                wait_smbd_listening(10);
                 return Ok(format!("service {svc} restart"));
             }
         }
     }
     Err(AppError::internal(
-        "无法重启 samba 服务（请确认已安装并启用 smbd）",
+        "无法启动/重载 samba 服务（请确认已安装并启用 smbd）",
     ))
+}
+
+fn systemctl_ok(args: &[&str]) -> bool {
+    Command::new("systemctl")
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn smbd_active() -> bool {
+    for unit in ["smbd", "smb", "samba"] {
+        if systemctl_ok(&["is-active", unit]) {
+            return true;
+        }
+    }
+    false
+}
+
+fn smbd_listening() -> bool {
+    Command::new("ss")
+        .args(["-lnt"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(":445")))
+        .unwrap_or(false)
+}
+
+fn wait_smbd_listening(secs: u64) {
+    let start = std::time::Instant::now();
+    while start.elapsed().as_secs() < secs {
+        if smbd_listening() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
 }
 
 fn find_smbd() -> Option<PathBuf> {
