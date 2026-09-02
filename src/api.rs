@@ -1,4 +1,5 @@
 use crate::auth;
+use crate::cluster::Role;
 use crate::backup::{
     dir_size, project_dir_size, remove_dir_if_exists, restore_directory,
     restore_directory_with_progress, snapshot_directory, snapshot_directory_with_progress,
@@ -22,9 +23,12 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
+use walkdir::WalkDir;
+
+const NP4_PROJECT_DIR: &str = "/opt/cangling-np4";
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -55,6 +59,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/browse-directory", post(browse_directory))
         .route("/api/orphans", get(list_orphans))
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
+        .route("/api/np4/deploy/status", get(np4_deploy_status))
+        .route("/api/np4/deploy", post(deploy_np4))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/{id}",
@@ -429,6 +435,231 @@ async fn browse_directory(
 async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project>>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     Ok(Json(db::list_projects(&conn)?))
+}
+
+fn np4_arch() -> Result<(&'static str, &'static [&'static str]), AppError> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok(("x86", &["x86", "amd64", "linux-x86", "linux-amd64"])),
+        "aarch64" => Ok(("arm", &["arm", "arm64", "aarch64", "linux-arm64", "kylin-arm"])),
+        arch => Err(AppError::bad(format!("NP4 部署暂不支持本机架构 {arch}"))),
+    }
+}
+
+fn np4_template_dir(exe_dir: &FsPath) -> Option<PathBuf> {
+    let repo = exe_dir.join("repo");
+    [repo.join("cangling-np4"), repo.join("np4").join("cangling-np4")]
+        .into_iter()
+        .find(|dir| {
+            dir.join("docker-compose-x86.yaml").is_file()
+                && dir.join("docker-compose-arm.yaml").is_file()
+        })
+}
+
+fn np4_image_archives(template: &FsPath, aliases: &[&str]) -> Vec<PathBuf> {
+    let base = template.join("base-images");
+    if !base.is_dir() {
+        return Vec::new();
+    }
+    let selected = aliases
+        .iter()
+        .map(|alias| base.join(alias))
+        .find(|dir| dir.is_dir());
+    let search_root = selected.as_deref().unwrap_or(&base);
+    let filter_flat = selected.is_none();
+    let mut archives: Vec<_> = WalkDir::new(search_root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            let name = entry.file_name().to_string_lossy();
+            if !is_image_archive_name(&name) {
+                return false;
+            }
+            !filter_flat
+                || aliases.iter().any(|alias| {
+                    entry
+                        .path()
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .contains(alias)
+                })
+        })
+        .map(|entry| entry.into_path())
+        .collect();
+    archives.sort();
+    archives
+}
+
+fn copy_np4_template(source: &FsPath, dest: &FsPath, arch: &str) -> anyhow::Result<()> {
+    if dest.exists() {
+        anyhow::bail!("目标目录 {} 已存在", dest.display());
+    }
+    let compose = source.join(format!("docker-compose-{arch}.yaml"));
+    if !compose.is_file() {
+        anyhow::bail!("未找到 {}", compose.display());
+    }
+
+    std::fs::create_dir_all(dest)?;
+    for entry in WalkDir::new(source).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        let rel = path.strip_prefix(source)?;
+        if rel.as_os_str().is_empty() {
+            continue;
+        }
+        let first = rel.components().next().and_then(|c| c.as_os_str().to_str());
+        if matches!(first, Some(".git") | Some("base-images") | Some("soft"))
+            || matches!(
+                rel.file_name().and_then(|name| name.to_str()),
+                Some("docker-compose-x86.yaml") | Some("docker-compose-arm.yaml")
+            )
+        {
+            continue;
+        }
+        let target = dest.join(rel);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(target)?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(path, target)?;
+        }
+    }
+    std::fs::copy(compose, dest.join("docker-compose.yaml"))?;
+    Ok(())
+}
+
+async fn np4_deploy_status(
+    State(state): State<AppState>,
+) -> Result<Json<Np4DeployStatus>, AppError> {
+    let project_dir = PathBuf::from(NP4_PROJECT_DIR);
+    let is_master = state.cluster.role == Role::Master;
+    let registered = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::list_projects(&conn)?
+            .iter()
+            .any(|project| project.directory == NP4_PROJECT_DIR)
+    };
+    let (arch, aliases) = match np4_arch() {
+        Ok(value) => value,
+        Err(err) => {
+            return Ok(Json(Np4DeployStatus {
+                is_master,
+                project_dir: NP4_PROJECT_DIR.into(),
+                exists: project_dir.exists(),
+                registered,
+                arch: None,
+                template_dir: None,
+                image_count: 0,
+                message: Some(err.to_string()),
+            }));
+        }
+    };
+    let template = np4_template_dir(&state.paths.exe_dir);
+    let archives = template
+        .as_deref()
+        .map(|dir| np4_image_archives(dir, aliases))
+        .unwrap_or_default();
+    let message = if !is_master {
+        Some("仅主节点提供 NP4 项目部署。".into())
+    } else if project_dir.exists() {
+        None
+    } else if template.is_none() {
+        Some("本地软件仓库未找到 cangling-np4 模板；请先通过维护中心同步。".into())
+    } else if archives.is_empty() {
+        Some(format!("模板中未找到 {arch} 架构的 base-images 镜像包。"))
+    } else {
+        None
+    };
+    Ok(Json(Np4DeployStatus {
+        is_master,
+        project_dir: NP4_PROJECT_DIR.into(),
+        exists: project_dir.exists(),
+        registered,
+        arch: Some(arch.into()),
+        template_dir: template.map(|dir| dir.display().to_string()),
+        image_count: archives.len(),
+        message,
+    }))
+}
+
+async fn deploy_np4(
+    State(state): State<AppState>,
+    Json(body): Json<DeployNp4Body>,
+) -> Result<Json<Project>, AppError> {
+    if state.cluster.role != Role::Master {
+        return Err(AppError::bad("仅主节点可以部署 NP4 项目"));
+    }
+    let (arch, aliases) = np4_arch()?;
+    let dest = PathBuf::from(NP4_PROJECT_DIR);
+    if dest.exists() {
+        return Err(AppError::Conflict(format!("{} 已存在，已取消部署", dest.display())));
+    }
+    let template = np4_template_dir(&state.paths.exe_dir).ok_or_else(|| {
+        AppError::bad("本地软件仓库未找到 cangling-np4 模板；请先通过维护中心同步")
+    })?;
+    let archives = np4_image_archives(&template, aliases);
+    if archives.is_empty() {
+        return Err(AppError::bad(format!("未找到 {arch} 架构的 base-images 镜像包")));
+    }
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "np4-template",
+        "正在复制 NP4 项目模板…",
+        0,
+        archives.len() as u64 + 1,
+    );
+    let source = template.clone();
+    let target = dest.clone();
+    let arch = arch.to_string();
+    if let Err(err) = tokio::task::spawn_blocking(move || copy_np4_template(&source, &target, &arch))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))
+        .and_then(|result| result.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
+
+    for (index, archive) in archives.iter().enumerate() {
+        job_set(
+            &state,
+            body.job_id.as_deref(),
+            "np4-images",
+            &format!("正在导入基础镜像：{}", archive.file_name().unwrap_or_default().to_string_lossy()),
+            index as u64 + 1,
+            archives.len() as u64 + 1,
+        );
+        if let Err(err) = state.docker.load_archive(archive).await {
+            let err = AppError::bad(format!("导入 {} 失败：{err}", archive.display()));
+            job_err(&state, body.job_id.as_deref(), &err.to_string());
+            return Err(err);
+        }
+    }
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "np4-project",
+        "正在登记 NP4 项目并建立基线快照…",
+        archives.len() as u64 + 1,
+        archives.len() as u64 + 1,
+    );
+    let project = create_project(
+        State(state.clone()),
+        Json(CreateProject {
+            name: "农业普查（NP4）".into(),
+            description: Some("由本地软件仓库 cangling-np4 部署".into()),
+            directory: NP4_PROJECT_DIR.into(),
+            job_id: body.job_id.clone(),
+            stop_compose: false,
+        }),
+    )
+    .await?;
+    job_ok(&state, body.job_id.as_deref(), "NP4 项目已部署并完成基线快照");
+    Ok(project)
 }
 
 async fn get_project(
@@ -2767,5 +2998,40 @@ mod tests {
         assert!(!valid_backup_id(".."));
         assert!(!valid_backup_id("a/b"));
         assert!(!valid_backup_id(""));
+    }
+
+    #[test]
+    fn np4_images_use_the_selected_architecture_directory() {
+        let root = temp_root();
+        let base = root.join("base-images");
+        fs::create_dir_all(base.join("x86")).unwrap();
+        fs::create_dir_all(base.join("arm")).unwrap();
+        fs::write(base.join("x86").join("x86-image.tar.gz"), b"x86").unwrap();
+        fs::write(base.join("arm").join("arm-image.tar.gz"), b"arm").unwrap();
+
+        let images = np4_image_archives(&root, &["x86", "amd64"]);
+        assert_eq!(images, vec![base.join("x86").join("x86-image.tar.gz")]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn np4_template_copies_only_the_selected_compose_file() {
+        let root = temp_root();
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir_all(source.join("config")).unwrap();
+        fs::create_dir_all(source.join("base-images").join("x86")).unwrap();
+        fs::write(source.join("docker-compose-x86.yaml"), b"x86 compose").unwrap();
+        fs::write(source.join("docker-compose-arm.yaml"), b"arm compose").unwrap();
+        fs::write(source.join("config").join("app.conf"), b"config").unwrap();
+        fs::write(source.join("base-images").join("x86").join("image.tar.gz"), b"image")
+            .unwrap();
+
+        copy_np4_template(&source, &target, "x86").unwrap();
+        assert_eq!(fs::read(target.join("docker-compose.yaml")).unwrap(), b"x86 compose");
+        assert_eq!(fs::read(target.join("config").join("app.conf")).unwrap(), b"config");
+        assert!(!target.join("docker-compose-arm.yaml").exists());
+        assert!(!target.join("base-images").exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -2202,8 +2202,69 @@
           </p>
           <button class="btn primary" onclick="location.hash='#/new'">新建项目</button>
         </div>
+        <div id="np4-deploy-box"></div>
         <div id="orphan-box"></div>`;
+      loadNp4DeployHint();
       loadOrphans("orphan-box");
+    }
+
+    async function loadNp4DeployHint() {
+      const box = $("#np4-deploy-box");
+      if (!box) return;
+      try {
+        const status = await api("/api/np4/deploy/status");
+        if (!status.is_master || status.exists) return;
+        const ready = !status.message && status.template_dir && status.image_count > 0;
+        box.innerHTML = `
+          <div class="card">
+            <h3>部署 NP4 项目</h3>
+            <p class="hint">检测到主机尚不存在 <code>${esc(status.project_dir)}</code>。${ready
+              ? `可从本地软件仓库 <code>cangling-np4</code> 复制 ${esc(status.arch)} 架构模板，并导入 ${status.image_count} 个 <code>base-images</code> 离线镜像包。`
+              : esc(status.message || "NP4 部署资源尚未就绪。")}</p>
+            <div class="progress-wrap" id="np4-prog" hidden>
+              <div class="progress-meta"><span id="np4-prog-msg">准备中</span><span id="np4-prog-pct">0%</span></div>
+              <div class="progress" id="np4-prog-bar"><span></span></div>
+              <div class="progress-sub" id="np4-prog-sub"></div>
+            </div>
+            <div class="row" style="margin-top:14px">
+              <button class="btn primary" id="btn-deploy-np4" ${ready ? "" : "disabled"}>部署 NP4 项目</button>
+            </div>
+            <div class="flash err" id="np4-deploy-err" hidden></div>
+          </div>`;
+        const button = $("#btn-deploy-np4");
+        if (button) button.onclick = deployNp4;
+      } catch (e) {
+        box.innerHTML = `<div class="flash err">检查 NP4 部署资源失败：${esc(e.message)}</div>`;
+      }
+    }
+
+    async function deployNp4() {
+      if (!(await confirmDialog(
+        "将把本地软件仓库中的 NP4 模板复制到 /opt/cangling-np4，按本机 CPU 架构导入 base-images 镜像，并建立项目基线快照。\n\n确定开始部署？"
+      ))) return;
+      const button = $("#btn-deploy-np4");
+      const error = $("#np4-deploy-err");
+      let stop = () => {};
+      try {
+        if (button) { button.disabled = true; button.textContent = "部署中…"; }
+        if (error) error.hidden = true;
+        const job = await api("/api/jobs", { method: "POST" });
+        showProgress("np4-prog", true);
+        renderProgress("np4-prog", { message: "正在准备部署…", percent: 0, current: 0, total: 0 });
+        stop = watchJob(job.id, "np4-prog");
+        const project = await api("/api/np4/deploy", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: job.id }),
+        });
+        await refreshProjects();
+        location.hash = "#/p/" + project.id;
+      } catch (e) {
+        if (error) { error.textContent = e.message; error.hidden = false; }
+      } finally {
+        stop();
+        if (button && !state.current) { button.disabled = false; button.textContent = "部署 NP4 项目"; }
+      }
     }
 
     function renderNew() {
@@ -2536,7 +2597,11 @@
       if (fill && !unknown) fill.style.width = (job.percent || 0) + "%";
       if (sub) {
         const msg = job.message || "";
-        if (/索引|提交 Git/.test(msg)) {
+        if (job.phase === "np4-images") {
+          sub.textContent = job.total
+            ? "第 " + job.current + " / " + Math.max(job.total - 1, 1) + " 个镜像"
+            : "";
+        } else if (/索引|提交 Git/.test(msg)) {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个文件") : "";
         } else {
           sub.textContent = job.total

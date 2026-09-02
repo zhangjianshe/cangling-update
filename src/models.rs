@@ -1,5 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Np4DeployStatus {
+    pub is_master: bool,
+    pub project_dir: String,
+    pub exists: bool,
+    pub registered: bool,
+    pub arch: Option<String>,
+    pub template_dir: Option<String>,
+    pub image_count: usize,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeployNp4Body {
+    pub job_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
