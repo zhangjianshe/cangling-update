@@ -447,7 +447,10 @@ fn np4_arch() -> Result<(&'static str, &'static [&'static str]), AppError> {
 
 fn np4_template_dir(exe_dir: &FsPath) -> Option<PathBuf> {
     let repo = exe_dir.join("repo");
-    [repo.join("cangling-np4"), repo.join("np4").join("cangling-np4")]
+    [
+        repo.join("cangling-np4"),
+        repo.join("np4").join("cangling-np4"),
+    ]
         .into_iter()
         .find(|dir| {
             dir.join("docker-compose-x86.yaml").is_file()
@@ -455,8 +458,28 @@ fn np4_template_dir(exe_dir: &FsPath) -> Option<PathBuf> {
         })
 }
 
-fn np4_image_archives(template: &FsPath, aliases: &[&str]) -> Vec<PathBuf> {
-    let base = template.join("base-images");
+/// NP4 images are published as their own software package, separate from the
+/// deployment-template package (`cangling-np4`).
+fn np4_image_package_dir(exe_dir: &FsPath) -> Option<PathBuf> {
+    let repo = exe_dir.join("repo");
+    [repo.join("np4"), repo.join("np4").join("base-images")]
+        .into_iter()
+        .find(|dir| {
+            let base = if dir.file_name().and_then(|name| name.to_str()) == Some("base-images") {
+                dir.to_path_buf()
+            } else {
+                dir.join("base-images")
+            };
+            base.is_dir()
+        })
+}
+
+fn np4_image_archives(image_package: &FsPath, aliases: &[&str]) -> Vec<PathBuf> {
+    let base = if image_package.file_name().and_then(|name| name.to_str()) == Some("base-images") {
+        image_package.to_path_buf()
+    } else {
+        image_package.join("base-images")
+    };
     if !base.is_dir() {
         return Vec::new();
     }
@@ -556,7 +579,8 @@ async fn np4_deploy_status(
         }
     };
     let template = np4_template_dir(&state.paths.exe_dir);
-    let archives = template
+    let image_package = np4_image_package_dir(&state.paths.exe_dir);
+    let archives = image_package
         .as_deref()
         .map(|dir| np4_image_archives(dir, aliases))
         .unwrap_or_default();
@@ -567,7 +591,7 @@ async fn np4_deploy_status(
     } else if template.is_none() {
         Some("本地软件仓库未找到 cangling-np4 模板；请先通过维护中心同步。".into())
     } else if archives.is_empty() {
-        Some(format!("模板中未找到 {arch} 架构的 base-images 镜像包。"))
+        Some(format!("NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包。"))
     } else {
         None
     };
@@ -598,9 +622,12 @@ async fn deploy_np4(
     let template = np4_template_dir(&state.paths.exe_dir).ok_or_else(|| {
         AppError::bad("本地软件仓库未找到 cangling-np4 模板；请先通过维护中心同步")
     })?;
-    let archives = np4_image_archives(&template, aliases);
+    let image_package = np4_image_package_dir(&state.paths.exe_dir).ok_or_else(|| {
+        AppError::bad("本地软件仓库未找到 NP4 基础镜像包；请先通过维护中心同步 np4")
+    })?;
+    let archives = np4_image_archives(&image_package, aliases);
     if archives.is_empty() {
-        return Err(AppError::bad(format!("未找到 {arch} 架构的 base-images 镜像包")));
+        return Err(AppError::bad(format!("NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包")));
     }
 
     job_set(
@@ -3011,6 +3038,22 @@ mod tests {
 
         let images = np4_image_archives(&root, &["x86", "amd64"]);
         assert_eq!(images, vec![base.join("x86").join("x86-image.tar.gz")]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn np4_images_support_repository_latest_linux_arch_layout() {
+        let root = temp_root();
+        let image = root
+            .join("base-images")
+            .join("latest")
+            .join("linux")
+            .join("amd64")
+            .join("np4-images-x86.tar.gz");
+        fs::create_dir_all(image.parent().unwrap()).unwrap();
+        fs::write(&image, b"x86").unwrap();
+
+        assert_eq!(np4_image_archives(&root, &["x86", "amd64"]), vec![image]);
         let _ = fs::remove_dir_all(&root);
     }
 
