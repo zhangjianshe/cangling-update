@@ -2599,7 +2599,7 @@
         const msg = job.message || "";
         if (job.phase === "np4-images") {
           sub.textContent = job.total
-            ? "第 " + job.current + " / " + Math.max(job.total - 1, 1) + " 个镜像"
+            ? "第 " + Math.max(job.current - 1, 1) + " / " + Math.max(job.total - 2, 1) + " 个镜像"
             : "";
         } else if (/索引|提交 Git/.test(msg)) {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个文件") : "";

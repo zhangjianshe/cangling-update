@@ -552,6 +552,63 @@ fn copy_np4_template(source: &FsPath, dest: &FsPath, arch: &str) -> anyhow::Resu
     Ok(())
 }
 
+fn np4_jar_files(image_package: &FsPath) -> anyhow::Result<Vec<PathBuf>> {
+    let source = image_package
+        .join("np4-jars")
+        .join("latest")
+        .join("all")
+        .join("all");
+    if !source.is_dir() {
+        anyhow::bail!("未找到 NP4 JAR 包目录 {}", source.display());
+    }
+    let mut jars: Vec<_> = std::fs::read_dir(&source)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "jar"))
+        .collect();
+    jars.sort();
+    if jars.is_empty() {
+        anyhow::bail!("NP4 JAR 包目录 {} 中没有 .jar 文件", source.display());
+    }
+    Ok(jars)
+}
+
+fn initialize_np4_project(dest: &FsPath, jars: &[PathBuf], master_ip: &str) -> anyhow::Result<()> {
+    let example = dest.join(".env.example");
+    let env = dest.join(".env");
+    if !example.is_file() {
+        anyhow::bail!("项目模板未包含 {}", example.display());
+    }
+    std::fs::copy(&example, &env)?;
+    let content = std::fs::read_to_string(&env)?;
+    let mut found_host = false;
+    let mut lines: Vec<String> = content
+        .lines()
+        .map(|line| {
+            if line.trim_start().starts_with("HOST=") {
+                found_host = true;
+                format!("HOST={master_ip}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    if !found_host {
+        lines.push(format!("HOST={master_ip}"));
+    }
+    std::fs::write(&env, format!("{}\n", lines.join("\n")))?;
+
+    let target = dest.join("jars");
+    std::fs::create_dir_all(&target)?;
+    for jar in jars {
+        let name = jar
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("无效 JAR 文件名: {}", jar.display()))?;
+        std::fs::copy(jar, target.join(name))?;
+    }
+    Ok(())
+}
+
 async fn np4_deploy_status(
     State(state): State<AppState>,
 ) -> Result<Json<Np4DeployStatus>, AppError> {
@@ -629,6 +686,11 @@ async fn deploy_np4(
     if archives.is_empty() {
         return Err(AppError::bad(format!("NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包")));
     }
+    let jars = np4_jar_files(&image_package).map_err(AppError::from)?;
+    let master_ip = hostinfo::primary_ip();
+    if master_ip.is_empty() {
+        return Err(AppError::bad("无法识别 Master 主机 IP，无法写入 NP4 .env"));
+    }
 
     job_set(
         &state,
@@ -636,12 +698,30 @@ async fn deploy_np4(
         "np4-template",
         "正在复制 NP4 项目模板…",
         0,
-        archives.len() as u64 + 1,
+        archives.len() as u64 + 2,
     );
     let source = template.clone();
     let target = dest.clone();
     let arch = arch.to_string();
     if let Err(err) = tokio::task::spawn_blocking(move || copy_np4_template(&source, &target, &arch))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))
+        .and_then(|result| result.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "np4-config",
+        "正在生成 .env 并复制 NP4 JAR 包…",
+        1,
+        archives.len() as u64 + 2,
+    );
+    let target = dest.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || initialize_np4_project(&target, &jars, &master_ip))
         .await
         .map_err(|e| AppError::internal(e.to_string()))
         .and_then(|result| result.map_err(AppError::from))
@@ -656,8 +736,8 @@ async fn deploy_np4(
             body.job_id.as_deref(),
             "np4-images",
             &format!("正在导入基础镜像：{}", archive.file_name().unwrap_or_default().to_string_lossy()),
-            index as u64 + 1,
-            archives.len() as u64 + 1,
+            index as u64 + 2,
+            archives.len() as u64 + 2,
         );
         if let Err(err) = state.docker.load_archive(archive).await {
             let err = AppError::bad(format!("导入 {} 失败：{err}", archive.display()));
@@ -671,8 +751,8 @@ async fn deploy_np4(
         body.job_id.as_deref(),
         "np4-project",
         "正在登记 NP4 项目并建立基线快照…",
-        archives.len() as u64 + 1,
-        archives.len() as u64 + 1,
+        archives.len() as u64 + 2,
+        archives.len() as u64 + 2,
     );
     let project = create_project(
         State(state.clone()),
@@ -3075,6 +3155,24 @@ mod tests {
         assert_eq!(fs::read(target.join("config").join("app.conf")).unwrap(), b"config");
         assert!(!target.join("docker-compose-arm.yaml").exists());
         assert!(!target.join("base-images").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn np4_initialization_sets_master_host_and_copies_jars() {
+        let root = temp_root();
+        let project = root.join("project");
+        let jar = root.join("source.jar");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join(".env.example"), "PORT=8080\nHOST=old-host\n").unwrap();
+        fs::write(&jar, b"jar").unwrap();
+
+        initialize_np4_project(&project, &[jar], "192.168.3.10").unwrap();
+        assert_eq!(
+            fs::read_to_string(project.join(".env")).unwrap(),
+            "PORT=8080\nHOST=192.168.3.10\n"
+        );
+        assert_eq!(fs::read(project.join("jars").join("source.jar")).unwrap(), b"jar");
         let _ = fs::remove_dir_all(&root);
     }
 }
