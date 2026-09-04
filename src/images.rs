@@ -71,6 +71,18 @@ struct DeleteRequest {
     filenames: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct NodeImageDeleteRequest {
+    images: Vec<String>,
+    #[serde(default)]
+    node_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct WorkerImageDeleteRequest {
+    images: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ImportStarted {
     job_id: String,
@@ -81,6 +93,7 @@ pub fn console_routes() -> Router<AppState> {
         .route("/api/images", get(overview))
         .route("/api/images/upload", post(upload))
         .route("/api/images/packages", delete(delete_packages))
+        .route("/api/images/node-images", delete(start_node_image_delete))
         .route("/api/images/import", post(start_import))
 }
 
@@ -88,6 +101,7 @@ pub fn cluster_routes() -> Router<AppState> {
     Router::new()
         .route("/api/cluster/images", get(worker_images))
         .route("/api/cluster/images/import", post(worker_import))
+        .route("/api/cluster/images/delete", post(worker_image_delete))
         .route(
             "/api/cluster/images/archive/{filename}",
             get(download_archive),
@@ -141,7 +155,11 @@ async fn scan_packages(dir: &FsPath) -> Result<Vec<ImagePackage>, AppError> {
             modified,
         });
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     Ok(out)
 }
 
@@ -391,6 +409,99 @@ async fn start_import(
     Ok(Json(ImportStarted { job_id: job.id }))
 }
 
+async fn start_node_image_delete(
+    State(state): State<AppState>,
+    Json(body): Json<NodeImageDeleteRequest>,
+) -> Result<Json<ImportStarted>, AppError> {
+    let images = validate_image_refs(&body.images)?;
+    if body.node_ids.is_empty() {
+        return Err(AppError::bad("请选择目标节点"));
+    }
+    let job = state.jobs.create();
+    let job_id = job.id.clone();
+    let run_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(err) = delete_cluster_images(&run_state, &images, &body.node_ids, &job_id).await
+        {
+            run_state.jobs.finish_err(&job_id, &err.to_string());
+        }
+    });
+    Ok(Json(ImportStarted { job_id: job.id }))
+}
+
+fn validate_image_refs(images: &[String]) -> Result<Vec<String>, AppError> {
+    if images.is_empty() {
+        return Err(AppError::bad("请选择要删除的节点镜像"));
+    }
+    images
+        .iter()
+        .map(|raw| {
+            let image = raw.trim();
+            if image.is_empty()
+                || image.starts_with('-')
+                || image.chars().any(char::is_whitespace)
+                || image.chars().any(char::is_control)
+            {
+                return Err(AppError::bad(format!("无效的镜像名称: {raw}")));
+            }
+            Ok(image.to_string())
+        })
+        .collect()
+}
+
+async fn delete_cluster_images(
+    state: &AppState,
+    images: &[String],
+    selected: &[String],
+    job_id: &str,
+) -> Result<(), AppError> {
+    let targets = target_nodes(state, selected)?;
+    if targets.is_empty() {
+        return Err(AppError::bad("没有可操作的在线节点"));
+    }
+    let total = targets.len() as u64;
+    let self_id = crate::cluster::load_or_create_node_id(&state.paths);
+    let token = state.cluster.token.as_deref().unwrap_or("");
+    for (index, (id, name, addr)) in targets.into_iter().enumerate() {
+        state.jobs.set(
+            job_id,
+            "delete-images",
+            &format!("正在删除 {name} 上的所选镜像"),
+            index as u64,
+            total,
+        );
+        if id == self_id || state.cluster.role == Role::Standalone {
+            remove_images(images).await?;
+        } else {
+            let url = format!("http://{addr}/api/cluster/images/delete");
+            let request = WorkerImageDeleteRequest {
+                images: images.to_vec(),
+            };
+            let (status, json) = crate::cluster::http::post_json(
+                &url,
+                token,
+                &serde_json::to_value(request).map_err(|e| AppError::internal(e.to_string()))?,
+            )
+            .await
+            .map_err(AppError::from)?;
+            if !status.is_success() {
+                return Err(AppError::internal(format!(
+                    "节点 {name} 删除镜像失败: HTTP {status} {json}"
+                )));
+            }
+        }
+        state.jobs.set(
+            job_id,
+            "delete-images",
+            &format!("{name} 删除完成"),
+            index as u64 + 1,
+            total,
+        );
+    }
+    state.jobs.finish_ok(job_id, "已从所选节点删除镜像");
+    Ok(())
+}
+
 fn target_nodes(
     state: &AppState,
     selected: &[String],
@@ -399,7 +510,7 @@ fn target_nodes(
         return Ok(vec![("local".into(), "本机".into(), "localhost".into())]);
     }
     if state.cluster.role != Role::Master {
-        return Err(AppError::bad("请在主节点执行集群镜像导入"));
+        return Err(AppError::bad("请在主节点执行集群镜像操作"));
     }
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let mut stmt =
@@ -503,6 +614,36 @@ async fn import_cluster(
 
 async fn worker_images() -> Result<Json<Vec<String>>, AppError> {
     Ok(Json(installed_images().await?))
+}
+
+async fn worker_image_delete(
+    Json(body): Json<WorkerImageDeleteRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let images = validate_image_refs(&body.images)?;
+    remove_images(&images).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn remove_images(images: &[String]) -> Result<(), AppError> {
+    let installed: std::collections::HashSet<_> = installed_images().await?.into_iter().collect();
+    for image in images {
+        if !installed.contains(image) {
+            continue;
+        }
+        let output = tokio::process::Command::new("k3s")
+            .args(["ctr", "images", "remove"])
+            .arg(image)
+            .output()
+            .await
+            .map_err(|e| AppError::internal(format!("执行 k3s 失败: {e}")))?;
+        if !output.status.success() {
+            return Err(AppError::internal(format!(
+                "删除镜像 {image} 失败: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+    Ok(())
 }
 
 async fn worker_import(
@@ -665,5 +806,11 @@ mod tests {
         assert!(is_gzip_archive(FsPath::new("image.tar.gz")));
         assert!(is_gzip_archive(FsPath::new("IMAGE.TGZ")));
         assert!(!is_gzip_archive(FsPath::new("image.tar")));
+    }
+    #[test]
+    fn validates_node_image_references() {
+        assert!(validate_image_refs(&["registry/app:latest".into()]).is_ok());
+        assert!(validate_image_refs(&["--all".into()]).is_err());
+        assert!(validate_image_refs(&["bad image".into()]).is_err());
     }
 }

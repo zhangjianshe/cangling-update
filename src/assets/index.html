@@ -1930,8 +1930,8 @@
         <div id="flash" hidden></div>
         <div class="card">
           <h3>本地镜像包</h3>
-          <div class="row" style="margin-bottom:12px">
-            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 /opt/cangling/images" style="min-width:360px" />
+          <div class="row" style="margin-bottom:12px;flex-wrap:nowrap;overflow-x:auto">
+            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 /opt/cangling/images" style="min-width:280px;flex:1 1 auto" />
             <button class="btn" id="btn-images-dir">浏览目录</button>
             <input id="images-file" type="file" accept=".tar,.gz,.tgz,application/x-tar,application/gzip" hidden />
             <button class="btn primary" id="btn-images-upload">上传镜像包</button>
@@ -1940,6 +1940,7 @@
           </div>
           <p class="hint" id="images-directory">正在加载…</p>
           <div id="image-packages"><div class="empty">正在加载…</div></div>
+          <div class="db-pager" id="image-package-pages"></div>
           <div class="progress-wrap" id="images-prog" hidden>
             <div class="progress-meta"><span id="images-prog-msg">准备中</span><span id="images-prog-pct">0%</span></div>
             <div class="progress" id="images-prog-bar"><span></span></div>
@@ -1949,7 +1950,7 @@
         <div class="card">
           <div class="title-row" style="margin-bottom:8px">
             <h3 style="margin:0">节点镜像</h3>
-            <input id="node-image-search" type="search" placeholder="搜索镜像名称" autocomplete="off" style="max-width:320px" />
+            <div class="row"><input id="node-image-search" type="search" placeholder="搜索镜像名称" autocomplete="off" style="max-width:320px" /><button class="btn danger" id="btn-node-images-delete" disabled>删除所选镜像</button></div>
           </div>
           <p class="hint">选择节点后，可将上方镜像包导入所选在线节点。</p>
           <div id="node-images"><div class="empty">正在加载…</div></div>
@@ -1960,8 +1961,12 @@
       $("#btn-images-upload").onclick = () => $("#images-file").click();
       $("#btn-images-cancel").onclick = () => { if (state.imageUpload) state.imageUpload.abort(); };
       $("#btn-images-delete").onclick = deleteImagePackages;
+      $("#btn-node-images-delete").onclick = deleteNodeImages;
       $("#images-file").onchange = uploadImagePackage;
       $("#node-image-search").oninput = () => renderNodeImages();
+      state.imagePackagePage = 1;
+      state.selectedImagePackages = new Set();
+      state.selectedNodeImages = new Set();
       await loadImages();
     }
 
@@ -1974,21 +1979,41 @@
       try {
         const data = await api("/api/images" + imageDirectoryQuery());
         state.images = data;
+        const availablePackages = new Set(data.packages.map(p => p.name));
+        state.selectedImagePackages = new Set(Array.from(state.selectedImagePackages || []).filter(name => availablePackages.has(name)));
+        const availableImages = new Set(data.nodes.flatMap(n => n.images || []));
+        state.selectedNodeImages = new Set(Array.from(state.selectedNodeImages || []).filter(name => availableImages.has(name)));
         const dir = $("#images-directory");
         if (dir) dir.innerHTML = `目录：<code>${esc(data.directory)}</code> · ${data.packages.length} 个镜像包`;
-        const packages = $("#image-packages");
-        if (packages) packages.innerHTML = data.packages.length ? `
-          <table><thead><tr><th><input id="image-packages-all" type="checkbox" /></th><th>镜像包</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>
-          ${data.packages.map(p => `<tr><td><input class="image-package-select" type="checkbox" value="${esc(p.name)}" /></td><td><code>${esc(p.name)}</code></td><td>${fmtBytes(p.size)}</td><td>${fmtDateTime(p.modified)}</td><td><button class="btn image-import" data-name="${esc(p.name)}">导入所选节点</button></td></tr>`).join("")}
-          </tbody></table>` : `<div class="empty">目录中没有 tar、tar.gz 或 tgz 镜像包</div>`;
+        renderImagePackages();
         renderNodeImages();
-        document.querySelectorAll(".image-import").forEach(b => b.onclick = () => importImagePackage(b.dataset.name));
-        const packageChecks = Array.from(document.querySelectorAll(".image-package-select"));
-        packageChecks.forEach(c => c.onchange = updateImagePackageSelection);
-        const packageAll = $("#image-packages-all");
-        if (packageAll) packageAll.onchange = () => { packageChecks.forEach(c => c.checked = packageAll.checked); updateImagePackageSelection(); };
-        updateImagePackageSelection();
       } catch (e) { flash("err", e.message); }
+    }
+
+    function renderImagePackages() {
+      const packages = $("#image-packages");
+      if (!packages || !state.images) return;
+      const allPackages = state.images.packages || [];
+      const pages = Math.max(1, Math.ceil(allPackages.length / 10));
+      state.imagePackagePage = Math.min(Math.max(1, state.imagePackagePage || 1), pages);
+      const start = (state.imagePackagePage - 1) * 10;
+      const pageItems = allPackages.slice(start, start + 10);
+      packages.innerHTML = pageItems.length ? `
+          <table><thead><tr><th><input id="image-packages-all" type="checkbox" /></th><th>镜像包</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>
+          ${pageItems.map(p => `<tr><td><input class="image-package-select" type="checkbox" value="${esc(p.name)}" ${(state.selectedImagePackages || new Set()).has(p.name) ? "checked" : ""} /></td><td><code>${esc(p.name)}</code></td><td>${fmtBytes(p.size)}</td><td>${fmtDateTime(p.modified)}</td><td><button class="btn image-import" data-name="${esc(p.name)}">导入所选节点</button></td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty">目录中没有 tar、tar.gz 或 tgz 镜像包</div>`;
+      document.querySelectorAll(".image-import").forEach(b => b.onclick = () => importImagePackage(b.dataset.name));
+      const packageChecks = Array.from(document.querySelectorAll(".image-package-select"));
+      packageChecks.forEach(c => c.onchange = () => { if (c.checked) state.selectedImagePackages.add(c.value); else state.selectedImagePackages.delete(c.value); updateImagePackageSelection(); });
+      const packageAll = $("#image-packages-all");
+      if (packageAll) packageAll.onchange = () => { packageChecks.forEach(c => { c.checked = packageAll.checked; if (c.checked) state.selectedImagePackages.add(c.value); else state.selectedImagePackages.delete(c.value); }); updateImagePackageSelection(); };
+      const pager = $("#image-package-pages");
+      if (pager) {
+        pager.innerHTML = `<span class="hint">共 ${allPackages.length} 个 · 第 ${state.imagePackagePage} / ${pages} 页</span><button class="btn" id="image-page-prev" ${state.imagePackagePage <= 1 ? "disabled" : ""}>上一页</button><button class="btn" id="image-page-next" ${state.imagePackagePage >= pages ? "disabled" : ""}>下一页</button>`;
+        $("#image-page-prev").onclick = () => { state.imagePackagePage--; renderImagePackages(); };
+        $("#image-page-next").onclick = () => { state.imagePackagePage++; renderImagePackages(); };
+      }
+      updateImagePackageSelection();
     }
 
     function renderNodeImages() {
@@ -2008,7 +2033,7 @@
         const status = n.error ? n.error : n.status === "online" ? `${n.images.length} 个镜像` : "离线";
         return `<th title="${esc(n.address)} · ${esc(status)}"><label><input class="image-node" type="checkbox" value="${esc(n.node_id)}" ${n.status !== "online" ? "disabled" : ""} ${checked ? "checked" : ""} /> ${esc(n.node_name)}</label><div class="hint">${esc(status)}</div></th>`;
       }).join("");
-      const rows = images.map(image => `<tr><td><code>${esc(image)}</code></td>${nodes.map((n, i) => {
+      const rows = images.map(image => `<tr><td><label><input class="node-image-select" type="checkbox" value="${esc(image)}" ${(state.selectedNodeImages || new Set()).has(image) ? "checked" : ""} /> <code>${esc(image)}</code></label></td>${nodes.map((n, i) => {
         if (n.status !== "online" || n.error) return `<td class="hint" title="节点不可用">—</td>`;
         return imageSets[i].has(image)
           ? `<td><span class="image-installed" title="已安装">✓</span></td>`
@@ -2023,6 +2048,8 @@
         all.indeterminate = enabled.some(c => c.checked) && !all.checked;
         all.onchange = () => enabled.forEach(c => c.checked = all.checked);
       }
+      document.querySelectorAll(".node-image-select").forEach(c => c.onchange = () => { if (c.checked) state.selectedNodeImages.add(c.value); else state.selectedNodeImages.delete(c.value); updateNodeImageDeleteButton(); });
+      updateNodeImageDeleteButton();
     }
 
     function uploadImagePackage() {
@@ -2049,20 +2076,46 @@
 
     function updateImagePackageSelection() {
       const checks = Array.from(document.querySelectorAll(".image-package-select"));
-      const selected = checks.filter(c => c.checked);
+      const selected = state.selectedImagePackages || new Set();
       const button = $("#btn-images-delete");
-      if (button) { button.disabled = selected.length === 0; button.textContent = selected.length ? `删除所选 (${selected.length})` : "删除所选"; }
+      if (button) { button.disabled = selected.size === 0; button.textContent = selected.size ? `删除所选 (${selected.size})` : "删除所选"; }
       const all = $("#image-packages-all");
-      if (all) { all.checked = checks.length > 0 && selected.length === checks.length; all.indeterminate = selected.length > 0 && selected.length < checks.length; }
+      if (all) { const pageSelected = checks.filter(c => c.checked).length; all.checked = checks.length > 0 && pageSelected === checks.length; all.indeterminate = pageSelected > 0 && pageSelected < checks.length; }
     }
 
     async function deleteImagePackages() {
-      const filenames = Array.from(document.querySelectorAll(".image-package-select:checked")).map(c => c.value);
+      const filenames = Array.from(state.selectedImagePackages || []);
       if (!filenames.length) return;
       if (!(await confirmDialog(`确定删除所选的 ${filenames.length} 个镜像包？`, {danger:true}))) return;
       try {
         const result = await api("/api/images/packages" + imageDirectoryQuery(), {method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({filenames})});
-        flash("ok", `已删除 ${result.deleted} 个镜像包`); await loadImages();
+        state.selectedImagePackages.clear(); flash("ok", `已删除 ${result.deleted} 个镜像包`); await loadImages();
+      } catch (e) { flash("err", e.message); }
+    }
+
+    function updateNodeImageDeleteButton() {
+      const button = $("#btn-node-images-delete");
+      if (!button) return;
+      const count = (state.selectedNodeImages || new Set()).size;
+      button.disabled = count === 0;
+      button.textContent = count ? `删除所选镜像 (${count})` : "删除所选镜像";
+    }
+
+    async function deleteNodeImages() {
+      const images = Array.from(state.selectedNodeImages || []);
+      const nodeIds = Array.from(document.querySelectorAll(".image-node:checked")).map(c => c.value);
+      if (!images.length) { flash("err", "请选择要删除的镜像"); return; }
+      if (!nodeIds.length) { flash("err", "请至少选择一个在线节点"); return; }
+      if (!(await confirmDialog(`确定从 ${nodeIds.length} 个节点删除所选的 ${images.length} 个镜像？正在使用的镜像可能导致工作负载重启失败。`, {danger:true}))) return;
+      try {
+        const started = await api("/api/images/node-images", {method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({images,node_ids:nodeIds})});
+        showProgress("images-prog", true);
+        const timer = setInterval(async () => {
+          try {
+            const job = await api("/api/jobs/" + started.job_id); renderProgress("images-prog", job);
+            if (job.done) { clearInterval(timer); flash(job.error ? "err" : "ok", job.error || job.message); if (!job.error) { state.selectedNodeImages.clear(); await loadImages(); } }
+          } catch (e) { clearInterval(timer); flash("err", e.message); }
+        }, 500);
       } catch (e) { flash("err", e.message); }
     }
 
