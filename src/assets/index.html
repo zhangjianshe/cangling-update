@@ -1939,12 +1939,20 @@
             <div class="progress-sub" id="images-prog-sub"></div>
           </div>
         </div>
-        <div class="card"><h3>节点镜像</h3><p class="hint">选择节点后，可将上方镜像包导入所选在线节点。</p><div id="node-images"><div class="empty">正在加载…</div></div></div>`;
+        <div class="card">
+          <div class="title-row" style="margin-bottom:8px">
+            <h3 style="margin:0">节点镜像</h3>
+            <input id="node-image-search" type="search" placeholder="搜索镜像名称" autocomplete="off" style="max-width:320px" />
+          </div>
+          <p class="hint">选择节点后，可将上方镜像包导入所选在线节点。</p>
+          <div id="node-images"><div class="empty">正在加载…</div></div>
+        </div>`;
       $("#btn-images-refresh").onclick = loadImages;
       $("#btn-images-dir").onclick = () => openDirPicker("images-dir", async () => { localStorage.setItem("cangling_images_dir", $("#images-dir").value.trim()); await loadImages(); });
       $("#images-dir").onchange = () => { localStorage.setItem("cangling_images_dir", $("#images-dir").value.trim()); loadImages(); };
       $("#btn-images-upload").onclick = () => $("#images-file").click();
       $("#images-file").onchange = uploadImagePackage;
+      $("#node-image-search").oninput = () => renderNodeImages();
       await loadImages();
     }
 
@@ -1964,15 +1972,36 @@
           <table><thead><tr><th>镜像包</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>
           ${data.packages.map(p => `<tr><td><code>${esc(p.name)}</code></td><td>${fmtBytes(p.size)}</td><td>${fmtDateTime(p.modified)}</td><td><button class="btn image-import" data-name="${esc(p.name)}">导入所选节点</button></td></tr>`).join("")}
           </tbody></table>` : `<div class="empty">目录中没有 tar、tar.gz 或 tgz 镜像包</div>`;
-        const nodes = $("#node-images");
-        if (nodes) nodes.innerHTML = data.nodes.length ? `
-          <table><thead><tr><th><input id="image-nodes-all" type="checkbox" checked /></th><th>节点</th><th>地址</th><th>状态</th><th>已安装镜像</th></tr></thead><tbody>
-          ${data.nodes.map(n => `<tr><td><input class="image-node" type="checkbox" value="${esc(n.node_id)}" ${n.status !== "online" ? "disabled" : "checked"} /></td><td>${esc(n.node_name)}</td><td><code>${esc(n.address)}</code></td><td>${esc(n.status)}</td><td>${n.error ? `<span class="bad">${esc(n.error)}</span>` : `${n.images.length} 个<details><summary>查看</summary><pre>${esc(n.images.join("\n") || "暂无镜像")}</pre></details>`}</td></tr>`).join("")}
-          </tbody></table>` : `<div class="empty">暂无节点</div>`;
+        renderNodeImages();
         document.querySelectorAll(".image-import").forEach(b => b.onclick = () => importImagePackage(b.dataset.name));
-        const all = $("#image-nodes-all");
-        if (all) all.onchange = () => document.querySelectorAll(".image-node:not(:disabled)").forEach(c => c.checked = all.checked);
       } catch (e) { flash("err", e.message); }
+    }
+
+    function renderNodeImages() {
+      const root = $("#node-images");
+      if (!root || !state.images) return;
+      const selected = new Set(Array.from(document.querySelectorAll(".image-node:checked")).map(c => c.value));
+      const hadCheckboxes = document.querySelectorAll(".image-node").length > 0;
+      const query = (($("#node-image-search") && $("#node-image-search").value) || "").trim().toLowerCase();
+      const rows = (state.images.nodes || []).map(n => {
+        const matches = query ? n.images.filter(image => image.toLowerCase().includes(query)) : n.images;
+        let imageCell;
+        if (n.error) imageCell = `<span class="bad">${esc(n.error)}</span>`;
+        else if (query) imageCell = matches.length
+          ? `<div>${matches.length} 个匹配</div><pre>${esc(matches.join("\n"))}</pre>`
+          : `<span class="hint">没有找到</span>`;
+        else imageCell = `${n.images.length} 个<details><summary>查看</summary><pre>${esc(n.images.join("\n") || "暂无镜像")}</pre></details>`;
+        const checked = n.status === "online" && (!hadCheckboxes || selected.has(n.node_id));
+        return `<tr><td><input class="image-node" type="checkbox" value="${esc(n.node_id)}" ${n.status !== "online" ? "disabled" : ""} ${checked ? "checked" : ""} /></td><td>${esc(n.node_name)}</td><td><code>${esc(n.address)}</code></td><td>${esc(n.status)}</td><td>${imageCell}</td></tr>`;
+      }).join("");
+      root.innerHTML = rows ? `<table><thead><tr><th><input id="image-nodes-all" type="checkbox" checked /></th><th>节点</th><th>地址</th><th>状态</th><th>已安装镜像</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">暂无节点</div>`;
+      const all = $("#image-nodes-all");
+      if (all) {
+        const enabled = Array.from(document.querySelectorAll(".image-node:not(:disabled)"));
+        all.checked = enabled.length > 0 && enabled.every(c => c.checked);
+        all.indeterminate = enabled.some(c => c.checked) && !all.checked;
+        all.onchange = () => enabled.forEach(c => c.checked = all.checked);
+      }
     }
 
     function uploadImagePackage() {
