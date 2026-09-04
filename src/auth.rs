@@ -45,6 +45,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         || path == "/api/cluster/images"
         || path == "/api/cluster/images/import"
         || path == "/api/cluster/images/delete"
+        || path.starts_with("/api/cluster/images/jobs/")
         || path.starts_with("/api/cluster/images/archive/")
         || (path.starts_with("/api/cluster/repo/") && path.ends_with("/download"))
     {
@@ -519,6 +520,10 @@ mod tests {
         assert!(is_public(&Method::GET, "/api/cluster/images"));
         assert!(is_public(&Method::POST, "/api/cluster/images/import"));
         assert!(is_public(&Method::POST, "/api/cluster/images/delete"));
+        assert!(is_public(
+            &Method::GET,
+            "/api/cluster/images/jobs/1234"
+        ));
         assert!(is_public(
             &Method::GET,
             "/api/cluster/images/archive/images.tar.gz"

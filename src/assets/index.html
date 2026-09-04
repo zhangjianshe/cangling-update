@@ -1931,7 +1931,7 @@
         <div class="card">
           <h3>本地镜像包</h3>
           <div class="row" style="margin-bottom:12px;flex-wrap:nowrap;overflow-x:auto">
-            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 /opt/cangling/images" style="min-width:280px;flex:1 1 auto" />
+            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 /opt/cangling/images" style="width:350px;min-width:350px;flex:0 0 350px" />
             <button class="btn" id="btn-images-dir">浏览目录</button>
             <input id="images-file" type="file" accept=".tar,.gz,.tgz,application/x-tar,application/gzip" hidden />
             <button class="btn primary" id="btn-images-upload">上传镜像包</button>
@@ -1950,7 +1950,7 @@
         <div class="card">
           <div class="title-row" style="margin-bottom:8px">
             <h3 style="margin:0">节点镜像</h3>
-            <div class="row"><input id="node-image-search" type="search" placeholder="搜索镜像名称" autocomplete="off" style="max-width:320px" /><button class="btn danger" id="btn-node-images-delete" disabled>删除所选镜像</button></div>
+            <div class="row"><input id="node-image-search" type="text" placeholder="搜索镜像名称" autocomplete="off" style="width:350px;min-width:350px" /><button class="btn danger" id="btn-node-images-delete" disabled>删除所选镜像</button></div>
           </div>
           <p class="hint">选择节点后，可将上方镜像包导入所选在线节点。</p>
           <div id="node-images"><div class="empty">正在加载…</div></div>

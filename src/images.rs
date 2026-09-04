@@ -108,6 +108,7 @@ pub fn cluster_routes() -> Router<AppState> {
         .route("/api/cluster/images", get(worker_images))
         .route("/api/cluster/images/import", post(worker_import))
         .route("/api/cluster/images/delete", post(worker_image_delete))
+        .route("/api/cluster/images/jobs/{id}", get(worker_job))
         .route(
             "/api/cluster/images/archive/{filename}",
             get(download_archive),
@@ -644,6 +645,44 @@ async fn import_cluster(
                     "节点 {name} 导入失败: HTTP {status} {json}"
                 )));
             }
+            let Some(worker_job_id) = json.get("job_id").and_then(|value| value.as_str()) else {
+                // 兼容尚未升级的节点：旧接口会同步完成导入并返回 {"ok":true}。
+                if json.get("ok").and_then(|value| value.as_bool()) == Some(true) {
+                    continue;
+                }
+                return Err(AppError::internal(format!(
+                    "节点 {name} 未返回导入任务编号"
+                )));
+            };
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                let progress_url = format!("http://{addr}/api/cluster/images/jobs/{worker_job_id}");
+                let (status, json) = crate::cluster::http::get_json(&progress_url, token)
+                    .await
+                    .map_err(AppError::from)?;
+                if !status.is_success() {
+                    return Err(AppError::internal(format!(
+                        "读取节点 {name} 传输进度失败: HTTP {status} {json}"
+                    )));
+                }
+                let progress: crate::progress::JobProgress =
+                    serde_json::from_value(json).map_err(|e| {
+                        AppError::internal(format!("解析节点 {name} 传输进度失败: {e}"))
+                    })?;
+                state.jobs.set(
+                    job_id,
+                    "image-transfer",
+                    &format!("{name}: {}", progress.message),
+                    progress.current,
+                    progress.total,
+                );
+                if progress.done {
+                    if let Some(error) = progress.error {
+                        return Err(AppError::internal(format!("节点 {name} 导入失败: {error}")));
+                    }
+                    break;
+                }
+            }
         }
         state.jobs.set(
             job_id,
@@ -700,21 +739,57 @@ async fn remove_images(images: &[String]) -> Result<(), AppError> {
 async fn worker_import(
     State(state): State<AppState>,
     Json(body): Json<WorkerImportRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> Result<Json<ImportStarted>, AppError> {
     let filename = archive_name(&body.filename)?;
     let dir = state.images_dir.clone();
     tokio::fs::create_dir_all(&dir).await?;
     let target = dir.join(&filename);
     let temp = dir.join(format!(".{filename}.{}.part", Uuid::new_v4()));
-    download_to(
-        &body.source_url,
-        state.cluster.token.as_deref().unwrap_or(""),
-        &temp,
-    )
-    .await?;
-    tokio::fs::rename(temp, &target).await?;
-    import_file(&target).await?;
-    Ok(Json(serde_json::json!({"ok":true})))
+    let token = state.cluster.token.clone().unwrap_or_default();
+    let job = state.jobs.create();
+    let job_id = job.id.clone();
+    let run_state = state.clone();
+    tokio::spawn(async move {
+        let result: Result<(), AppError> = async {
+            download_to(
+                &body.source_url,
+                &token,
+                &temp,
+                Some((run_state.jobs.clone(), job_id.clone())),
+            )
+            .await?;
+            tokio::fs::rename(&temp, &target).await?;
+            run_state.jobs.set(
+                &job_id,
+                "import",
+                &format!("传输完成，正在导入 {filename}"),
+                0,
+                0,
+            );
+            import_file(&target).await?;
+            Ok(())
+        }
+        .await;
+        match result {
+            Ok(()) => run_state.jobs.finish_ok(&job_id, "镜像传输并导入完成"),
+            Err(err) => {
+                let _ = tokio::fs::remove_file(&temp).await;
+                run_state.jobs.finish_err(&job_id, &err.to_string());
+            }
+        }
+    });
+    Ok(Json(ImportStarted { job_id: job.id }))
+}
+
+async fn worker_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::progress::JobProgress>, AppError> {
+    state
+        .jobs
+        .get(&id)
+        .map(Json)
+        .ok_or_else(|| AppError::not_found("节点镜像任务不存在"))
 }
 
 async fn import_file(path: &FsPath) -> Result<(), AppError> {
@@ -802,7 +877,12 @@ async fn download_archive(
     Ok(response)
 }
 
-async fn download_to(url: &str, token: &str, path: &FsPath) -> Result<(), AppError> {
+async fn download_to(
+    url: &str,
+    token: &str,
+    path: &FsPath,
+    progress: Option<(crate::progress::JobHub, String)>,
+) -> Result<(), AppError> {
     let mut connector = HttpConnector::new();
     connector.set_connect_timeout(Some(std::time::Duration::from_secs(10)));
     let client: Client<_, Full<Bytes>> = Client::builder(TokioExecutor::new()).build(connector);
@@ -821,11 +901,25 @@ async fn download_to(url: &str, token: &str, path: &FsPath) -> Result<(), AppErr
             response.status()
         )));
     }
+    let total = response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    if let Some((jobs, id)) = &progress {
+        jobs.set(id, "download", "正在从主节点传输镜像包", 0, total);
+    }
     let mut file = tokio::fs::File::create(path).await?;
+    let mut received = 0u64;
     while let Some(frame) = response.frame().await {
         let frame = frame.map_err(|e| AppError::internal(e.to_string()))?;
         if let Some(data) = frame.data_ref() {
             file.write_all(data).await?;
+            received += data.len() as u64;
+            if let Some((jobs, id)) = &progress {
+                jobs.set(id, "download", "正在从主节点传输镜像包", received, total);
+            }
         }
     }
     file.flush().await?;
