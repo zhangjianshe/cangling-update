@@ -610,6 +610,30 @@ fn initialize_np4_project(dest: &FsPath, jars: &[PathBuf], master_ip: &str) -> a
     Ok(())
 }
 
+fn create_np4_data_dirs(dest: &FsPath) -> anyhow::Result<Vec<PathBuf>> {
+    let env = dest.join(".env");
+    let content = std::fs::read_to_string(&env)?;
+    let data_path = content
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("DATA_PATH="))
+        .map(|value| value.trim().trim_matches(['\'', '"']))
+        .find(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{} 中未配置 DATA_PATH", env.display()))?;
+    let data_path = PathBuf::from(data_path);
+    if !data_path.is_absolute() {
+        anyhow::bail!("DATA_PATH 必须是绝对路径：{}", data_path.display());
+    }
+
+    let dirs: Vec<_> = ["np4", "np4-resource-images", "algo_tools"]
+        .into_iter()
+        .map(|name| data_path.join(name))
+        .collect();
+    for dir in &dirs {
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(dirs)
+}
+
 async fn np4_deploy_status(
     State(state): State<AppState>,
 ) -> Result<Json<Np4DeployStatus>, AppError> {
@@ -699,7 +723,7 @@ async fn deploy_np4(
         "np4-template",
         "正在复制 NP4 项目模板…",
         0,
-        archives.len() as u64 + 2,
+        archives.len() as u64 + 4,
     );
     let source = template.clone();
     let target = dest.clone();
@@ -719,7 +743,7 @@ async fn deploy_np4(
         "np4-config",
         "正在生成 .env 并复制 NP4 JAR 包…",
         1,
-        archives.len() as u64 + 2,
+        archives.len() as u64 + 4,
     );
     let target = dest.clone();
     if let Err(err) = tokio::task::spawn_blocking(move || initialize_np4_project(&target, &jars, &master_ip))
@@ -738,7 +762,7 @@ async fn deploy_np4(
             "np4-images",
             &format!("正在导入基础镜像：{}", archive.file_name().unwrap_or_default().to_string_lossy()),
             index as u64 + 2,
-            archives.len() as u64 + 2,
+            archives.len() as u64 + 4,
         );
         if let Err(err) = state.docker.load_archive(archive).await {
             let err = AppError::bad(format!("导入 {} 失败：{err}", archive.display()));
@@ -750,10 +774,28 @@ async fn deploy_np4(
     job_set(
         &state,
         body.job_id.as_deref(),
+        "np4-directories",
+        "正在创建 NP4 数据目录…",
+        archives.len() as u64 + 2,
+        archives.len() as u64 + 4,
+    );
+    let target = dest.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || create_np4_data_dirs(&target))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))
+        .and_then(|result| result.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
         "np4-project",
         "正在登记 NP4 项目并建立基线快照…",
-        archives.len() as u64 + 2,
-        archives.len() as u64 + 2,
+        archives.len() as u64 + 3,
+        archives.len() as u64 + 4,
     );
     let project = create_project(
         State(state.clone()),
@@ -766,7 +808,21 @@ async fn deploy_np4(
         }),
     )
     .await?;
-    job_ok(&state, body.job_id.as_deref(), "NP4 项目已部署并完成基线快照");
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "np4-start",
+        "数据目录已就绪，正在启动 NP4 应用…",
+        archives.len() as u64 + 4,
+        archives.len() as u64 + 4,
+    );
+    if let Err(err) = state.docker.compose_up(&dest).await {
+        let err = AppError::bad(format!("NP4 项目已部署，但启动失败：{err}"));
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
+    job_ok(&state, body.job_id.as_deref(), "NP4 项目已部署并启动");
     Ok(project)
 }
 
@@ -3174,6 +3230,31 @@ mod tests {
             "PORT=8080\nHOST=192.168.3.10\n"
         );
         assert_eq!(fs::read(project.join("jars").join("source.jar")).unwrap(), b"jar");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn np4_data_directories_follow_env_data_path() {
+        let root = temp_root();
+        let project = root.join("project");
+        let data = root.join("storage");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join(".env"),
+            format!("DATA_PATH='{}'\n", data.display()),
+        )
+        .unwrap();
+
+        let dirs = create_np4_data_dirs(&project).unwrap();
+        assert_eq!(
+            dirs,
+            vec![
+                data.join("np4"),
+                data.join("np4-resource-images"),
+                data.join("algo_tools")
+            ]
+        );
+        assert!(dirs.iter().all(|dir| dir.is_dir()));
         let _ = fs::remove_dir_all(&root);
     }
 }
