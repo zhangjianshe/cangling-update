@@ -15,7 +15,9 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use serde::{Deserialize, Serialize};
+use std::io;
 use std::path::{Path as FsPath, PathBuf};
+use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -524,6 +526,9 @@ async fn worker_import(
 }
 
 async fn import_file(path: &FsPath) -> Result<(), AppError> {
+    if is_gzip_archive(path) {
+        return import_gzip_file(path).await;
+    }
     let output = tokio::process::Command::new("k3s")
         .args(["ctr", "images", "import"])
         .arg(path)
@@ -537,6 +542,48 @@ async fn import_file(path: &FsPath) -> Result<(), AppError> {
         )));
     }
     Ok(())
+}
+
+fn is_gzip_archive(path: &FsPath) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name.ends_with(".tar.gz") || name.ends_with(".tgz")
+}
+
+async fn import_gzip_file(path: &FsPath) -> Result<(), AppError> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&path).map_err(|e| format!("打开 gzip 镜像包失败: {e}"))?;
+        let mut decoder = flate2::read::GzDecoder::new(file);
+        let mut child = std::process::Command::new("k3s")
+            .args(["ctr", "images", "import", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("执行 k3s 失败: {e}"))?;
+        let copy_result = {
+            let mut stdin = child.stdin.take().ok_or("无法打开 k3s 标准输入")?;
+            io::copy(&mut decoder, &mut stdin)
+        };
+        let output = child
+            .wait_with_output()
+            .map_err(|e| format!("等待 k3s 导入完成失败: {e}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "导入镜像失败: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        copy_result.map_err(|e| format!("解压 gzip 镜像包失败: {e}"))?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("镜像导入任务失败: {e}")))?
+    .map_err(AppError::internal)
 }
 
 async fn download_archive(
@@ -612,5 +659,11 @@ mod tests {
         assert!(!visible_image("sha256:2d61ae04c2b8"));
         assert!(!visible_image("docker.io.rancher/legacy:test"));
         assert!(visible_image("registry.example.com/np4/service:latest"));
+    }
+    #[test]
+    fn detects_gzip_image_archives() {
+        assert!(is_gzip_archive(FsPath::new("image.tar.gz")));
+        assert!(is_gzip_archive(FsPath::new("IMAGE.TGZ")));
+        assert!(!is_gzip_archive(FsPath::new("image.tar")));
     }
 }
