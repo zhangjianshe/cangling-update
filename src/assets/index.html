@@ -194,9 +194,11 @@
     }
     .app[data-section="cluster"] .shell,
     .app[data-section="repo"] .shell,
+    .app[data-section="images"] .shell,
     .app[data-section="storage"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
     .app[data-section="repo"] aside,
+    .app[data-section="images"] aside,
     .app[data-section="storage"] aside { display: none; }
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
@@ -828,6 +830,7 @@
       <nav class="top-nav" aria-label="功能切换">
         <button type="button" class="btn" id="btn-repo" title="软件仓库">软件仓库</button>
         <button type="button" class="btn" id="btn-cluster" title="集群管理">集群管理</button>
+        <button type="button" class="btn" id="btn-images" title="容器镜像">镜像</button>
         <button type="button" class="btn" id="btn-storage" title="存储">存储</button>
         <button type="button" class="btn" id="btn-projects" title="项目">项目</button>
       </nav>
@@ -1272,6 +1275,7 @@
     function sectionFromHash(hash) {
       if (hash === "#/cluster") return "cluster";
       if (hash === "#/repo") return "repo";
+      if (hash === "#/images") return "images";
       if (hash === "#/storage") return "storage";
       return "projects";
     }
@@ -1281,7 +1285,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), repo: $("#btn-repo"), storage: $("#btn-storage") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), repo: $("#btn-repo"), images: $("#btn-images"), storage: $("#btn-storage") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -1304,6 +1308,7 @@
       if (hash === "#/new") return renderNew();
       if (hash === "#/cluster") return renderCluster();
       if (hash === "#/repo") return renderRepo();
+      if (hash === "#/images") return renderImages();
       if (hash === "#/storage") return renderStorage();
       const m = hash.match(/^#\/p\/([^/]+)$/);
       if (m) return openProject(m[1]);
@@ -1907,6 +1912,102 @@
       }
     }
 
+    async function renderImages() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      const savedDir = localStorage.getItem("cangling_images_dir") || "";
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>容器镜像</h2><div class="path">维护集群各节点 k3s/containerd 镜像</div></div>
+          <button class="btn" id="btn-images-refresh">刷新</button>
+        </div>
+        <div id="flash" hidden></div>
+        <div class="card">
+          <h3>本地镜像包</h3>
+          <div class="row" style="margin-bottom:12px">
+            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 /opt/cangling/images" style="min-width:360px" />
+            <button class="btn" id="btn-images-dir">浏览目录</button>
+            <input id="images-file" type="file" accept=".tar,.gz,.tgz,application/x-tar,application/gzip" hidden />
+            <button class="btn primary" id="btn-images-upload">上传镜像包</button>
+          </div>
+          <p class="hint" id="images-directory">正在加载…</p>
+          <div id="image-packages"><div class="empty">正在加载…</div></div>
+          <div class="progress-wrap" id="images-prog" hidden>
+            <div class="progress-meta"><span id="images-prog-msg">准备中</span><span id="images-prog-pct">0%</span></div>
+            <div class="progress" id="images-prog-bar"><span></span></div>
+            <div class="progress-sub" id="images-prog-sub"></div>
+          </div>
+        </div>
+        <div class="card"><h3>节点镜像</h3><p class="hint">选择节点后，可将上方镜像包导入所选在线节点。</p><div id="node-images"><div class="empty">正在加载…</div></div></div>`;
+      $("#btn-images-refresh").onclick = loadImages;
+      $("#btn-images-dir").onclick = () => openDirPicker("images-dir", async () => { localStorage.setItem("cangling_images_dir", $("#images-dir").value.trim()); await loadImages(); });
+      $("#images-dir").onchange = () => { localStorage.setItem("cangling_images_dir", $("#images-dir").value.trim()); loadImages(); };
+      $("#btn-images-upload").onclick = () => $("#images-file").click();
+      $("#images-file").onchange = uploadImagePackage;
+      await loadImages();
+    }
+
+    function imageDirectoryQuery() {
+      const value = ($("#images-dir") && $("#images-dir").value.trim()) || "";
+      return value ? "?directory=" + encodeURIComponent(value) : "";
+    }
+
+    async function loadImages() {
+      try {
+        const data = await api("/api/images" + imageDirectoryQuery());
+        state.images = data;
+        const dir = $("#images-directory");
+        if (dir) dir.innerHTML = `目录：<code>${esc(data.directory)}</code> · ${data.packages.length} 个镜像包`;
+        const packages = $("#image-packages");
+        if (packages) packages.innerHTML = data.packages.length ? `
+          <table><thead><tr><th>镜像包</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>
+          ${data.packages.map(p => `<tr><td><code>${esc(p.name)}</code></td><td>${fmtBytes(p.size)}</td><td>${fmtDateTime(p.modified)}</td><td><button class="btn image-import" data-name="${esc(p.name)}">导入所选节点</button></td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty">目录中没有 tar、tar.gz 或 tgz 镜像包</div>`;
+        const nodes = $("#node-images");
+        if (nodes) nodes.innerHTML = data.nodes.length ? `
+          <table><thead><tr><th><input id="image-nodes-all" type="checkbox" checked /></th><th>节点</th><th>地址</th><th>状态</th><th>已安装镜像</th></tr></thead><tbody>
+          ${data.nodes.map(n => `<tr><td><input class="image-node" type="checkbox" value="${esc(n.node_id)}" ${n.status !== "online" ? "disabled" : "checked"} /></td><td>${esc(n.node_name)}</td><td><code>${esc(n.address)}</code></td><td>${esc(n.status)}</td><td>${n.error ? `<span class="bad">${esc(n.error)}</span>` : `${n.images.length} 个<details><summary>查看</summary><pre>${esc(n.images.join("\n") || "暂无镜像")}</pre></details>`}</td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty">暂无节点</div>`;
+        document.querySelectorAll(".image-import").forEach(b => b.onclick = () => importImagePackage(b.dataset.name));
+        const all = $("#image-nodes-all");
+        if (all) all.onchange = () => document.querySelectorAll(".image-node:not(:disabled)").forEach(c => c.checked = all.checked);
+      } catch (e) { flash("err", e.message); }
+    }
+
+    function uploadImagePackage() {
+      const input = $("#images-file"); const file = input.files && input.files[0];
+      if (!file) return;
+      const fd = new FormData(); fd.append("file", file, file.name);
+      const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/images/upload" + imageDirectoryQuery());
+      const token = sessionToken(); if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
+      showProgress("images-prog", true);
+      xhr.upload.onprogress = e => renderProgress("images-prog", { message:"正在上传 " + file.name,current:e.loaded,total:e.total,percent:e.lengthComputable ? Math.round(e.loaded * 100 / e.total) : 0,done:false });
+      xhr.onload = async () => {
+        input.value = "";
+        if (xhr.status >= 200 && xhr.status < 300) { renderProgress("images-prog", {message:"上传完成",current:1,total:1,percent:100,done:true}); flash("ok", "镜像包上传完成"); await loadImages(); }
+        else { let msg=xhr.responseText; try { msg=JSON.parse(msg).error; } catch {} flash("err", msg || "上传失败"); }
+      };
+      xhr.onerror = () => flash("err", "上传失败：网络连接中断"); xhr.send(fd);
+    }
+
+    async function importImagePackage(filename) {
+      const nodeIds = Array.from(document.querySelectorAll(".image-node:checked")).map(c => c.value);
+      if (!nodeIds.length) { flash("err", "请至少选择一个在线节点"); return; }
+      if (!(await confirmDialog(`确定将 ${filename} 导入 ${nodeIds.length} 个节点？`))) return;
+      try {
+        const directory = ($("#images-dir") && $("#images-dir").value.trim()) || null;
+        const started = await api("/api/images/import", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filename,directory,node_ids:nodeIds})});
+        showProgress("images-prog", true);
+        const timer = setInterval(async () => {
+          try {
+            const job = await api("/api/jobs/" + started.job_id); renderProgress("images-prog", job);
+            if (job.done) { clearInterval(timer); flash(job.error ? "err" : "ok", job.error || job.message); if (!job.error) await loadImages(); }
+          } catch (e) { clearInterval(timer); flash("err", e.message); }
+        }, 500);
+      } catch (e) { flash("err", e.message); }
+    }
+
     function renderStorage() {
       state.current = null;
       renderList();
@@ -2336,7 +2437,7 @@
       }
     }
 
-    function openDirPicker() {
+    function openDirPicker(targetId = "f-dir", onSelected = checkDir) {
       closeDialog();
       const modal = $("#dialog-modal");
       if (modal) modal.classList.add("dir-modal");
@@ -2344,10 +2445,10 @@
       setDialogAction("选择此目录", () => {
         const dir = dirPicker.selected || dirPicker.path;
         if (!dir) return;
-        const input = $("#f-dir");
+        const input = $("#" + targetId);
         if (input) input.value = dir;
         closeDialog();
-        checkDir();
+        onSelected();
       });
       $("#dialog-body").innerHTML = `
         <div class="dir-picker">
@@ -2376,7 +2477,7 @@
         });
       }
 
-      const initial = ($("#f-dir") && $("#f-dir").value.trim()) || "/";
+      const initial = ($("#" + targetId) && $("#" + targetId).value.trim()) || "/";
       renderDirPicker(initial);
     }
 
@@ -2597,7 +2698,9 @@
       if (fill && !unknown) fill.style.width = (job.percent || 0) + "%";
       if (sub) {
         const msg = job.message || "";
-        if (job.phase === "np4-images") {
+        if (job.phase === "import") {
+          sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
+        } else if (job.phase === "np4-images") {
           sub.textContent = job.total
             ? "第 " + Math.max(job.current - 1, 1) + " / " + Math.max(job.total - 2, 1) + " 个镜像"
             : "";
@@ -4740,6 +4843,7 @@
     $("#btn-projects").onclick = () => goHash("#/");
     $("#btn-cluster").onclick = () => goHash("#/cluster");
     $("#btn-repo").onclick = () => goHash("#/repo");
+    $("#btn-images").onclick = () => goHash("#/images");
     $("#btn-storage").onclick = () => goHash("#/storage");
     $("#btn-meta").onclick = (e) => {
       e.stopPropagation();

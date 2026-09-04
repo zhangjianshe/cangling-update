@@ -18,6 +18,7 @@
 7. 对正在运行的容器打开 **xterm 终端**（`docker compose exec`），并按容器查看日志
 8. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本；若项目目录有 `.env`，可同样编辑环境变量
 9. **数据库管理**：选择正在运行的容器（当前仅 postgres），浏览 schema / 表 / 视图，分页查看数据，或执行 SQL
+10. **集群镜像管理**：浏览、上传离线镜像包，查看各节点的 k3s/containerd 镜像，并将镜像包导入所选节点
 
 ## 安装
 ```bash
@@ -98,6 +99,7 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 |---|---|---|
 | `--bind` / `CANGLING_BIND` | `0.0.0.0` | 监听地址 |
 | `--port` / `CANGLING_PORT` | `5400` | 监听端口 |
+| `--images-dir` / `CANGLING_IMAGES_DIR` | `/opt/cangling/images` | 离线容器镜像包目录 |
 | `--data-dir` / `CANGLING_HOME` | `<程序目录>/config` | 数据目录 |
 | `--role` / `CANGLING_ROLE` | `standalone` | 集群角色：standalone / master / worker |
 | `--master` / `CANGLING_MASTER` | （无） | master 地址（worker 角色用）；不填则 UDP 广播发现 |
@@ -131,6 +133,8 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 ```
 
 > master / worker 角色必须设置令牌，否则拒绝启动。节点身份保存在各节点数据目录的 `node-id` 文件中，重启后保持不变。
+
+控制台“镜像”模块默认读取 `/opt/cangling/images` 中的 `.tar`、`.tar.gz` 和 `.tgz`，也可在页面或启动参数中指定其它绝对目录。主节点通过流式传输把所选镜像包发送到在线节点，并执行 `k3s ctr images import`；各节点需已安装 k3s，服务进程需有权读取目录和访问 k3s/containerd。
 
 主节点在程序目录下同时保存两份升级二进制（x86_64 与 ARM64 工作节点各用各的）：
 

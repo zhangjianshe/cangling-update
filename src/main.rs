@@ -9,6 +9,7 @@ mod docker;
 mod error;
 mod gitrepo;
 mod hostinfo;
+mod images;
 mod k3s;
 mod models;
 mod paths;
@@ -47,6 +48,10 @@ struct Cli {
     /// Listen port
     #[arg(long, env = "CANGLING_PORT", default_value_t = 5400)]
     port: u16,
+
+    /// 容器镜像离线包目录
+    #[arg(long, env = "CANGLING_IMAGES_DIR", default_value = "/opt/cangling/images")]
+    images_dir: PathBuf,
 
     /// Config directory (default: <executable-dir>/config)
     #[arg(long, env = "CANGLING_HOME", global = true)]
@@ -243,7 +248,14 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .with_context(|| format!("invalid listen address {}:{}", cli.bind, cli.port))?;
 
-    let state = AppState::new(paths, conn, docker, cli.port, cluster_cfg.clone());
+    let state = AppState::new(
+        paths,
+        conn,
+        docker,
+        cli.port,
+        cluster_cfg.clone(),
+        cli.images_dir,
+    );
     let app = api::router(state.clone());
 
     // 集群后台任务

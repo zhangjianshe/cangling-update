@@ -42,6 +42,9 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         || path == "/api/cluster/storage/unmount"
         || path == "/api/cluster/self-update"
         || path.starts_with("/api/cluster/self-update/")
+        || path == "/api/cluster/images"
+        || path == "/api/cluster/images/import"
+        || path.starts_with("/api/cluster/images/archive/")
         || (path.starts_with("/api/cluster/repo/") && path.ends_with("/download"))
     {
         return true;
@@ -511,6 +514,12 @@ mod tests {
         assert!(is_public(
             &Method::GET,
             "/api/cluster/self-update/linux-arm64"
+        ));
+        assert!(is_public(&Method::GET, "/api/cluster/images"));
+        assert!(is_public(&Method::POST, "/api/cluster/images/import"));
+        assert!(is_public(
+            &Method::GET,
+            "/api/cluster/images/archive/images.tar.gz"
         ));
         assert!(!is_public(&Method::GET, "/api/cluster/nodes"));
         assert!(!is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo"));

@@ -5,6 +5,7 @@ use crate::progress::JobHub;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -16,6 +17,7 @@ pub struct AppState {
     pub locks: Arc<Mutex<HashMap<String, Arc<AsyncMutex<()>>>>>,
     pub jobs: JobHub,
     pub port: u16,
+    pub images_dir: PathBuf,
     pub login_guard: LoginGuard,
     pub cluster: ClusterConfig,
     /// worker 侧当前发现的 master 地址（无则 None），供仓库代理等复用。
@@ -31,6 +33,7 @@ impl AppState {
         docker: Docker,
         port: u16,
         cluster: ClusterConfig,
+        images_dir: PathBuf,
     ) -> Self {
         Self {
             paths,
@@ -39,6 +42,7 @@ impl AppState {
             locks: Arc::new(Mutex::new(HashMap::new())),
             jobs: JobHub::default(),
             port,
+            images_dir,
             login_guard: LoginGuard::new(),
             master_url: Arc::new(Mutex::new(cluster.master_url.clone())),
             init: Arc::new(Mutex::new(crate::cluster::init::InitStatus::default())),

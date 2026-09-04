@@ -154,6 +154,7 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
             "/api/cluster/self-update/{arch}",
             get(crate::cluster::self_update::download),
         )
+        .merge(crate::images::cluster_routes())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_cluster_token,
