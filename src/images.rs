@@ -152,12 +152,19 @@ async fn installed_images() -> Result<Vec<String>, AppError> {
     let mut images: Vec<_> = String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|s| visible_image(s))
         .map(str::to_string)
         .collect();
     images.sort();
     images.dedup();
     Ok(images)
+}
+
+fn visible_image(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with("sha256:")
+        && !name.starts_with("docker.io/rancher/")
+        && !name.starts_with("docker.io.rancher/")
 }
 
 async fn overview(
@@ -560,5 +567,12 @@ mod tests {
     #[test]
     fn escapes_query_values() {
         assert_eq!(query_escape("/opt/a b"), "%2Fopt%2Fa%20b");
+    }
+    #[test]
+    fn hides_k3s_system_and_digest_only_images() {
+        assert!(!visible_image("docker.io/rancher/mirrored-pause:3.6"));
+        assert!(!visible_image("sha256:2d61ae04c2b8"));
+        assert!(!visible_image("docker.io.rancher/legacy:test"));
+        assert!(visible_image("registry.example.com/np4/service:latest"));
     }
 }
