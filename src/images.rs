@@ -7,7 +7,7 @@ use axum::body::Body;
 use axum::extract::{Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue};
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -64,6 +64,11 @@ struct WorkerImportRequest {
     source_url: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct DeleteRequest {
+    filenames: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ImportStarted {
     job_id: String,
@@ -73,6 +78,7 @@ pub fn console_routes() -> Router<AppState> {
     Router::new()
         .route("/api/images", get(overview))
         .route("/api/images/upload", post(upload))
+        .route("/api/images/packages", delete(delete_packages))
         .route("/api/images/import", post(start_import))
 }
 
@@ -310,16 +316,23 @@ async fn upload(
         let name = archive_name(raw)?;
         let temp = dir.join(format!(".{name}.{}.part", Uuid::new_v4()));
         let target = dir.join(&name);
-        let mut file = tokio::fs::File::create(&temp).await?;
-        while let Some(chunk) = field
-            .chunk()
-            .await
-            .map_err(|e| AppError::bad(e.to_string()))?
-        {
-            file.write_all(&chunk).await?;
+        let write_result: Result<(), AppError> = async {
+            let mut file = tokio::fs::File::create(&temp).await?;
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|e| AppError::bad(e.to_string()))?
+            {
+                file.write_all(&chunk).await?;
+            }
+            file.flush().await?;
+            Ok(())
         }
-        file.flush().await?;
-        drop(file);
+        .await;
+        if let Err(err) = write_result {
+            let _ = tokio::fs::remove_file(&temp).await;
+            return Err(err);
+        }
         tokio::fs::rename(temp, &target).await?;
         let size = tokio::fs::metadata(target).await?.len();
         return Ok(Json(ImagePackage {
@@ -329,6 +342,31 @@ async fn upload(
         }));
     }
     Err(AppError::bad("没有收到镜像包文件"))
+}
+
+async fn delete_packages(
+    State(state): State<AppState>,
+    Query(q): Query<DirectoryQuery>,
+    Json(body): Json<DeleteRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if body.filenames.is_empty() {
+        return Err(AppError::bad("请选择要删除的镜像包"));
+    }
+    let dir = selected_dir(&state, q.directory.as_deref())?;
+    let names = body
+        .filenames
+        .iter()
+        .map(|name| archive_name(name))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut deleted = 0usize;
+    for name in names {
+        match tokio::fs::remove_file(dir.join(name)).await {
+            Ok(()) => deleted += 1,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(AppError::internal(format!("删除镜像包失败: {err}"))),
+        }
+    }
+    Ok(Json(serde_json::json!({ "deleted": deleted })))
 }
 
 async fn start_import(

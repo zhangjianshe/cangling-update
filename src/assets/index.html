@@ -1935,6 +1935,8 @@
             <button class="btn" id="btn-images-dir">浏览目录</button>
             <input id="images-file" type="file" accept=".tar,.gz,.tgz,application/x-tar,application/gzip" hidden />
             <button class="btn primary" id="btn-images-upload">上传镜像包</button>
+            <button class="btn danger" id="btn-images-cancel" hidden>取消上传</button>
+            <button class="btn danger" id="btn-images-delete" disabled>删除所选</button>
           </div>
           <p class="hint" id="images-directory">正在加载…</p>
           <div id="image-packages"><div class="empty">正在加载…</div></div>
@@ -1956,6 +1958,8 @@
       $("#btn-images-dir").onclick = () => openDirPicker("images-dir", async () => { localStorage.setItem("cangling_images_dir", $("#images-dir").value.trim()); await loadImages(); });
       $("#images-dir").onchange = () => { localStorage.setItem("cangling_images_dir", $("#images-dir").value.trim()); loadImages(); };
       $("#btn-images-upload").onclick = () => $("#images-file").click();
+      $("#btn-images-cancel").onclick = () => { if (state.imageUpload) state.imageUpload.abort(); };
+      $("#btn-images-delete").onclick = deleteImagePackages;
       $("#images-file").onchange = uploadImagePackage;
       $("#node-image-search").oninput = () => renderNodeImages();
       await loadImages();
@@ -1974,11 +1978,16 @@
         if (dir) dir.innerHTML = `目录：<code>${esc(data.directory)}</code> · ${data.packages.length} 个镜像包`;
         const packages = $("#image-packages");
         if (packages) packages.innerHTML = data.packages.length ? `
-          <table><thead><tr><th>镜像包</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>
-          ${data.packages.map(p => `<tr><td><code>${esc(p.name)}</code></td><td>${fmtBytes(p.size)}</td><td>${fmtDateTime(p.modified)}</td><td><button class="btn image-import" data-name="${esc(p.name)}">导入所选节点</button></td></tr>`).join("")}
+          <table><thead><tr><th><input id="image-packages-all" type="checkbox" /></th><th>镜像包</th><th>大小</th><th>修改时间</th><th></th></tr></thead><tbody>
+          ${data.packages.map(p => `<tr><td><input class="image-package-select" type="checkbox" value="${esc(p.name)}" /></td><td><code>${esc(p.name)}</code></td><td>${fmtBytes(p.size)}</td><td>${fmtDateTime(p.modified)}</td><td><button class="btn image-import" data-name="${esc(p.name)}">导入所选节点</button></td></tr>`).join("")}
           </tbody></table>` : `<div class="empty">目录中没有 tar、tar.gz 或 tgz 镜像包</div>`;
         renderNodeImages();
         document.querySelectorAll(".image-import").forEach(b => b.onclick = () => importImagePackage(b.dataset.name));
+        const packageChecks = Array.from(document.querySelectorAll(".image-package-select"));
+        packageChecks.forEach(c => c.onchange = updateImagePackageSelection);
+        const packageAll = $("#image-packages-all");
+        if (packageAll) packageAll.onchange = () => { packageChecks.forEach(c => c.checked = packageAll.checked); updateImagePackageSelection(); };
+        updateImagePackageSelection();
       } catch (e) { flash("err", e.message); }
     }
 
@@ -2021,15 +2030,40 @@
       if (!file) return;
       const fd = new FormData(); fd.append("file", file, file.name);
       const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/images/upload" + imageDirectoryQuery());
+      state.imageUpload = xhr;
       const token = sessionToken(); if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
       showProgress("images-prog", true);
+      $("#btn-images-upload").disabled = true;
+      $("#btn-images-cancel").hidden = false;
       xhr.upload.onprogress = e => renderProgress("images-prog", { message:"正在上传 " + file.name,current:e.loaded,total:e.total,percent:e.lengthComputable ? Math.round(e.loaded * 100 / e.total) : 0,done:false });
       xhr.onload = async () => {
+        state.imageUpload = null; $("#btn-images-upload").disabled = false; $("#btn-images-cancel").hidden = true;
         input.value = "";
         if (xhr.status >= 200 && xhr.status < 300) { renderProgress("images-prog", {message:"上传完成",current:1,total:1,percent:100,done:true}); flash("ok", "镜像包上传完成"); await loadImages(); }
         else { let msg=xhr.responseText; try { msg=JSON.parse(msg).error; } catch {} flash("err", msg || "上传失败"); }
       };
-      xhr.onerror = () => flash("err", "上传失败：网络连接中断"); xhr.send(fd);
+      xhr.onerror = () => { state.imageUpload = null; $("#btn-images-upload").disabled = false; $("#btn-images-cancel").hidden = true; flash("err", "上传失败：网络连接中断"); };
+      xhr.onabort = () => { state.imageUpload = null; input.value = ""; $("#btn-images-upload").disabled = false; $("#btn-images-cancel").hidden = true; renderProgress("images-prog", {message:"上传已取消",current:0,total:1,percent:0,done:true}); flash("ok", "已取消上传"); };
+      xhr.send(fd);
+    }
+
+    function updateImagePackageSelection() {
+      const checks = Array.from(document.querySelectorAll(".image-package-select"));
+      const selected = checks.filter(c => c.checked);
+      const button = $("#btn-images-delete");
+      if (button) { button.disabled = selected.length === 0; button.textContent = selected.length ? `删除所选 (${selected.length})` : "删除所选"; }
+      const all = $("#image-packages-all");
+      if (all) { all.checked = checks.length > 0 && selected.length === checks.length; all.indeterminate = selected.length > 0 && selected.length < checks.length; }
+    }
+
+    async function deleteImagePackages() {
+      const filenames = Array.from(document.querySelectorAll(".image-package-select:checked")).map(c => c.value);
+      if (!filenames.length) return;
+      if (!(await confirmDialog(`确定删除所选的 ${filenames.length} 个镜像包？`, {danger:true}))) return;
+      try {
+        const result = await api("/api/images/packages" + imageDirectoryQuery(), {method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({filenames})});
+        flash("ok", `已删除 ${result.deleted} 个镜像包`); await loadImages();
+      } catch (e) { flash("err", e.message); }
     }
 
     async function importImagePackage(filename) {
