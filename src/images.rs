@@ -40,8 +40,14 @@ struct NodeImages {
     node_name: String,
     address: String,
     status: String,
-    images: Vec<String>,
+    images: Vec<InstalledImage>,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InstalledImage {
+    name: String,
+    size: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,9 +169,9 @@ async fn scan_packages(dir: &FsPath) -> Result<Vec<ImagePackage>, AppError> {
     Ok(out)
 }
 
-async fn installed_images() -> Result<Vec<String>, AppError> {
+async fn installed_images() -> Result<Vec<InstalledImage>, AppError> {
     let output = tokio::process::Command::new("k3s")
-        .args(["ctr", "images", "list", "-q"])
+        .args(["ctr", "images", "list"])
         .output()
         .await
         .map_err(|e| AppError::internal(format!("执行 k3s 失败: {e}")))?;
@@ -175,15 +181,38 @@ async fn installed_images() -> Result<Vec<String>, AppError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    let mut images: Vec<_> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|s| visible_image(s))
-        .map(str::to_string)
-        .collect();
-    images.sort();
-    images.dedup();
-    Ok(images)
+    Ok(parse_image_list(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn parse_image_list(output: &str) -> Vec<InstalledImage> {
+    let mut images = std::collections::BTreeMap::new();
+    for line in output.lines().map(str::trim) {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        if fields.len() < 5 || fields[0] == "REF" || !visible_image(fields[0]) {
+            continue;
+        }
+        let size = parse_image_size(fields[3], fields[4]).unwrap_or(0);
+        images.insert(fields[0].to_string(), size);
+    }
+    images
+        .into_iter()
+        .map(|(name, size)| InstalledImage { name, size })
+        .collect()
+}
+
+fn parse_image_size(value: &str, unit: &str) -> Option<u64> {
+    let value = value.parse::<f64>().ok()?;
+    let factor = match unit.to_ascii_lowercase().as_str() {
+        "b" => 1f64,
+        "kib" => 1024f64,
+        "mib" => 1024f64.powi(2),
+        "gib" => 1024f64.powi(3),
+        "kb" => 1000f64,
+        "mb" => 1000f64.powi(2),
+        "gb" => 1000f64.powi(3),
+        _ => return None,
+    };
+    Some((value * factor).round() as u64)
 }
 
 fn visible_image(name: &str) -> bool {
@@ -267,7 +296,7 @@ async fn collect_nodes(state: &AppState) -> Result<Vec<NodeImages>, AppError> {
                     node_name: name,
                     address: addr,
                     status: "online".into(),
-                    images: serde_json::from_value(json).unwrap_or_default(),
+                    images: parse_remote_images(json),
                     error: None,
                 }),
                 Ok((status, json)) => out.push(NodeImages {
@@ -296,7 +325,7 @@ fn local_node(
     id: &str,
     name: &str,
     addr: &str,
-    result: Result<Vec<String>, AppError>,
+    result: Result<Vec<InstalledImage>, AppError>,
 ) -> NodeImages {
     match result {
         Ok(images) => NodeImages {
@@ -316,6 +345,24 @@ fn local_node(
             error: Some(e.to_string()),
         },
     }
+}
+
+fn parse_remote_images(value: serde_json::Value) -> Vec<InstalledImage> {
+    let Some(items) = value.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            if let Some(name) = item.as_str() {
+                return Some(InstalledImage {
+                    name: name.to_string(),
+                    size: 0,
+                });
+            }
+            serde_json::from_value(item.clone()).ok()
+        })
+        .collect()
 }
 
 async fn upload(
@@ -612,7 +659,7 @@ async fn import_cluster(
     Ok(())
 }
 
-async fn worker_images() -> Result<Json<Vec<String>>, AppError> {
+async fn worker_images() -> Result<Json<Vec<InstalledImage>>, AppError> {
     Ok(Json(installed_images().await?))
 }
 
@@ -625,7 +672,11 @@ async fn worker_image_delete(
 }
 
 async fn remove_images(images: &[String]) -> Result<(), AppError> {
-    let installed: std::collections::HashSet<_> = installed_images().await?.into_iter().collect();
+    let installed: std::collections::HashSet<_> = installed_images()
+        .await?
+        .into_iter()
+        .map(|image| image.name)
+        .collect();
     for image in images {
         if !installed.contains(image) {
             continue;
@@ -812,5 +863,13 @@ mod tests {
         assert!(validate_image_refs(&["registry/app:latest".into()]).is_ok());
         assert!(validate_image_refs(&["--all".into()]).is_err());
         assert!(validate_image_refs(&["bad image".into()]).is_err());
+    }
+    #[test]
+    fn parses_ctr_image_names_and_sizes() {
+        let output = "REF TYPE DIGEST SIZE PLATFORMS LABELS\nregistry.local/team/broker:1.2 application/vnd.oci.image.manifest.v1+json sha256:abc 35.6 MiB linux/amd64 -\ndocker.io/rancher/pause:3.6 application/vnd.oci.image.manifest.v1+json sha256:def 300.0 KiB linux/amd64 -\n";
+        let images = parse_image_list(output);
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].name, "registry.local/team/broker:1.2");
+        assert_eq!(images[0].size, 37_329_306);
     }
 }

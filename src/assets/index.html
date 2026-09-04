@@ -1981,7 +1981,7 @@
         state.images = data;
         const availablePackages = new Set(data.packages.map(p => p.name));
         state.selectedImagePackages = new Set(Array.from(state.selectedImagePackages || []).filter(name => availablePackages.has(name)));
-        const availableImages = new Set(data.nodes.flatMap(n => n.images || []));
+        const availableImages = new Set(data.nodes.flatMap(n => (n.images || []).map(image => typeof image === "string" ? image : image.name)));
         state.selectedNodeImages = new Set(Array.from(state.selectedNodeImages || []).filter(name => availableImages.has(name)));
         const dir = $("#images-directory");
         if (dir) dir.innerHTML = `目录：<code>${esc(data.directory)}</code> · ${data.packages.length} 个镜像包`;
@@ -2024,8 +2024,11 @@
       const query = (($("#node-image-search") && $("#node-image-search").value) || "").trim().toLowerCase();
       const nodes = state.images.nodes || [];
       if (!nodes.length) { root.innerHTML = `<div class="empty">暂无节点</div>`; return; }
-      const imageSets = nodes.map(n => new Set(n.images || []));
-      const images = Array.from(new Set(nodes.flatMap(n => n.images || [])))
+      const normalized = nodes.map(n => (n.images || []).map(image => typeof image === "string" ? {name:image,size:0} : image));
+      const imageSets = normalized.map(images => new Set(images.map(image => image.name)));
+      const imageSizes = new Map();
+      normalized.flat().forEach(image => imageSizes.set(image.name, Math.max(imageSizes.get(image.name) || 0, Number(image.size) || 0)));
+      const images = Array.from(imageSizes.keys())
         .filter(image => !query || image.toLowerCase().includes(query))
         .sort((a, b) => a.localeCompare(b));
       const headers = nodes.map(n => {
@@ -2033,14 +2036,14 @@
         const status = n.error ? n.error : n.status === "online" ? `${n.images.length} 个镜像` : "离线";
         return `<th title="${esc(n.address)} · ${esc(status)}"><label><input class="image-node" type="checkbox" value="${esc(n.node_id)}" ${n.status !== "online" ? "disabled" : ""} ${checked ? "checked" : ""} /> ${esc(n.node_name)}</label><div class="hint">${esc(status)}</div></th>`;
       }).join("");
-      const rows = images.map(image => `<tr><td><label><input class="node-image-select" type="checkbox" value="${esc(image)}" ${(state.selectedNodeImages || new Set()).has(image) ? "checked" : ""} /> <code>${esc(image)}</code></label></td>${nodes.map((n, i) => {
+      const rows = images.map(image => `<tr><td><label title="${esc(image)}"><input class="node-image-select" type="checkbox" value="${esc(image)}" ${(state.selectedNodeImages || new Set()).has(image) ? "checked" : ""} /> <code>${esc(shortImageName(image))}</code></label></td><td>${imageSizes.get(image) ? fmtBytes(imageSizes.get(image)) : "—"}</td>${nodes.map((n, i) => {
         if (n.status !== "online" || n.error) return `<td class="hint" title="节点不可用">—</td>`;
         return imageSets[i].has(image)
           ? `<td><span class="image-installed" title="已安装">✓</span></td>`
           : `<td class="hint" title="未安装">—</td>`;
       }).join("")}</tr>`).join("");
-      const body = rows || `<tr><td colspan="${nodes.length + 1}" class="empty">没有找到</td></tr>`;
-      root.innerHTML = `<div class="image-matrix-wrap"><table class="image-matrix"><thead><tr><th><label><input id="image-nodes-all" type="checkbox" checked /> 镜像名称</label></th>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
+      const body = rows || `<tr><td colspan="${nodes.length + 2}" class="empty">没有找到</td></tr>`;
+      root.innerHTML = `<div class="image-matrix-wrap"><table class="image-matrix"><thead><tr><th><label><input id="image-nodes-all" type="checkbox" checked /> 镜像名称</label></th><th>大小</th>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
       const all = $("#image-nodes-all");
       if (all) {
         const enabled = Array.from(document.querySelectorAll(".image-node:not(:disabled)"));
@@ -2050,6 +2053,11 @@
       }
       document.querySelectorAll(".node-image-select").forEach(c => c.onchange = () => { if (c.checked) state.selectedNodeImages.add(c.value); else state.selectedNodeImages.delete(c.value); updateNodeImageDeleteButton(); });
       updateNodeImageDeleteButton();
+    }
+
+    function shortImageName(image) {
+      const parts = String(image || "").split("/");
+      return parts[parts.length - 1] || image;
     }
 
     function uploadImagePackage() {
