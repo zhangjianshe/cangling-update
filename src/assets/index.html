@@ -1305,6 +1305,7 @@
     function route() {
       stopComposePoll();
       stopClusterPoll();
+      stopImageMonitorPoll();
       comboClose();
       closeDialog();
       setMetaPanelOpen(false);
@@ -1968,6 +1969,7 @@
       state.selectedImagePackages = new Set();
       state.selectedNodeImages = new Set();
       await loadImages();
+      startImageMonitorPoll();
     }
 
     function imageDirectoryQuery() {
@@ -1987,7 +1989,48 @@
         if (dir) dir.innerHTML = `目录：<code>${esc(data.directory)}</code> · ${data.packages.length} 个镜像包`;
         renderImagePackages();
         renderNodeImages();
+        if (data.active_job && !data.active_job.done) watchActiveImageJob(data.active_job.id, data.active_job);
       } catch (e) { flash("err", e.message); }
+    }
+
+    function startImageMonitorPoll() {
+      stopImageMonitorPoll();
+      state.imageMonitorTimer = setInterval(async () => {
+        if ((location.hash || "#/") !== "#/images" || state.imageTaskTimer) return;
+        try {
+          const job = await api("/api/images/active-job");
+          if (job && !job.done) watchActiveImageJob(job.id, job);
+        } catch (_) {}
+      }, 1500);
+    }
+
+    function stopImageMonitorPoll() {
+      if (state.imageMonitorTimer) { clearInterval(state.imageMonitorTimer); state.imageMonitorTimer = null; }
+      if (state.imageTaskTimer) { clearInterval(state.imageTaskTimer); state.imageTaskTimer = null; }
+      state.imageTaskId = null;
+    }
+
+    function watchActiveImageJob(id, initial = null) {
+      if (state.imageTaskId === id && state.imageTaskTimer) return;
+      if (state.imageTaskTimer) clearInterval(state.imageTaskTimer);
+      state.imageTaskId = id;
+      if (initial) renderProgress("images-prog", initial);
+      showProgress("images-prog", true);
+      const poll = async () => {
+        try {
+          const job = await api("/api/jobs/" + id);
+          renderProgress("images-prog", job);
+          if (job.done) {
+            clearInterval(state.imageTaskTimer); state.imageTaskTimer = null; state.imageTaskId = null;
+            flash(job.error ? "err" : "ok", job.error || job.message);
+            if (!job.error) { showProgress("images-prog", false); await loadImages(); }
+          }
+        } catch (e) {
+          clearInterval(state.imageTaskTimer); state.imageTaskTimer = null; state.imageTaskId = null; flash("err", e.message);
+        }
+      };
+      state.imageTaskTimer = setInterval(poll, 500);
+      poll();
     }
 
     function renderImagePackages() {
@@ -2134,13 +2177,7 @@
       try {
         const directory = ($("#images-dir") && $("#images-dir").value.trim()) || null;
         const started = await api("/api/images/import", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({filename,directory,node_ids:nodeIds})});
-        showProgress("images-prog", true);
-        const timer = setInterval(async () => {
-          try {
-            const job = await api("/api/jobs/" + started.job_id); renderProgress("images-prog", job);
-            if (job.done) { clearInterval(timer); flash(job.error ? "err" : "ok", job.error || job.message); if (!job.error) { showProgress("images-prog", false); await loadImages(); } }
-          } catch (e) { clearInterval(timer); flash("err", e.message); }
-        }, 500);
+        watchActiveImageJob(started.job_id);
       } catch (e) { flash("err", e.message); }
     }
 

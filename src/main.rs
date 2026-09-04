@@ -258,6 +258,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let app = api::router(state.clone());
 
+    if cluster_cfg.role != cluster::Role::Worker {
+        tokio::spawn(images::monitor(state.clone()));
+    }
+
     // 集群后台任务
     if cluster_cfg.role == cluster::Role::Master {
         match crate::binaries::seed_own_binary(&state.paths.exe_dir) {

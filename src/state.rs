@@ -18,6 +18,8 @@ pub struct AppState {
     pub jobs: JobHub,
     pub port: u16,
     pub images_dir: PathBuf,
+    pub image_import_lock: Arc<AsyncMutex<()>>,
+    pub active_image_job: Arc<Mutex<Option<String>>>,
     pub login_guard: LoginGuard,
     pub cluster: ClusterConfig,
     /// worker 侧当前发现的 master 地址（无则 None），供仓库代理等复用。
@@ -43,6 +45,8 @@ impl AppState {
             jobs: JobHub::default(),
             port,
             images_dir,
+            image_import_lock: Arc::new(AsyncMutex::new(())),
+            active_image_job: Arc::new(Mutex::new(None)),
             login_guard: LoginGuard::new(),
             master_url: Arc::new(Mutex::new(cluster.master_url.clone())),
             init: Arc::new(Mutex::new(crate::cluster::init::InitStatus::default())),

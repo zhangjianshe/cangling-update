@@ -56,6 +56,7 @@ struct ImageOverview {
     packages: Vec<ImagePackage>,
     nodes: Vec<NodeImages>,
     role: String,
+    active_job: Option<crate::progress::JobProgress>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,10 +98,17 @@ struct ImportStarted {
 pub fn console_routes() -> Router<AppState> {
     Router::new()
         .route("/api/images", get(overview))
+        .route("/api/images/active-job", get(console_active_job))
         .route("/api/images/upload", post(upload))
         .route("/api/images/packages", delete(delete_packages))
         .route("/api/images/node-images", delete(start_node_image_delete))
         .route("/api/images/import", post(start_import))
+}
+
+async fn console_active_job(
+    State(state): State<AppState>,
+) -> Json<Option<crate::progress::JobProgress>> {
+    Json(active_image_job(&state))
 }
 
 pub fn cluster_routes() -> Router<AppState> {
@@ -235,7 +243,27 @@ async fn overview(
         packages,
         nodes,
         role: state.cluster.role.as_str().into(),
+        active_job: active_image_job(&state),
     }))
+}
+
+fn active_image_job(state: &AppState) -> Option<crate::progress::JobProgress> {
+    let id = state.active_image_job.lock().ok()?.clone()?;
+    state.jobs.get(&id).filter(|job| !job.done)
+}
+
+fn set_active_image_job(state: &AppState, id: &str) {
+    if let Ok(mut active) = state.active_image_job.lock() {
+        *active = Some(id.to_string());
+    }
+}
+
+fn clear_active_image_job(state: &AppState, id: &str) {
+    if let Ok(mut active) = state.active_image_job.lock() {
+        if active.as_deref() == Some(id) {
+            *active = None;
+        }
+    }
 }
 
 fn is_online(last_seen: &str) -> bool {
@@ -446,15 +474,96 @@ async fn start_import(
     if !dir.join(&filename).is_file() {
         return Err(AppError::not_found("镜像包不存在"));
     }
+    let job = queue_import(state, dir, filename, body.node_ids, false);
+    Ok(Json(ImportStarted { job_id: job.id }))
+}
+
+fn queue_import(
+    state: AppState,
+    dir: PathBuf,
+    filename: String,
+    node_ids: Vec<String>,
+    automatic: bool,
+) -> crate::progress::JobProgress {
     let job = state.jobs.create();
     let job_id = job.id.clone();
-    let run_state = state.clone();
+    state.jobs.set(
+        &job_id,
+        "pending",
+        if automatic {
+            "发现新镜像包，等待自动部署"
+        } else {
+            "等待导入镜像包"
+        },
+        0,
+        0,
+    );
     tokio::spawn(async move {
-        if let Err(e) = import_cluster(&run_state, &dir, &filename, &body.node_ids, &job_id).await {
-            run_state.jobs.finish_err(&job_id, &e.to_string());
+        let _guard = state.image_import_lock.lock().await;
+        set_active_image_job(&state, &job_id);
+        if automatic {
+            state
+                .jobs
+                .set(&job_id, "import", &format!("自动部署 {filename}"), 0, 0);
         }
+        if let Err(err) = import_cluster(&state, &dir, &filename, &node_ids, &job_id).await {
+            state.jobs.finish_err(&job_id, &err.to_string());
+        }
+        clear_active_image_job(&state, &job_id);
     });
-    Ok(Json(ImportStarted { job_id: job.id }))
+    job
+}
+
+/// Monitor the configured image directory. Existing files form the startup
+/// baseline; a new/changed archive must remain unchanged for one poll before
+/// it is queued, so files copied into the directory are never imported halfway.
+pub async fn monitor(state: AppState) {
+    type Signature = (u64, Option<std::time::SystemTime>);
+    let dir = state.images_dir.clone();
+    let mut baseline = package_signatures(&dir).await.unwrap_or_default();
+    let mut candidates: std::collections::HashMap<String, Signature> =
+        std::collections::HashMap::new();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let Ok(current) = package_signatures(&dir).await else {
+            continue;
+        };
+        baseline.retain(|name, _| current.contains_key(name));
+        candidates.retain(|name, _| current.contains_key(name));
+        for (name, signature) in &current {
+            if baseline.get(name) == Some(signature) {
+                candidates.remove(name);
+                continue;
+            }
+            if candidates.get(name) == Some(signature) {
+                baseline.insert(name.clone(), *signature);
+                candidates.remove(name);
+                tracing::info!(file = %name, "检测到稳定的新镜像包，开始自动部署");
+                queue_import(state.clone(), dir.clone(), name.clone(), Vec::new(), true);
+            } else {
+                candidates.insert(name.clone(), *signature);
+            }
+        }
+    }
+}
+
+async fn package_signatures(
+    dir: &FsPath,
+) -> std::io::Result<std::collections::HashMap<String, (u64, Option<std::time::SystemTime>)>> {
+    tokio::fs::create_dir_all(dir).await?;
+    let mut entries = tokio::fs::read_dir(dir).await?;
+    let mut out = std::collections::HashMap::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if archive_name(&name).is_err() {
+            continue;
+        }
+        let meta = entry.metadata().await?;
+        if meta.is_file() {
+            out.insert(name, (meta.len(), meta.modified().ok()));
+        }
+    }
+    Ok(out)
 }
 
 async fn start_node_image_delete(
