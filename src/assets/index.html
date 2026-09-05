@@ -386,6 +386,16 @@
       display: flex; flex-direction: column;
     }
     #panel-db > .hint, #panel-db > .flash { flex: 0 0 auto; }
+    #panel-files:not([hidden]) {
+      flex: 1 1 auto; min-height: 0; margin-bottom: 0; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    #panel-files .repo-browse { gap: 0; }
+    #panel-files .repo-tree-panel, #panel-files .repo-file-panel { border-radius: 0; }
+    #panel-files .repo-tree-panel { border-right: 0; }
+    .project-file-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .project-file-editor { flex: 1; min-height: 0; width: 100%; background: var(--log-bg); }
+    .project-file-editor .ace_editor, .project-file-editor .ace_editor * { border-radius: 0 !important; }
     .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; flex: 0 0 auto; }
     .db-toolbar .field { margin: 0; min-width: 150px; flex: 0 1 170px; }
     .db-toolbar .combo { width: 100%; }
@@ -911,6 +921,11 @@
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.22 14.78a.75.75 0 0 0 1.06-1.06L4.56 12h8.69a.75.75 0 0 0 0-1.5H4.56l1.72-1.72a.75.75 0 0 0-1.06-1.06l-3 3a.75.75 0 0 0 0 1.06Zm5.56-6.5a.75.75 0 1 1-1.06-1.06l1.72-1.72H2.75a.75.75 0 0 1 0-1.5h8.69L9.72 2.28a.75.75 0 0 1 1.06-1.06l3 3a.75.75 0 0 1 0 1.06Z"/></svg>',
       },
       {
+        id: "files",
+        label: "文件浏览",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>',
+      },
+      {
         id: "db",
         label: "数据库管理",
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 1c3.5 0 6.5.9 6.5 2.2v9.6C14.5 14.1 11.5 15 8 15s-6.5-.9-6.5-2.2V3.2C1.5 1.9 4.5 1 8 1m0 1.2c-2.9 0-5.2.7-5.2 1.3S5.1 4.8 8 4.8s5.2-.7 5.2-1.3S10.9 2.2 8 2.2M2.8 6.1C3.9 6.7 5.8 7.1 8 7.1s4.1-.4 5.2-1v2.2c0 .6-2.3 1.3-5.2 1.3S2.8 8.9 2.8 8.3zm0 4.1c1.1.6 3 1 5.2 1s4.1-.4 5.2-1v2.1c0 .6-2.3 1.3-5.2 1.3s-5.2-.7-5.2-1.3z"/></svg>',
@@ -920,6 +935,7 @@
     const dirPicker = { path: "", selected: "", parent: null, token: 0 };
     const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
     const composePoll = { timer: null, inflight: false };
+    const projectFiles = { path: "", selected: "", editor: null, resizeObs: null, loadedProject: "" };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false };
@@ -2982,6 +2998,7 @@
 
     async function openProject(id) {
       try {
+        const previousProjectId = state.current && state.current.id;
         state.current = await api("/api/projects/" + id);
         const [versions, compose] = await Promise.all([
           api("/api/projects/" + id + "/versions"),
@@ -3010,6 +3027,11 @@
         state.versions = versions;
         state.compose = compose;
         state.files = [];
+        if (previousProjectId !== id) {
+          projectFiles.path = "";
+          projectFiles.selected = "";
+          projectFiles.loadedProject = "";
+        }
         renderList();
         renderProject();
       } catch (e) {
@@ -3128,6 +3150,7 @@
     }
 
     function renderProject() {
+      destroyProjectFileEditor();
       const p = state.current;
       const c = state.compose || {};
       const services = composeServiceRows(c.services);
@@ -3207,6 +3230,29 @@
             <tbody id="compose-svc-body">${services || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
         </div>
+        <div class="card tab-panel" id="panel-files" data-panel="files" role="tabpanel" aria-labelledby="tab-files">
+          <div class="repo-browse">
+            <div class="repo-tree-panel">
+              <div class="repo-tree-toolbar">
+                <button class="btn" id="project-files-up" type="button" title="上级目录">↑ 上级</button>
+                <button class="btn" id="project-files-refresh" type="button" title="刷新目录">刷新</button>
+                <span class="repo-path" id="project-files-path">/</span>
+              </div>
+              <div class="repo-tree-list" id="project-files-tree"><div class="repo-list-empty">打开此 TAB 后加载项目目录</div></div>
+            </div>
+            <div class="repo-file-panel">
+              <div class="repo-file-head project-file-head">
+                <span class="repo-path" id="project-file-title">选择文件查看内容</span>
+                <div class="row">
+                  <span class="hint" id="project-file-mode"></span>
+                  <button class="btn primary" id="project-file-save" type="button" hidden>保存</button>
+                </div>
+              </div>
+              <div class="project-file-editor" id="project-file-editor" hidden></div>
+              <pre class="repo-file-content" id="project-file-preview"></pre>
+            </div>
+          </div>
+        </div>
         <div class="card tab-panel" id="panel-versions" data-panel="versions" role="tabpanel" aria-labelledby="tab-versions">
           ${sizeHint ? `<p class="hint" style="margin-top:0">${esc(sizeHint)}</p>` : ""}
           <table>
@@ -3262,6 +3308,9 @@
       $("#btn-restart").onclick = () => compose("restart");
       $("#btn-edit-compose").onclick = openComposeEditor;
       if ($("#btn-edit-env")) $("#btn-edit-env").onclick = openEnvEditor;
+      $("#project-files-up").onclick = projectFilesUp;
+      $("#project-files-refresh").onclick = loadProjectFiles;
+      $("#project-file-save").onclick = saveProjectFile;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
@@ -3280,7 +3329,7 @@
       comboClose();
       const cur = currentProjectTab();
       const main = $("#main");
-      if (main) main.classList.toggle("db-fill", cur === "db");
+      if (main) main.classList.toggle("db-fill", cur === "db" || cur === "files");
       for (const btn of document.querySelectorAll("[data-tab]")) {
         const on = btn.getAttribute("data-tab") === cur;
         btn.classList.toggle("active", on);
@@ -3291,6 +3340,181 @@
         panel.hidden = panel.getAttribute("data-panel") !== cur;
       }
       if (cur === "db") dbEnsureLoaded();
+      if (cur === "files") loadProjectFiles();
+    }
+
+    function projectFilesDisplayPath() {
+      return "/" + (projectFiles.path || "").replace(/^\/+|\/+$/g, "");
+    }
+
+    function destroyProjectFileEditor() {
+      if (projectFiles.resizeObs) {
+        try { projectFiles.resizeObs.disconnect(); } catch {}
+        projectFiles.resizeObs = null;
+      }
+      if (projectFiles.editor) {
+        try { projectFiles.editor.destroy(); } catch {}
+        projectFiles.editor = null;
+      }
+    }
+
+    function resetProjectFileView(title) {
+      projectFiles.selected = "";
+      destroyProjectFileEditor();
+      const head = $("#project-file-title");
+      const mode = $("#project-file-mode");
+      const save = $("#project-file-save");
+      const editor = $("#project-file-editor");
+      const preview = $("#project-file-preview");
+      if (head) head.textContent = title || "选择文件查看内容";
+      if (mode) mode.textContent = "";
+      if (save) save.hidden = true;
+      if (editor) editor.hidden = true;
+      if (preview) { preview.hidden = false; preview.textContent = ""; }
+    }
+
+    async function loadProjectFiles() {
+      if (!state.current || currentProjectTab() !== "files") return;
+      const tree = $("#project-files-tree");
+      const path = $("#project-files-path");
+      const up = $("#project-files-up");
+      if (!tree) return;
+      if (path) path.textContent = projectFilesDisplayPath();
+      if (up) up.disabled = !projectFiles.path;
+      tree.innerHTML = `<div class="repo-list-empty">加载中…</div>`;
+      try {
+        const entries = await api(
+          "/api/projects/" + state.current.id + "/files?path=" + encodeURIComponent(projectFiles.path)
+        );
+        projectFiles.loadedProject = state.current.id;
+        renderProjectFiles(entries || []);
+      } catch (e) {
+        tree.innerHTML = `<div class="repo-list-empty bad">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderProjectFiles(entries) {
+      const tree = $("#project-files-tree");
+      if (!tree) return;
+      if (!entries.length) {
+        tree.innerHTML = `<div class="repo-list-empty">空目录</div>`;
+        return;
+      }
+      tree.innerHTML = entries.map(entry => `
+        <button type="button" class="repo-item" data-project-path="${esc(entry.path)}" data-project-dir="${entry.is_dir ? "1" : "0"}">
+          <span class="repo-item-icon">${entry.is_dir ? REPO_ICON_DIR : REPO_ICON_FILE}</span>
+          <span class="repo-item-name">${esc(entry.name)}</span>
+          <span class="repo-item-size">${entry.is_dir ? "" : fmtBytes(entry.size || 0)}</span>
+        </button>`).join("");
+      tree.querySelectorAll("[data-project-path]").forEach(button => {
+        button.onclick = () => {
+          const filePath = button.getAttribute("data-project-path") || "";
+          if (button.getAttribute("data-project-dir") === "1") {
+            projectFiles.path = filePath;
+            resetProjectFileView();
+            loadProjectFiles();
+          } else {
+            openProjectFile(filePath);
+          }
+        };
+      });
+    }
+
+    function projectFileMode(path) {
+      const name = String(path || "").toLowerCase();
+      if (name.endsWith(".yaml") || name.endsWith(".yml")) return "ace/mode/yaml";
+      if (name.endsWith(".ini") || name.endsWith(".conf") || name.endsWith(".cfg") || /(^|\/)\.env(\.|$)/.test(name)) {
+        return "ace/mode/ini";
+      }
+      return "ace/mode/text";
+    }
+
+    async function mountProjectFileEditor(content, path) {
+      await loadAce();
+      destroyProjectFileEditor();
+      const el = $("#project-file-editor");
+      if (!el) return;
+      el.hidden = false;
+      const editor = window.ace.edit(el, {
+        mode: projectFileMode(path),
+        theme: aceThemeName(),
+        useWorker: false,
+        fontSize: 16,
+        tabSize: 2,
+        useSoftTabs: true,
+        wrap: false,
+        showPrintMargin: false,
+        fadeFoldWidgets: true,
+        scrollPastEnd: 0.4,
+        fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
+      });
+      editor.setValue(content || "", -1);
+      editor.session.getUndoManager().markClean();
+      editor.commands.addCommand({
+        name: "saveProjectFile",
+        bindKey: { win: "Ctrl-S", mac: "Command-S" },
+        exec: saveProjectFile,
+      });
+      projectFiles.editor = editor;
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => { if (projectFiles.editor) projectFiles.editor.resize(); });
+        ro.observe(el);
+        projectFiles.resizeObs = ro;
+      }
+      requestAnimationFrame(() => editor.resize());
+    }
+
+    async function openProjectFile(path) {
+      if (!state.current) return;
+      resetProjectFileView("/" + path + " · 加载中…");
+      try {
+        const file = await api(
+          "/api/projects/" + state.current.id + "/files/content?path=" + encodeURIComponent(path)
+        );
+        projectFiles.selected = file.path;
+        $("#project-file-title").textContent = "/" + file.path + " · " + fmtBytes(file.size || 0);
+        $("#project-file-mode").textContent = file.editable ? "ACE 编辑" : "只读预览";
+        $("#project-file-save").hidden = !file.editable;
+        if (file.editable) {
+          $("#project-file-preview").hidden = true;
+          await mountProjectFileEditor(file.content, file.path);
+        } else {
+          $("#project-file-preview").textContent = file.content || "";
+        }
+      } catch (e) {
+        $("#project-file-preview").textContent = "无法预览：" + e.message;
+      }
+    }
+
+    function projectFilesUp() {
+      if (!projectFiles.path) return;
+      const parts = projectFiles.path.split("/").filter(Boolean);
+      parts.pop();
+      projectFiles.path = parts.join("/");
+      resetProjectFileView();
+      loadProjectFiles();
+    }
+
+    async function saveProjectFile() {
+      if (!state.current || !projectFiles.selected || !projectFiles.editor) return;
+      const button = $("#project-file-save");
+      if (button) { button.disabled = true; button.textContent = "保存中…"; }
+      try {
+        const file = await api("/api/projects/" + state.current.id + "/files/content", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: projectFiles.selected, content: projectFiles.editor.getValue() }),
+        });
+        projectFiles.editor.session.getUndoManager().markClean();
+        $("#project-file-title").textContent = "/" + file.path + " · " + fmtBytes(file.size || 0);
+        if (button) button.textContent = "已保存";
+        setTimeout(() => { if (button) button.textContent = "保存"; }, 1200);
+      } catch (e) {
+        flash("err", "保存文件失败：" + e.message);
+        if (button) button.textContent = "保存";
+      } finally {
+        if (button) button.disabled = false;
+      }
     }
 
     function dbRunningServices() {

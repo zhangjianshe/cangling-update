@@ -130,6 +130,35 @@ pub struct BrowseDirResult {
     pub entries: Vec<BrowseDirEntry>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ProjectFileQuery {
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectFileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub editable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectFileView {
+    pub path: String,
+    pub size: u64,
+    pub content: String,
+    pub editable: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaveProjectFileBody {
+    pub path: String,
+    pub content: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Meta {
     pub name: &'static str,

@@ -67,6 +67,11 @@ pub fn router(state: AppState) -> Router {
             get(get_project).put(update_project).delete(delete_project),
         )
         .route("/api/projects/{id}/versions", get(list_versions))
+        .route("/api/projects/{id}/files", get(project_files_list))
+        .route(
+            "/api/projects/{id}/files/content",
+            get(project_file_get).put(project_file_put),
+        )
         .route("/api/projects/{id}/updates", post(create_update))
         .route("/api/projects/{id}/replace", post(create_replace))
         .route("/api/projects/{id}/rollback", post(rollback))
@@ -834,6 +839,128 @@ async fn get_project(
     db::get_project(&conn, &id)?
         .map(Json)
         .ok_or_else(|| AppError::not_found("项目不存在"))
+}
+
+const MAX_PROJECT_TEXT_SIZE: u64 = 2 * 1024 * 1024;
+
+fn project_file_is_editable(path: &FsPath) -> bool {
+    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or_default().to_ascii_lowercase();
+    if name == ".env" || name.starts_with(".env.") {
+        return true;
+    }
+    matches!(
+        FsPath::new(&name).extension().and_then(|v| v.to_str()),
+        Some("txt" | "yaml" | "yml" | "ini" | "conf" | "cfg" | "json" | "xml" | "properties" | "toml" | "md" | "sh" | "service" | "log")
+    )
+}
+
+fn clean_project_relative(path: &str) -> Result<PathBuf, AppError> {
+    let path = FsPath::new(path.trim());
+    if path.is_absolute()
+        || path.components().any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::Prefix(_)))
+    {
+        return Err(AppError::bad("项目文件路径无效"));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn project_root(state: &AppState, id: &str) -> Result<PathBuf, AppError> {
+    let directory = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, id)?
+            .ok_or_else(|| AppError::not_found("项目不存在"))?
+            .directory
+    };
+    PathBuf::from(&directory)
+        .canonicalize()
+        .map_err(|e| AppError::internal(format!("无法访问项目目录 {directory}：{e}")))
+}
+
+fn project_file_path(root: &FsPath, relative: &str) -> Result<(PathBuf, PathBuf), AppError> {
+    let relative = clean_project_relative(relative)?;
+    let joined = root.join(&relative);
+    let resolved = joined
+        .canonicalize()
+        .map_err(|e| AppError::not_found(format!("无法访问 {}：{e}", joined.display())))?;
+    if !resolved.starts_with(root) {
+        return Err(AppError::bad("目标路径超出项目目录"));
+    }
+    Ok((relative, resolved))
+}
+
+async fn project_files_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<ProjectFileQuery>,
+) -> Result<Json<Vec<ProjectFileEntry>>, AppError> {
+    let root = project_root(&state, &id)?;
+    let (relative, directory) = project_file_path(&root, &query.path)?;
+    if !directory.is_dir() {
+        return Err(AppError::bad("目标不是目录"));
+    }
+    let rd = std::fs::read_dir(&directory)
+        .map_err(|e| AppError::internal(format!("无法读取目录 {}：{e}", directory.display())))?;
+    let mut entries = Vec::new();
+    for entry in rd.flatten() {
+        let Ok(resolved) = entry.path().canonicalize() else { continue };
+        if !resolved.starts_with(&root) { continue; }
+        let Ok(metadata) = resolved.metadata() else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let rel = relative.join(&name);
+        entries.push(ProjectFileEntry {
+            name,
+            path: rel.to_string_lossy().replace('\\', "/"),
+            is_dir: metadata.is_dir(),
+            size: if metadata.is_file() { metadata.len() } else { 0 },
+            editable: metadata.is_file() && project_file_is_editable(&rel),
+        });
+    }
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    Ok(Json(entries))
+}
+
+async fn project_file_get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<ProjectFileQuery>,
+) -> Result<Json<ProjectFileView>, AppError> {
+    let root = project_root(&state, &id)?;
+    let (relative, file) = project_file_path(&root, &query.path)?;
+    let metadata = file.metadata().map_err(|e| AppError::internal(format!("无法读取文件信息：{e}")))?;
+    if !metadata.is_file() { return Err(AppError::bad("目标不是文件")); }
+    if metadata.len() > MAX_PROJECT_TEXT_SIZE {
+        return Err(AppError::bad(format!("文件超过 {} MB，无法预览", MAX_PROJECT_TEXT_SIZE / 1024 / 1024)));
+    }
+    let content = std::fs::read_to_string(&file)
+        .map_err(|e| AppError::bad(format!("文件不是可预览的 UTF-8 文本：{e}")))?;
+    Ok(Json(ProjectFileView {
+        path: relative.to_string_lossy().replace('\\', "/"),
+        size: metadata.len(),
+        editable: project_file_is_editable(&relative),
+        content,
+    }))
+}
+
+async fn project_file_put(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<SaveProjectFileBody>,
+) -> Result<Json<ProjectFileView>, AppError> {
+    if body.content.len() as u64 > MAX_PROJECT_TEXT_SIZE {
+        return Err(AppError::bad(format!("文件超过 {} MB，无法保存", MAX_PROJECT_TEXT_SIZE / 1024 / 1024)));
+    }
+    let root = project_root(&state, &id)?;
+    let (relative, file) = project_file_path(&root, &body.path)?;
+    if !project_file_is_editable(&relative) { return Err(AppError::bad("该文件类型不允许编辑")); }
+    if !file.is_file() { return Err(AppError::bad("目标不是文件")); }
+    write_text_atomic(&file, &body.content).map_err(AppError::from)?;
+    let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(body.content.len() as u64);
+    Ok(Json(ProjectFileView {
+        path: relative.to_string_lossy().replace('\\', "/"),
+        size,
+        content: body.content,
+        editable: true,
+    }))
 }
 
 async fn create_project(
@@ -3256,5 +3383,22 @@ mod tests {
         );
         assert!(dirs.iter().all(|dir| dir.is_dir()));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn project_file_paths_reject_parent_traversal() {
+        assert_eq!(clean_project_relative("config/app.yaml").unwrap(), PathBuf::from("config/app.yaml"));
+        assert!(clean_project_relative("../etc/passwd").is_err());
+        assert!(clean_project_relative("config/../../etc/passwd").is_err());
+        assert!(clean_project_relative("/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn project_file_editability_covers_configuration_files() {
+        for path in ["README.txt", "docker-compose.yaml", "app.ini", ".env", ".env.prod", "nginx/app.conf"] {
+            assert!(project_file_is_editable(FsPath::new(path)), "{path}");
+        }
+        assert!(!project_file_is_editable(FsPath::new("image.tar.gz")));
+        assert!(!project_file_is_editable(FsPath::new("app.jar")));
     }
 }
