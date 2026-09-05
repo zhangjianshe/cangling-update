@@ -130,6 +130,7 @@ pub fn router(state: AppState) -> Router {
         .route("/vendor/xterm.css", get(vendor_xterm_css))
         .route("/vendor/xterm.js", get(vendor_xterm_js))
         .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
+        .route("/vendor/compose-canvas.js", get(vendor_compose_canvas))
         .route("/vendor/ace/{*name}", get(vendor_ace))
         .route(
             "/vendor/iosevka-term-regular.woff2",
@@ -3185,6 +3186,19 @@ async fn vendor_xterm_fit() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         include_str!("assets/vendor/xterm-addon-fit.js"),
+    )
+}
+
+async fn vendor_compose_canvas() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("assets/compose-canvas.js"),
     )
 }
 

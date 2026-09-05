@@ -396,6 +396,17 @@
     .project-file-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .project-file-editor { flex: 1; min-height: 0; width: 100%; background: var(--log-bg); }
     .project-file-editor .ace_editor, .project-file-editor .ace_editor * { border-radius: 0 !important; }
+    #panel-edit:not([hidden]) {
+      flex: 1 1 auto; min-height: 0; margin-bottom: 0; overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .compose-canvas-toolbar {
+      display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
+      padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--bg-2);
+    }
+    .compose-canvas-toolbar .hint { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .compose-canvas-viewport { flex: 1; min-height: 0; overflow: auto; background: var(--bg-2); }
+    .compose-canvas-viewport canvas { display: block; }
     .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; flex: 0 0 auto; }
     .db-toolbar .field { margin: 0; min-width: 150px; flex: 0 1 170px; }
     .db-toolbar .combo { width: 100%; }
@@ -902,6 +913,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
+  <script src="/vendor/compose-canvas.js"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -921,14 +933,19 @@
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.22 14.78a.75.75 0 0 0 1.06-1.06L4.56 12h8.69a.75.75 0 0 0 0-1.5H4.56l1.72-1.72a.75.75 0 0 0-1.06-1.06l-3 3a.75.75 0 0 0 0 1.06Zm5.56-6.5a.75.75 0 1 1-1.06-1.06l1.72-1.72H2.75a.75.75 0 0 1 0-1.5h8.69L9.72 2.28a.75.75 0 0 1 1.06-1.06l3 3a.75.75 0 0 1 0 1.06Z"/></svg>',
       },
       {
-        id: "files",
-        label: "文件浏览",
-        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>',
-      },
-      {
         id: "db",
         label: "数据库管理",
         icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 1c3.5 0 6.5.9 6.5 2.2v9.6C14.5 14.1 11.5 15 8 15s-6.5-.9-6.5-2.2V3.2C1.5 1.9 4.5 1 8 1m0 1.2c-2.9 0-5.2.7-5.2 1.3S5.1 4.8 8 4.8s5.2-.7 5.2-1.3S10.9 2.2 8 2.2M2.8 6.1C3.9 6.7 5.8 7.1 8 7.1s4.1-.4 5.2-1v2.2c0 .6-2.3 1.3-5.2 1.3S2.8 8.9 2.8 8.3zm0 4.1c1.1.6 3 1 5.2 1s4.1-.4 5.2-1v2.1c0 .6-2.3 1.3-5.2 1.3s-5.2-.7-5.2-1.3z"/></svg>',
+      },
+      {
+        id: "edit",
+        label: "编辑",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11.01 1.427a1.75 1.75 0 0 1 2.475 0l1.088 1.088a1.75 1.75 0 0 1 0 2.475l-8.5 8.5a.75.75 0 0 1-.35.2l-4 1a.75.75 0 0 1-.91-.91l1-4a.75.75 0 0 1 .2-.35Zm1.414 1.06a.25.25 0 0 0-.353 0L3.22 11.338l-.39 1.56 1.56-.39 8.851-8.851a.25.25 0 0 0 0-.353Z"/></svg>',
+      },
+      {
+        id: "files",
+        label: "文件浏览",
+        icon: '<svg class="tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>',
       },
     ];
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null };
@@ -936,6 +953,7 @@
     const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
     const composePoll = { timer: null, inflight: false };
     const projectFiles = { path: "", selected: "", editor: null, resizeObs: null, loadedProject: "" };
+    const composeCanvas = { yaml: "", projectId: "", resizeObs: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false };
@@ -3151,6 +3169,7 @@
 
     function renderProject() {
       destroyProjectFileEditor();
+      destroyComposeCanvas();
       const p = state.current;
       const c = state.compose || {};
       const services = composeServiceRows(c.services);
@@ -3229,6 +3248,16 @@
             <thead><tr><th>服务</th><th>镜像</th><th>状态</th><th>详情</th><th>操作</th></tr></thead>
             <tbody id="compose-svc-body">${services || `<tr><td colspan="5" class="empty">未报告运行中的服务</td></tr>`}</tbody>
           </table>
+        </div>
+        <div class="card tab-panel" id="panel-edit" data-panel="edit" role="tabpanel" aria-labelledby="tab-edit">
+          <div class="compose-canvas-toolbar">
+            <button class="btn" id="compose-canvas-refresh" type="button">刷新图形</button>
+            <button class="btn primary" id="compose-canvas-source" type="button">编辑源文件</button>
+            <span class="hint" id="compose-canvas-status">读取 Compose 文件后绘制服务拓扑</span>
+          </div>
+          <div class="compose-canvas-viewport" id="compose-canvas-viewport">
+            <canvas id="compose-canvas" aria-label="Docker Compose 服务拓扑图"></canvas>
+          </div>
         </div>
         <div class="card tab-panel" id="panel-files" data-panel="files" role="tabpanel" aria-labelledby="tab-files">
           <div class="repo-browse">
@@ -3311,6 +3340,8 @@
       $("#project-files-up").onclick = projectFilesUp;
       $("#project-files-refresh").onclick = loadProjectFiles;
       $("#project-file-save").onclick = saveProjectFile;
+      $("#compose-canvas-refresh").onclick = loadComposeCanvas;
+      $("#compose-canvas-source").onclick = openComposeEditor;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
@@ -3329,7 +3360,7 @@
       comboClose();
       const cur = currentProjectTab();
       const main = $("#main");
-      if (main) main.classList.toggle("db-fill", cur === "db" || cur === "files");
+      if (main) main.classList.toggle("db-fill", cur === "db" || cur === "edit" || cur === "files");
       for (const btn of document.querySelectorAll("[data-tab]")) {
         const on = btn.getAttribute("data-tab") === cur;
         btn.classList.toggle("active", on);
@@ -3340,7 +3371,53 @@
         panel.hidden = panel.getAttribute("data-panel") !== cur;
       }
       if (cur === "db") dbEnsureLoaded();
+      if (cur === "edit") loadComposeCanvas();
       if (cur === "files") loadProjectFiles();
+    }
+
+    function destroyComposeCanvas() {
+      if (composeCanvas.resizeObs) {
+        try { composeCanvas.resizeObs.disconnect(); } catch {}
+        composeCanvas.resizeObs = null;
+      }
+    }
+
+    function renderComposeCanvas() {
+      const canvas = $("#compose-canvas");
+      const status = $("#compose-canvas-status");
+      if (!canvas || !window.ComposeCanvas) return;
+      const model = window.ComposeCanvas.render(canvas, composeCanvas.yaml || "");
+      if (status) {
+        status.textContent = `${state.compose && state.compose.compose_file ? state.compose.compose_file : "Compose"} · ${model.services.length} 个服务 · ${model.networks.length || 1} 个网络 · ${model.volumes.length} 个命名卷`;
+      }
+    }
+
+    async function loadComposeCanvas() {
+      if (!state.current || currentProjectTab() !== "edit") return;
+      const status = $("#compose-canvas-status");
+      if (status) status.textContent = "正在读取 Compose 文件…";
+      try {
+        const file = await api("/api/projects/" + state.current.id + "/compose/file");
+        composeCanvas.yaml = file.content || "";
+        composeCanvas.projectId = state.current.id;
+        renderComposeCanvas();
+        destroyComposeCanvas();
+        const viewport = $("#compose-canvas-viewport");
+        if (viewport && window.ResizeObserver) {
+          let lastWidth = viewport.clientWidth;
+          const observer = new ResizeObserver(() => {
+            if (currentProjectTab() !== "edit") return;
+            const width = viewport.clientWidth;
+            if (Math.abs(width - lastWidth) < 2) return;
+            lastWidth = width;
+            renderComposeCanvas();
+          });
+          observer.observe(viewport);
+          composeCanvas.resizeObs = observer;
+        }
+      } catch (e) {
+        if (status) status.textContent = "无法读取 Compose 文件：" + e.message;
+      }
     }
 
     function projectFilesDisplayPath() {
@@ -5197,6 +5274,7 @@
       localStorage.setItem(THEME_KEY, next);
       renderTheme();
       applyAceTheme();
+      if (currentProjectTab() === "edit" && composeCanvas.yaml) renderComposeCanvas();
     }
     $("#theme-toggle").onclick = toggleTheme;
     $("#gate-theme").onclick = toggleTheme;
