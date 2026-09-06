@@ -221,7 +221,7 @@
       });
     }
     serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
-    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});return bottom+72; }
+    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});const selected=this.model.services.find(service=>service.name===this.selected),items=this.nonNamedVolumes(selected);if(selected&&items.length){const handle=this.mountHandleBox(selected);bottom=Math.max(bottom,handle.y+handle.h+18+items.length*26);}return bottom+72; }
     volumeBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.volumeTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
     point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     hitService(p) {
@@ -234,6 +234,7 @@
       }) || null;
     }
     mountHandleBox(service) { const b=this.serviceBox(service);return{x:b.x+b.w/2-15,y:b.y+b.h-8,w:30,h:16}; }
+    nonNamedVolumes(service) { return (service&&service.volumes||[]).filter(mount=>!this.model.volumes.includes(mount.split(":")[0])); }
     hitMountHandle(p) {
       return [...this.model.services].reverse().find(service=>{const b=this.mountHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null;
     }
@@ -422,11 +423,12 @@
       this.ensurePositions(); let width = Math.max(820, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0), height = 360;
       this.model.services.forEach(s => { const b = this.serviceBox(s); width = Math.max(width, b.x + b.w + 40); height = Math.max(height, b.y + b.h + 40); });
       this.model.volumes.forEach((v,i)=>{const b=this.volumeBox(i);height=Math.max(height,b.y+b.h+32);});
+      height=Math.max(height,this.volumeTop()+28);
       const dpr = Math.max(1, global.devicePixelRatio || 1); this.canvas.width = width * dpr; this.canvas.height = height * dpr; this.canvas.style.width = width + "px"; this.canvas.style.height = height + "px";
       const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
       const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33") };
       ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷", 24, this.volumeTop()-20);
-      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));this.drawMountToolbar(ctx,c);
+      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));this.drawNonNamedVolumes(ctx,c);this.drawMountToolbar(ctx,c);
       if (this.drag && this.drag.type === "link") {
         const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
         if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(b.x-15,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
@@ -436,6 +438,12 @@
     drawMounts(ctx,c) {
       if (!this.selected) return;
       this.mountLinks().filter(link=>link.service===this.selected).forEach(link=>{const active=this.sameMount(link,this.selectedMount)||this.sameMount(link,this.hoverMount),readOnly=this.mountReadOnly(link);ctx.save();ctx.strokeStyle=active?c.accent:c.muted;ctx.lineWidth=active?3:1.25;ctx.setLineDash(readOnly?[6,5]:[]);if(active){ctx.shadowColor=c.accent;ctx.shadowBlur=7;}ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
+    }
+    drawNonNamedVolumes(ctx,c) {
+      const service=this.model.services.find(item=>item.name===this.selected),items=this.nonNamedVolumes(service);if(!service||!items.length)return;
+      const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=start+18+(items.length-1)*26,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);
+      ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.textBaseline="middle";
+      items.forEach((mount,index)=>{const y=start+18+index*26;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillText(clip(ctx,mount,maxWidth),x+14,y);});ctx.restore();
     }
     drawMountToolbar(ctx,c) { if(!this.selectedMount)return;const b=this.mountToolbar(this.selectedMount),readOnly=this.mountReadOnly(this.selectedMount);ctx.save();ctx.shadowColor="rgba(0,0,0,.35)";ctx.shadowBlur=8;roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=c.card;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y);ctx.lineTo(b.x+b.w/2,b.y+b.h);ctx.stroke();ctx.fillStyle="#f85149";ctx.font="600 11px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("删除",b.x+b.w/4,b.y+b.h/2);ctx.fillStyle=readOnly?c.accent:c.text;ctx.fillText(readOnly?"只读":"读写",b.x+b.w*3/4,b.y+b.h/2);ctx.restore();}
     drawLinks(ctx,c) {
