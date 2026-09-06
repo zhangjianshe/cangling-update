@@ -283,8 +283,6 @@
       const handle=this.mountHandleBox(service),volume=this.volumeBox(index);return{service:serviceName,volume:volumeName,points:[{x:handle.x+handle.w/2,y:handle.y+handle.h/2},{x:volume.x+volume.w/2,y:volume.y}]};
     }
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
-    mountSpec(link) { const service=link&&this.model.services.find(s=>s.name===link.service);return service&&service.volumes.find(mount=>mount.split(":")[0]===link.volume)||""; }
-    mountReadOnly(link) { const parts=this.mountSpec(link).split(":");return (parts[2]||"").split(",").includes("ro"); }
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
       const serviceVolume=this.hitServiceVolumeIcon(p);if(serviceVolume){this.toggleServiceVolumeMode(serviceVolume);return;}
@@ -439,7 +437,7 @@
     }
     drawMounts(ctx,c) {
       if (!this.selectedVolume) return;
-      this.mountLinks().filter(link=>link.volume===this.selectedVolume).forEach(link=>{const readOnly=this.mountReadOnly(link);ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.75;ctx.setLineDash(readOnly?[6,5]:[]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
+      this.mountLinks().filter(link=>link.volume===this.selectedVolume).forEach(link=>{ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
     }
     drawServiceVolumes(ctx,c) {
       const service=this.model.services.find(item=>item.name===this.selected),items=this.serviceVolumes(service);if(!service||!items.length)return;
@@ -459,8 +457,7 @@
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
       const mh=this.mountHandleBox(s);roundRect(ctx,mh.x,mh.y,mh.w,mh.h,3);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=linked?c.accent:c.line;ctx.lineWidth=1.5;ctx.stroke();ctx.fillStyle=linked?c.text:c.muted;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),mh.x+mh.w/2,mh.y+mh.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
     }
-    drawPill(ctx,x,y,w,h,text,c) { roundRect(ctx,x,y,w,h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,text,w-20),x+10,y+h/2);ctx.textBaseline="alphabetic"; }
-    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget;this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c);if(active){ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,12);ctx.strokeStyle=c.accent;ctx.lineWidth=v===this.mountTarget?3:2.5;ctx.stroke();ctx.restore();} }
+    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget;ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y);ctx.lineTo(b.x+b.w,b.y+b.h/2);ctx.lineTo(b.x+b.w/2,b.y+b.h);ctx.lineTo(b.x,b.y+b.h/2);ctx.closePath();ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=active?c.accent:c.line;ctx.lineWidth=active?(v===this.mountTarget?3:2.5):1;ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,v,b.w-40),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic"; }
   }
 
   global.ComposeCanvas = { parse, parseVolumeMount, toggleVolumeMountMode, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
