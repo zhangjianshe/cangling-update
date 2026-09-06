@@ -922,7 +922,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-11"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-12"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3261,6 +3261,7 @@
         <div class="card tab-panel" id="panel-edit" data-panel="edit" role="tabpanel" aria-labelledby="tab-edit">
           <div class="compose-canvas-toolbar">
             <button class="btn" id="compose-canvas-refresh" type="button">刷新图形</button>
+            <button class="btn" id="compose-canvas-add-volume" type="button">＋ 命名卷</button>
             <button class="btn" id="compose-canvas-link" type="button">连接依赖</button>
             <button class="btn" id="compose-canvas-source" type="button">ACE 编辑源文件</button>
             <button class="btn primary" id="compose-canvas-save" type="button" disabled>保存 Compose</button>
@@ -3357,6 +3358,7 @@
       $("#project-files-refresh").onclick = loadProjectFiles;
       $("#project-file-save").onclick = saveProjectFile;
       $("#compose-canvas-refresh").onclick = refreshComposeCanvas;
+      $("#compose-canvas-add-volume").onclick = () => composeCanvas.editor && composeCanvas.editor.addVolume();
       $("#compose-canvas-link").onclick = () => composeCanvas.editor && composeCanvas.editor.startLink();
       $("#compose-canvas-source").onclick = openComposeCanvasSource;
       $("#compose-canvas-save").onclick = saveComposeCanvas;
@@ -4474,7 +4476,7 @@
 
     function setBusy(kind) {
       state.busy = kind;
-      const ids = ["btn-update", "btn-replace", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-del", "btn-refresh", "compose-canvas-refresh", "compose-canvas-link", "compose-canvas-source", "compose-canvas-save"];
+      const ids = ["btn-update", "btn-replace", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-del", "btn-refresh", "compose-canvas-refresh", "compose-canvas-add-volume", "compose-canvas-link", "compose-canvas-source", "compose-canvas-save"];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.disabled = true;

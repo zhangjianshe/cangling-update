@@ -41,14 +41,14 @@
   }
 
   function parse(yaml) {
-    const model = { services: [], networks: [], volumes: [] };
-    let section = "", service = null, nested = "";
+    const model = { services: [], networks: [], volumes: [], volumeDetails: {} };
+    let section = "", service = null, volumeDef = null, nested = "";
     for (const raw of String(yaml || "").split(/\r?\n/)) {
       const line = raw.replace(/\s+#.*$/, "");
       if (!line.trim()) continue;
       const n = indent(line), text = line.trim();
       if (n === 0 && /^[\w.-]+:\s*$/.test(text)) {
-        section = text.slice(0, -1); service = null; nested = ""; continue;
+        section = text.slice(0, -1); service = null; volumeDef = null; nested = ""; continue;
       }
       if (section === "services" && n === 2 && /^[^:]+:\s*$/.test(text)) {
         service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", depends: [], networks: [], volumes: [], ports: [] };
@@ -82,7 +82,13 @@
         }
       } else if ((section === "networks" || section === "volumes") && n === 2) {
         const name = clean(text.split(":", 1)[0]);
-        if (name) model[section].push(name);
+        if (name) {
+          model[section].push(name);
+          if (section === "volumes") volumeDef = model.volumeDetails[name] = { name, driver: "", external: false };
+        }
+      } else if (section === "volumes" && volumeDef && n === 4) {
+        const at=text.indexOf(":");if(at<0)continue;const key=text.slice(0,at).trim(),value=clean(text.slice(at+1));
+        if(key==="driver")volumeDef.driver=value;else if(key==="external")volumeDef.external=value.toLowerCase()==="true";
       }
     }
     const names = new Set(model.services.map(s => s.name));
@@ -148,6 +154,32 @@
     return result;
   }
 
+  function locateTopEntry(lines, sectionName, entryName) {
+    const section=lines.findIndex(line=>indent(line)===0&&line.trim()===sectionName+":");if(section<0)return null;
+    let sectionEnd=lines.length,start=-1,end=lines.length;
+    for(let i=section+1;i<lines.length;i+=1){if(lines[i].trim()&&indent(lines[i])===0){sectionEnd=i;break;}if(indent(lines[i])===2&&clean(lines[i].trim().replace(/:\s*$/, ""))===entryName){start=i;break;}}
+    if(start<0)return{section,sectionEnd,start:-1,end:-1};
+    for(let i=start+1;i<lines.length;i+=1){if(lines[i].trim()&&indent(lines[i])<=2){end=i;break;}}
+    return{section,sectionEnd,start,end};
+  }
+
+  function updateVolumeYaml(yaml, oldName, values) {
+    const source=String(yaml||""),eol=source.includes("\r\n")?"\r\n":"\n",lines=source.split(/\r?\n/);let range=locateTopEntry(lines,"volumes",oldName),block=["  "+quote(values.name)+":"];
+    if(range&&range.start>=0){block=lines.slice(range.start,range.end);block[0]="  "+quote(values.name)+":";}
+    const setKey=(key,value)=>{let at=block.findIndex((line,index)=>index>0&&indent(line)===4&&line.trim().startsWith(key+":")),end=at<0?at:block.length;if(at>=0)for(let i=at+1;i<block.length;i+=1){if(block[i].trim()&&indent(block[i])<=4){end=i;break;}}const next=value?["    "+key+": "+value]:[];if(at>=0)block.splice(at,end-at,...next);else if(next.length)block.push(...next);};
+    setKey("driver",values.driver?quote(values.driver):"");setKey("external",values.external?"true":"");
+    if(!range){let at=lines.findIndex(line=>line.trim()===LAYOUT_BEGIN);if(at<0)at=lines.length;lines.splice(at,0,"volumes:",...block);}
+    else if(range.start<0)lines.splice(range.sectionEnd,0,...block);
+    else lines.splice(range.start,range.end-range.start,...block);
+    return lines.join(eol);
+  }
+
+  function removeVolumeYaml(yaml, name) {
+    const source=String(yaml||""),eol=source.includes("\r\n")?"\r\n":"\n",lines=source.split(/\r?\n/),range=locateTopEntry(lines,"volumes",name);
+    if(range&&range.start>=0)lines.splice(range.start,range.end-range.start);
+    return lines.join(eol);
+  }
+
   const color = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
@@ -162,7 +194,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", selectedLink: null, hoverLink: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, hoverLink: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
@@ -229,7 +261,7 @@
       const p = this.point(e), handle = this.hitLinkHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
-        this.selectedLink = null;
+        this.selectedLink = null; this.selectedVolume = "";
         this.selected = handle.name; this.linkFrom = handle.name; this.linkTarget = "";
         this.drag = { type: "link", name: handle.name };
         this.canvas.style.cursor = LINK_CURSOR;
@@ -240,11 +272,11 @@
         this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
       }
       if (service) {
-        this.selected = service.name; this.selectedLink = null; const pos = this.positions[service.name];
+        this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; const pos = this.positions[service.name];
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
-        this.selectedLink = null; this.drag = { type: "volume", name: volume }; this.canvas.setPointerCapture(e.pointerId); this.render();
+        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.drag = { type: "volume", name: volume }; this.canvas.focus(); this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else {
         const link = this.hitDependency(p);
         this.selectedLink = link; this.canvas.focus();
@@ -292,7 +324,8 @@
     }
     keyDown(e) {
       if ((e.key === "Delete" || e.key === "Backspace") && this.selectedLink) { e.preventDefault(); this.removeSelectedDependency(); }
-      else if (e.key === "Escape" && this.selectedLink) { e.preventDefault(); this.selectedLink = null; this.onStatus("已取消选择依赖"); this.render(); }
+      else if ((e.key === "Delete" || e.key === "Backspace") && this.selectedVolume) { e.preventDefault(); this.removeSelectedVolume(); }
+      else if (e.key === "Escape" && (this.selectedLink || this.selectedVolume)) { e.preventDefault(); this.selectedLink = null; this.selectedVolume = ""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
     }
     removeSelectedDependency() {
       const link=this.selectedLink;if(!link)return;
@@ -304,16 +337,42 @@
       const service = this.model.services.find(s => s.name === from);
       if (service && !service.depends.includes(to)) { service.depends.push(to); this.commit(service, { depends: service.depends }, `已添加依赖 ${from} → ${to}`); }
     }
+    addVolume() {
+      let index=1,name="volume-1";while(this.model.volumes.includes(name))name="volume-"+(++index);
+      this.yaml=updateVolumeYaml(this.yaml,"",{name,driver:"local",external:false});this.model=parse(this.yaml);this.selected="";this.selectedVolume=name;
+      this.onChange(this.yaml,`已添加命名卷 ${name}`);this.onStatus(`已添加命名卷 ${name}`);this.renderInspector();this.render();
+    }
+    updateSelectedVolume(values) {
+      const oldName=this.selectedVolume,newName=String(values.name||"").trim();if(!oldName)return;
+      if(!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newName)){this.onStatus("卷名称只能包含字母、数字、点、下划线和连字符");return;}
+      if(newName!==oldName&&this.model.volumes.includes(newName)){this.onStatus(`命名卷 ${newName} 已存在`);return;}
+      let yaml=updateVolumeYaml(this.yaml,oldName,{name:newName,driver:String(values.driver||"").trim(),external:!!values.external});
+      if(newName!==oldName)this.model.services.forEach(service=>{const mounts=service.volumes.map(mount=>{const parts=mount.split(":");if(parts[0]===oldName)parts[0]=newName;return parts.join(":");});if(JSON.stringify(mounts)!==JSON.stringify(service.volumes))yaml=updateServiceYaml(yaml,service.name,{volumes:mounts});});
+      this.yaml=yaml;this.model=parse(yaml);this.selectedVolume=newName;this.onChange(yaml,`已更新命名卷 ${newName}`);this.onStatus(`已更新命名卷 ${newName}`);this.renderInspector();this.render();
+    }
+    removeSelectedVolume() {
+      const name=this.selectedVolume;if(!name)return;const affected=this.model.services.filter(service=>service.volumes.some(mount=>mount.split(":")[0]===name));
+      const suffix=affected.length?`\n同时会移除以下服务的挂载：${affected.map(service=>service.name).join("、")}`:"";
+      if(!global.confirm(`确定删除命名卷 ${name}？${suffix}`))return;
+      let yaml=removeVolumeYaml(this.yaml,name);affected.forEach(service=>{const mounts=service.volumes.filter(mount=>mount.split(":")[0]!==name);yaml=updateServiceYaml(yaml,service.name,{volumes:mounts});});
+      this.yaml=yaml;this.model=parse(yaml);this.selectedVolume="";this.onChange(yaml,`已删除命名卷 ${name}`);this.onStatus(`已删除命名卷 ${name}`);this.renderInspector();this.render();
+    }
     attachVolume(volume, name) {
       const service = this.model.services.find(s => s.name === name);
       if (!service || service.volumes.some(v => v.split(":")[0] === volume)) { this.onStatus(`${volume} 已挂载到 ${name}`); return; }
-      service.volumes.push(`${volume}:/mnt/${volume}`); this.commit(service, { volumes: service.volumes }, `已将卷 ${volume} 挂载到 ${name}`);
+      service.volumes.push(`${volume}:/mnt/${volume}`); this.selected=name;this.selectedVolume="";this.commit(service, { volumes: service.volumes }, `已将卷 ${volume} 挂载到 ${name}，可在右侧修改路径或添加 :ro`);
     }
     commit(service, values, message) {
       this.yaml = updateServiceYaml(this.yaml, service.name, values); this.model = parse(this.yaml);
       this.onChange(this.yaml, message); this.onStatus(message); this.renderInspector(); this.render();
     }
     renderInspector() {
+      if (this.selectedVolume) {
+        const volume=this.model.volumeDetails[this.selectedVolume]||{name:this.selectedVolume,driver:"",external:false};
+        this.inspector.innerHTML=`<div class="compose-inspector-title">命名卷 ${html(volume.name)}</div><label>卷名称<input data-volume-name type="text" value="${html(volume.name)}" /></label><label>Driver<input data-volume-driver type="text" value="${html(volume.driver||"")}" placeholder="local" /></label><label style="flex-direction:row;align-items:center"><input data-volume-external type="checkbox" style="width:auto" ${volume.external?"checked":""} /> External volume</label><div style="display:flex;gap:8px"><button type="button" class="btn primary" data-volume-apply>应用到草稿</button><button type="button" class="btn danger" data-volume-delete>删除</button></div>`;
+        this.inspector.querySelector("[data-volume-apply]").onclick=()=>this.updateSelectedVolume({name:this.inspector.querySelector("[data-volume-name]").value,driver:this.inspector.querySelector("[data-volume-driver]").value,external:this.inspector.querySelector("[data-volume-external]").checked});
+        this.inspector.querySelector("[data-volume-delete]").onclick=()=>this.removeSelectedVolume();return;
+      }
       const service = this.model.services.find(s => s.name === this.selected);
       if (!service) { this.inspector.innerHTML = '<div class="compose-inspector-empty">点击服务节点编辑属性</div>'; return; }
       const field = (label, key, value, area) => `<label>${label}${area ? `<textarea data-field="${key}" rows="3">${html((value || []).join("\n"))}</textarea>` : `<input data-field="${key}" type="text" value="${html(value || "")}" />`}</label>`;
@@ -364,8 +423,8 @@
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
     }
     drawPill(ctx,x,y,w,h,text,c) { roundRect(ctx,x,y,w,h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,text,w-20),x+10,y+h/2);ctx.textBaseline="alphabetic"; }
-    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i);this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c); }
+    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i);this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c);if(v===this.selectedVolume){ctx.save();roundRect(ctx,b.x,b.y,b.w,b.h,12);ctx.strokeStyle=c.accent;ctx.lineWidth=2.5;ctx.stroke();ctx.restore();} }
   }
 
-  global.ComposeCanvas = { parse, readLayout, writeLayout, updateServiceYaml, create: options => new Editor(options) };
+  global.ComposeCanvas = { parse, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
 })(window);
