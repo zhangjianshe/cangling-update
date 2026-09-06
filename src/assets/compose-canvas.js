@@ -211,7 +211,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, hoverLink: null, mountTarget: "", linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, hoverLink: null, hoverServiceVolumeRow: null, mountTarget: "", linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
@@ -315,16 +315,16 @@
       } else if (volume) {
         this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
       } else {
-        const link=this.hitDependency(p);this.selectedLink=link;this.canvas.focus();
+        const link=this.hitDependency(p);this.selected="";this.selectedVolume="";this.selectedLink=link;this.hoverServiceVolumeRow=null;this.canvas.focus();this.renderInspector();
         this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : ""); this.render();
       }
     }
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p);this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow?null:this.hitDependency(p);
+        const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow?null:this.hitDependency(p);
         this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
-        if(!this.sameLink(previous,this.hoverLink))this.render();
+        if(!this.sameLink(previous,this.hoverLink)||(previousRow&&previousRow.index)!==(serviceVolumeRow&&serviceVolumeRow.index))this.render();
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link"||this.drag.type==="mount" ? LINK_CURSOR : "grabbing";
@@ -453,12 +453,13 @@
       const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
       const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33") };
       ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷", 24, this.volumeTop()-20);
-      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));this.drawServiceVolumes(ctx,c);
+      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));
       if (this.drag && this.drag.type === "link") {
         const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
         if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(b.x-15,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
       }
       if(this.drag&&this.drag.type==="mount"){const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.mountHandleBox(service);if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}}
+      this.drawServiceVolumes(ctx,c);
     }
     drawMounts(ctx,c) {
       if (!this.selectedVolume) return;
@@ -467,8 +468,8 @@
     drawServiceVolumes(ctx,c) {
       const service=this.model.services.find(item=>item.name===this.selected),items=this.serviceVolumes(service);if(!service||!items.length)return;
       const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=start+18+(items.length-1)*26,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);
-      ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.textBaseline="middle";
-      items.forEach((mount,index)=>{const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]),item=named?{...parsed,kind:"named"}:parsed,y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:(item.kind==="named"?`${mount.split(":")[0]} → ${item.target}`:item.target);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?c.muted:c.accent;if(item.kind==="named"){const cx=x+20,size=7;ctx.beginPath();ctx.moveTo(cx,y-size);ctx.lineTo(cx+size,y);ctx.lineTo(cx,y+size);ctx.lineTo(cx-size,y);ctx.closePath();if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}else if(item.kind==="bind"){const size=11;ctx.beginPath();ctx.rect(x+20-size/2,y-size/2,size,size);if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}else{ctx.beginPath();ctx.arc(x+20,y,6,0,Math.PI*2);if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}const remove=this.serviceVolumeDeleteAt(service,index);ctx.strokeStyle="#f85149";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(remove.x-4,remove.y-4);ctx.lineTo(remove.x+4,remove.y+4);ctx.moveTo(remove.x+4,remove.y-4);ctx.lineTo(remove.x-4,remove.y+4);ctx.stroke();ctx.strokeStyle=c.line;ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,maxWidth-52),x+52,y);});ctx.restore();
+      ctx.save();ctx.shadowColor="rgba(0,0,0,.18)";ctx.shadowBlur=10;roundRect(ctx,x-8,start+6,maxWidth+30,items.length*26+4,6);ctx.fillStyle="#fff";ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle="#d0d7de";ctx.lineWidth=1;ctx.stroke();ctx.strokeStyle="#afb8c1";ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.textBaseline="middle";
+      items.forEach((mount,index)=>{const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]),item=named?{...parsed,kind:"named"}:parsed,y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:(item.kind==="named"?`${mount.split(":")[0]} → ${item.target}`:item.target),hovered=this.hoverServiceVolumeRow&&this.hoverServiceVolumeRow.index===index;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?"#57606a":c.accent;if(item.kind==="named"){const cx=x+20,size=7;ctx.beginPath();ctx.moveTo(cx,y-size);ctx.lineTo(cx+size,y);ctx.lineTo(cx,y+size);ctx.lineTo(cx-size,y);ctx.closePath();if(item.mode==="RO"){ctx.strokeStyle="#57606a";ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle="#afb8c1";}else if(item.kind==="bind"){const size=11;ctx.beginPath();ctx.rect(x+20-size/2,y-size/2,size,size);if(item.mode==="RO"){ctx.strokeStyle="#57606a";ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle="#afb8c1";}else{ctx.beginPath();ctx.arc(x+20,y,6,0,Math.PI*2);if(item.mode==="RO"){ctx.strokeStyle="#57606a";ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle="#afb8c1";}const remove=this.serviceVolumeDeleteAt(service,index);ctx.strokeStyle="#cf222e";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(remove.x-4,remove.y-4);ctx.lineTo(remove.x+4,remove.y+4);ctx.moveTo(remove.x+4,remove.y-4);ctx.lineTo(remove.x-4,remove.y+4);ctx.stroke();ctx.strokeStyle="#afb8c1";ctx.fillStyle="#24292f";ctx.font=`${hovered?"600":"400"} 12px ui-monospace, monospace`;ctx.fillText(clip(ctx,label,maxWidth-52),x+52,y);});ctx.restore();
     }
     drawLinks(ctx,c) {
       this.model.services.forEach(sourceService => sourceService.depends.forEach(name => {
