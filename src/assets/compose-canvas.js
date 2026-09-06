@@ -1,6 +1,8 @@
 (function (global) {
   "use strict";
   const SW = 164, SH = 54, VW = 148, VH = 34;
+  const LAYOUT_BEGIN = "# cangling-canvas-layout:begin";
+  const LAYOUT_END = "# cangling-canvas-layout:end";
   const LINK_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M3 2l14 13-7 .7-3.7 6.1z" fill="white" stroke="#24292f" stroke-width="1.5" stroke-linejoin="round"/><circle cx="19" cy="19" r="7" fill="#0d99ff" stroke="white" stroke-width="1.5"/><path d="M19 15v8m-4-4h8" stroke="white" stroke-width="1.6" stroke-linecap="round"/></svg>')}" ) 3 2, crosshair`;
   const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
   const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
@@ -9,6 +11,34 @@
     const text = clean(value);
     return text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1).split(",").map(clean).filter(Boolean) : [];
   };
+
+  function readLayout(yaml) {
+    const lines = String(yaml || "").split(/\r?\n/), begin = lines.findIndex(line => line.trim() === LAYOUT_BEGIN);
+    if (begin < 0) return null;
+    const end = lines.findIndex((line, index) => index > begin && line.trim() === LAYOUT_END);
+    if (end < 0) return null;
+    try {
+      const data = JSON.parse(lines.slice(begin + 1, end).map(line => line.replace(/^\s*#\s?/, "")).join(""));
+      return data && data.version === 1 && data.positions && typeof data.positions === "object" ? data.positions : null;
+    } catch (_) { return null; }
+  }
+
+  function writeLayout(yaml, positions) {
+    const source = String(yaml || ""), eol = source.includes("\r\n") ? "\r\n" : "\n", lines = source.split(/\r?\n/);
+    const begin = lines.findIndex(line => line.trim() === LAYOUT_BEGIN);
+    if (begin >= 0) {
+      const end = lines.findIndex((line, index) => index > begin && line.trim() === LAYOUT_END);
+      lines.splice(begin, (end >= 0 ? end : begin) - begin + 1);
+    }
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    const saved = {};
+    Object.entries(positions || {}).forEach(([name, point]) => {
+      const x = Math.round(Number(point && point.x)), y = Math.round(Number(point && point.y));
+      if (Number.isFinite(x) && Number.isFinite(y)) saved[name] = { x, y };
+    });
+    lines.push("", LAYOUT_BEGIN, "# " + JSON.stringify({ version: 1, positions: saved }), LAYOUT_END, "");
+    return lines.join(eol);
+  }
 
   function parse(yaml) {
     const model = { services: [], networks: [], volumes: [] };
@@ -134,7 +164,10 @@
     constructor(options) {
       Object.assign(this, { selected: "", linkFrom: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
-      try { this.positions = JSON.parse(localStorage.getItem(this.storageKey) || "{}"); } catch (_) { this.positions = {}; }
+      this.positions = readLayout(this.yaml);
+      if (!this.positions) {
+        try { this.positions = JSON.parse(localStorage.getItem(this.storageKey) || "{}"); } catch (_) { this.positions = {}; }
+      }
       this.down = e => this.pointerDown(e); this.move = e => this.pointerMove(e); this.up = e => this.pointerUp(e);
       this.canvas.addEventListener("pointerdown", this.down); this.canvas.addEventListener("pointermove", this.move);
       this.canvas.addEventListener("pointerup", this.up); this.canvas.addEventListener("pointercancel", this.up);
@@ -147,7 +180,10 @@
     ensurePositions() {
       const width = Math.max(720, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0);
       const cols = Math.max(1, Math.floor((width - 230) / 220));
-      this.model.services.forEach((s, i) => { if (!this.positions[s.name]) this.positions[s.name] = { x: 210 + i % cols * 220, y: 55 + Math.floor(i / cols) * 120 }; });
+      this.model.services.forEach((s, i) => {
+        const point = this.positions[s.name];
+        if (!point || !Number.isFinite(Number(point.x)) || !Number.isFinite(Number(point.y))) this.positions[s.name] = { x: 210 + i % cols * 220, y: 55 + Math.floor(i / cols) * 120 };
+      });
     }
     serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
     volumeBox(i) { return { x: 24, y: 68 + i * 50, w: VW, h: VH }; }
@@ -179,7 +215,7 @@
       }
       if (service) {
         this.selected = service.name; const pos = this.positions[service.name];
-        this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y };
+        this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
         this.drag = { type: "volume", name: volume }; this.canvas.setPointerCapture(e.pointerId); this.render();
@@ -192,7 +228,10 @@
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link" ? LINK_CURSOR : "grabbing";
-      if (this.drag.type === "service") this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
+      if (this.drag.type === "service") {
+        this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
+        this.drag.moved = true;
+      }
       this.render();
     }
     pointerUp(e) {
@@ -203,7 +242,11 @@
         if (target && target.name !== from) this.addDependency(from, target.name);
         else this.onStatus("未连接：请在另一个服务上松开鼠标");
         this.linkFrom = "";
-      } else try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
+      } else if (this.drag.moved) {
+        try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
+        this.yaml = writeLayout(this.yaml, this.positions);
+        this.onChange(this.yaml, "已更新 Canvas 布局"); this.onStatus("已更新 Canvas 布局");
+      }
       this.drag = null; this.render();
       this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
     }
@@ -281,5 +324,5 @@
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i);this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c); }
   }
 
-  global.ComposeCanvas = { parse, updateServiceYaml, create: options => new Editor(options) };
+  global.ComposeCanvas = { parse, readLayout, writeLayout, updateServiceYaml, create: options => new Editor(options) };
 })(window);
