@@ -313,7 +313,7 @@
       }
       if(this.drag.type==="mount")this.mountTarget=this.hitVolume(p)||"";
       if (this.drag.type === "service") {
-        this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
+        this.positions[this.drag.name] = { x: Math.max(24, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
         this.drag.moved = true;
       }
       this.render();
