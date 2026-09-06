@@ -198,6 +198,14 @@
     return lines.join(eol);
   }
 
+  function addNetworkYaml(yaml, name) {
+    const source=String(yaml||""),eol=source.includes("\r\n")?"\r\n":"\n",lines=source.split(/\r?\n/),range=locateTopEntry(lines,"networks",name),block="  "+quote(name)+":";
+    if(range&&range.start>=0)return source;
+    if(!range){let at=lines.findIndex(line=>line.trim()===LAYOUT_BEGIN);if(at<0)at=lines.length;lines.splice(at,0,"networks:",block);}
+    else lines.splice(range.sectionEnd,0,block);
+    return lines.join(eol);
+  }
+
   const color = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
   function roundRect(ctx, x, y, w, h, r) {
     ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
@@ -212,7 +220,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, volumePanelService: "", portPanelService: "", hoverLink: null, hoverServiceVolumeRow: null, hoverServicePortRow: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", selectedVolume: "", selectedNetwork: "", selectedLink: null, volumePanelService: "", portPanelService: "", hoverLink: null, hoverServiceVolumeRow: null, hoverServicePortRow: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
@@ -241,6 +249,10 @@
     serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
     volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});const volumeService=this.model.services.find(service=>service.name===this.volumePanelService),portService=this.model.services.find(service=>service.name===this.portPanelService),panelService=volumeService||portService,items=volumeService?this.serviceVolumes(volumeService):(portService?portService.ports:[]);if(panelService){const handle=volumeService?this.mountHandleBox(panelService):this.portHandleBox(panelService);bottom=Math.max(bottom,handle.y+handle.h+18+(items.length+1)*26);}return bottom+72; }
     volumeBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.volumeTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
+    networkTop() { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20))),rows=Math.max(1,Math.ceil(this.model.volumes.length/cols));return this.volumeTop()+rows*50+38; }
+    networkBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.networkTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
+    sectionAddBox(kind) { const y=(kind==="volume"?this.volumeTop():this.networkTop())-29;return{x:kind==="volume"?88:64,y,w:22,h:18}; }
+    hitSectionAdd(p,kind) { const b=this.sectionAddBox(kind);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h; }
     point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     hitService(p) {
       return [...this.model.services].reverse().find(s => { const b = this.serviceBox(s); return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }) || null;
@@ -277,6 +289,7 @@
       for (let i = 0; i < this.model.volumes.length; i += 1) { const b = this.volumeBox(i); if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return this.model.volumes[i]; }
       return "";
     }
+    hitNetwork(p) { for(let i=0;i<this.model.networks.length;i+=1){const b=this.networkBox(i);if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return this.model.networks[i];}return ""; }
     dependencyGeometry(from, to) {
       const source=this.model.services.find(s=>s.name===from),target=this.model.services.find(s=>s.name===to);if(!source||!target)return null;
       const a=this.serviceBox(source),b=this.serviceBox(target),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;
@@ -304,8 +317,11 @@
     }
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
     volumeReferenceCount(volume) { return this.model.services.reduce((count,service)=>count+service.volumes.filter(mount=>mount.split(":")[0]===volume).length,0); }
+    networkReferenceCount(network) { return this.model.services.reduce((count,service)=>count+(service.networks.includes(network)?1:0),0); }
+    networkLinks() { const links=[];this.model.services.forEach(service=>service.networks.forEach(network=>{const index=this.model.networks.indexOf(network);if(index<0)return;const a=this.serviceBox(service),b=this.networkBox(index);links.push({network,points:[{x:a.x+a.w/2,y:a.y+a.h},{x:b.x+b.w/2,y:b.y}]});}));return links; }
     pointerDown(e) {
-      const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), portHandle=this.hitPortHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), portHandle=this.hitPortHandle(p), service = this.hitService(p), volume = this.hitVolume(p),network=this.hitNetwork(p); this.pointer = p;
+      if(this.hitSectionAdd(p,"volume")){this.addVolume();return;}if(this.hitSectionAdd(p,"network")){this.addNetwork();return;}
       const servicePortAdd=this.hitServicePortAdd(p);if(servicePortAdd){this.editServicePort({service:servicePortAdd,port:"",index:-1});return;}
       const servicePortDelete=this.hitServicePortDelete(p);if(servicePortDelete){this.removeServicePort(servicePortDelete);return;}
       const servicePortRow=this.hitServicePortRow(p);if(servicePortRow){this.editServicePort(servicePortRow);return;}
@@ -315,35 +331,36 @@
       const serviceVolumeRow=this.hitServiceVolumeRow(p);if(serviceVolumeRow){this.editServiceVolume(serviceVolumeRow);return;}
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
-        this.selectedLink = null; this.selectedVolume = ""; this.volumePanelService="";this.portPanelService="";
+        this.selectedLink = null; this.selectedVolume = "";this.selectedNetwork=""; this.volumePanelService="";this.portPanelService="";
         this.selected = handle.name; this.linkFrom = handle.name; this.linkTarget = "";
         this.drag = { type: "link", name: handle.name };
         this.canvas.style.cursor = LINK_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
       }
-      if(mountHandle){this.selected="";this.selectedVolume="";this.selectedLink=null;this.volumePanelService=mountHandle.name;this.portPanelService="";this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${mountHandle.name} 的数据卷`);this.render();return;}
-      if(portHandle){this.selected="";this.selectedVolume="";this.selectedLink=null;this.volumePanelService="";this.portPanelService=portHandle.name;this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${portHandle.name} 的端口`);this.render();return;}
+      if(mountHandle){this.selected="";this.selectedVolume="";this.selectedNetwork="";this.selectedLink=null;this.volumePanelService=mountHandle.name;this.portPanelService="";this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${mountHandle.name} 的数据卷`);this.render();return;}
+      if(portHandle){this.selected="";this.selectedVolume="";this.selectedNetwork="";this.selectedLink=null;this.volumePanelService="";this.portPanelService=portHandle.name;this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${portHandle.name} 的端口`);this.render();return;}
       if (service && this.linkFrom) {
         if (service.name !== this.linkFrom) this.addDependency(this.linkFrom, service.name);
         this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
       }
       if (service) {
-        this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; this.volumePanelService="";this.portPanelService=""; const pos = this.positions[service.name];
+        this.selected = service.name; this.selectedVolume = "";this.selectedNetwork=""; this.selectedLink = null; this.volumePanelService="";this.portPanelService=""; const pos = this.positions[service.name];
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.style.cursor = SELECT_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
-        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.volumePanelService="";this.portPanelService=""; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
+        this.selected = ""; this.selectedVolume = volume;this.selectedNetwork=""; this.selectedLink = null; this.volumePanelService="";this.portPanelService=""; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
+      } else if(network){this.selected="";this.selectedVolume="";this.selectedNetwork=network;this.selectedLink=null;this.volumePanelService="";this.portPanelService="";this.renderInspector();this.render();
       } else {
-        const link=this.hitDependency(p);this.selected="";this.selectedVolume="";this.selectedLink=link;this.volumePanelService="";this.portPanelService="";this.hoverServiceVolumeRow=null;this.hoverServicePortRow=null;this.canvas.focus();this.renderInspector();
+        const link=this.hitDependency(p);this.selected="";this.selectedVolume="";this.selectedNetwork="";this.selectedLink=link;this.volumePanelService="";this.portPanelService="";this.hoverServiceVolumeRow=null;this.hoverServicePortRow=null;this.canvas.focus();this.renderInspector();
         this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : ""); this.render();
       }
     }
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,previousPortRow=this.hoverServicePortRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),portHandle=this.hitPortHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p),serviceVolumeAdd=this.hitServiceVolumeAdd(p),servicePortAdd=this.hitServicePortAdd(p),servicePortDelete=this.hitServicePortDelete(p),servicePortRow=this.hitServicePortRow(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverServicePortRow=servicePortRow;this.hoverLink=handle||mountHandle||portHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow?null:this.hitDependency(p);
-        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow||mountHandle||portHandle||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle?LINK_CURSOR:(node?SELECT_CURSOR:"default"));
+        const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,previousPortRow=this.hoverServicePortRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),portHandle=this.hitPortHandle(p),node=this.hitService(p),volume=this.hitVolume(p),network=this.hitNetwork(p),sectionAdd=this.hitSectionAdd(p,"volume")||this.hitSectionAdd(p,"network"),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p),serviceVolumeAdd=this.hitServiceVolumeAdd(p),servicePortAdd=this.hitServicePortAdd(p),servicePortDelete=this.hitServicePortDelete(p),servicePortRow=this.hitServicePortRow(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverServicePortRow=servicePortRow;this.hoverLink=handle||mountHandle||portHandle||node||volume||network||sectionAdd||serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow?null:this.hitDependency(p);
+        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow||mountHandle||portHandle||this.hitDelete(p)||this.hoverLink||volume||network||sectionAdd?"pointer":(handle?LINK_CURSOR:(node?SELECT_CURSOR:"default"));
         if(!this.sameLink(previous,this.hoverLink)||(previousRow&&previousRow.index)!==(serviceVolumeRow&&serviceVolumeRow.index)||(previousPortRow&&previousPortRow.index)!==(servicePortRow&&servicePortRow.index))this.render();
         return;
       }
@@ -380,7 +397,7 @@
     keyDown(e) {
       if ((e.key === "Delete" || e.key === "Backspace") && this.selectedLink) { e.preventDefault(); this.removeSelectedDependency(); }
       else if ((e.key === "Delete" || e.key === "Backspace") && this.selectedVolume) { e.preventDefault(); this.removeSelectedVolume(); }
-      else if (e.key === "Escape" && (this.selectedLink || this.selectedVolume || this.volumePanelService || this.portPanelService)) { e.preventDefault(); this.selectedLink = null; this.selectedVolume = ""; this.volumePanelService="";this.portPanelService=""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
+      else if (e.key === "Escape" && (this.selectedLink || this.selectedVolume || this.selectedNetwork || this.volumePanelService || this.portPanelService)) { e.preventDefault(); this.selectedLink = null; this.selectedVolume = "";this.selectedNetwork=""; this.volumePanelService="";this.portPanelService=""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
     }
     removeSelectedDependency() {
       const link=this.selectedLink;if(!link)return;
@@ -408,6 +425,7 @@
       this.yaml=updateVolumeYaml(this.yaml,"",{name,driver:"local",external:false});this.model=parse(this.yaml);this.selected="";this.selectedVolume=name;
       this.onChange(this.yaml,`已添加命名卷 ${name}`);this.onStatus(`已添加命名卷 ${name}`);this.renderInspector();this.render();
     }
+    addNetwork() { let index=1,name="network-1";while(this.model.networks.includes(name))name="network-"+(++index);this.yaml=addNetworkYaml(this.yaml,name);this.model=parse(this.yaml);this.selected="";this.selectedVolume="";this.selectedNetwork=name;this.onChange(this.yaml,`已添加网络 ${name}`);this.onStatus(`已添加网络 ${name}`);this.renderInspector();this.render(); }
     updateSelectedVolume(values) {
       const oldName=this.selectedVolume,newName=String(values.name||"").trim();if(!oldName)return;
       if(!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newName)){this.onStatus("卷名称只能包含字母、数字、点、下划线和连字符");return;}
@@ -460,12 +478,13 @@
       this.ensurePositions(); let width = Math.max(820, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0), height = 360;
       this.model.services.forEach(s => { const b = this.serviceBox(s); width = Math.max(width, b.x + b.w + 40); height = Math.max(height, b.y + b.h + 40); });
       this.model.volumes.forEach((v,i)=>{const b=this.volumeBox(i);height=Math.max(height,b.y+b.h+32);});
-      height=Math.max(height,this.volumeTop()+28);
+      this.model.networks.forEach((v,i)=>{const b=this.networkBox(i);height=Math.max(height,b.y+b.h+32);});
+      height=Math.max(height,this.networkTop()+28);
       const dpr = Math.max(1, global.devicePixelRatio || 1); this.canvas.width = width * dpr; this.canvas.height = height * dpr; this.canvas.style.width = width + "px"; this.canvas.style.height = height + "px";
       const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
-      const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33"), volume:"#9a6700", volumeActive:"rgba(154,103,0,.16)", port:"#1a7f37", portActive:"rgba(26,127,55,.16)" };
-      ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.volume; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷", 24, this.volumeTop()-20);
-      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));
+      const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33"), volume:"#9a6700", volumeActive:"rgba(154,103,0,.16)", port:"#1a7f37", portActive:"rgba(26,127,55,.16)", network:"#8250df", networkActive:"rgba(130,80,223,.16)" };
+      ctx.fillStyle=c.bg;ctx.fillRect(0,0,width,height);this.drawSectionHeader(ctx,"命名卷","volume",c.volume);this.drawSectionHeader(ctx,"网络","network",c.network);
+      this.drawMounts(ctx,c);this.drawNetworkLinks(ctx,c);this.drawLinks(ctx,c);this.model.volumes.forEach((v,i)=>this.drawVolume(ctx,v,i,c));this.model.networks.forEach((v,i)=>this.drawNetwork(ctx,v,i,c));this.model.services.forEach(s=>this.drawService(ctx,s,c));
       if (this.drag && this.drag.type === "link") {
         const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
         if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(b.x-15,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
@@ -476,6 +495,8 @@
       if (!this.selectedVolume) return;
       this.mountLinks().filter(link=>link.volume===this.selectedVolume).forEach(link=>{ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
     }
+    drawNetworkLinks(ctx,c) { if(!this.selectedNetwork)return;this.networkLinks().filter(link=>link.network===this.selectedNetwork).forEach(link=>{ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();}); }
+    drawSectionHeader(ctx,label,kind,colorValue) { const top=kind==="volume"?this.volumeTop():this.networkTop(),button=this.sectionAddBox(kind);ctx.fillStyle=colorValue;ctx.font="600 12px system-ui";ctx.textBaseline="alphabetic";ctx.fillText(label,24,top-20);roundRect(ctx,button.x,button.y,button.w,button.h,5);ctx.strokeStyle=colorValue;ctx.lineWidth=1.25;ctx.stroke();ctx.beginPath();ctx.moveTo(button.x+7,button.y+9);ctx.lineTo(button.x+15,button.y+9);ctx.moveTo(button.x+11,button.y+5);ctx.lineTo(button.x+11,button.y+13);ctx.stroke(); }
     drawServiceVolumes(ctx,c) {
       c={...c,accent:c.volume,active:c.volumeActive,muted:c.volume};
       const service=this.model.services.find(item=>item.name===this.volumePanelService),items=this.serviceVolumes(service);if(!service)return;
@@ -502,6 +523,7 @@
       const ph=this.portHandleBox(s),px=ph.x+ph.w/2,py=ph.y+ph.h/2;roundRect(ctx,ph.x,ph.y,ph.w,ph.h,3);ctx.fillStyle=portsOpen?c.portActive:c.card;ctx.fill();ctx.strokeStyle=c.port;ctx.lineWidth=portsOpen?2:1.5;ctx.stroke();ctx.strokeStyle=c.port;ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(px-4,py,2.5,0,Math.PI*2);ctx.moveTo(px-1.5,py);ctx.lineTo(px+5,py);ctx.moveTo(px+2,py-3);ctx.lineTo(px+5,py);ctx.lineTo(px+2,py+3);ctx.stroke();
     }
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume,count=this.volumeReferenceCount(v),cy=b.y+b.h/2;ctx.save();roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=active?c.volumeActive:c.card;ctx.fill();ctx.strokeStyle=c.volume;ctx.lineWidth=active?2.5:1;ctx.stroke();ctx.strokeStyle=c.volume;ctx.lineWidth=1.2;ctx.beginPath();ctx.ellipse(b.x+15,cy-4,6,2.5,0,0,Math.PI*2);ctx.moveTo(b.x+9,cy-4);ctx.lineTo(b.x+9,cy+4);ctx.ellipse(b.x+15,cy+4,6,2.5,0,0,Math.PI);ctx.lineTo(b.x+21,cy-4);ctx.stroke();ctx.beginPath();ctx.arc(b.x+b.w-15,cy,9,0,Math.PI*2);ctx.fillStyle=c.volume;ctx.fill();ctx.fillStyle=c.text;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),b.x+b.w-15,cy);ctx.font="12px ui-monospace";ctx.fillText(clip(ctx,v,b.w-62),b.x+b.w/2,cy);ctx.restore();ctx.textAlign="left";ctx.textBaseline="alphabetic"; }
+    drawNetwork(ctx,v,i,c) { const b=this.networkBox(i),active=v===this.selectedNetwork,count=this.networkReferenceCount(v),cy=b.y+b.h/2;ctx.save();roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=active?c.networkActive:c.card;ctx.fill();ctx.strokeStyle=c.network;ctx.lineWidth=active?2.5:1;ctx.stroke();ctx.beginPath();ctx.arc(b.x+15,cy,7,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.arc(b.x+15,cy,2,0,Math.PI*2);ctx.fillStyle=c.network;ctx.fill();ctx.beginPath();ctx.arc(b.x+b.w-15,cy,9,0,Math.PI*2);ctx.fill();ctx.fillStyle=c.text;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),b.x+b.w-15,cy);ctx.font="12px ui-monospace";ctx.fillText(clip(ctx,v,b.w-62),b.x+b.w/2,cy);ctx.restore();ctx.textAlign="left";ctx.textBaseline="alphabetic"; }
   }
 
   global.ComposeCanvas = { parse, parseVolumeMount, toggleVolumeMountMode, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
