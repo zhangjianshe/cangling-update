@@ -405,8 +405,17 @@
       padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--bg-2);
     }
     .compose-canvas-toolbar .hint { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .compose-canvas-viewport { flex: 1; min-height: 0; overflow: auto; background: var(--bg-2); }
-    .compose-canvas-viewport canvas { display: block; }
+    .compose-canvas-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
+    .compose-canvas-viewport { min-height: 0; overflow: auto; background: var(--bg-2); }
+    .compose-canvas-viewport canvas { display: block; cursor: grab; touch-action: none; user-select: none; }
+    .compose-canvas-viewport canvas:active { cursor: grabbing; }
+    .compose-canvas-inspector { min-height: 0; overflow: auto; padding: 14px; border-left: 1px solid var(--line); background: var(--bg); }
+    .compose-inspector-empty { padding: 28px 8px; color: var(--muted); text-align: center; }
+    .compose-inspector-title { margin-bottom: 14px; font-size: 16px; font-weight: 650; }
+    .compose-canvas-inspector label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+    .compose-canvas-inspector input, .compose-canvas-inspector textarea { width: 100%; color: var(--text); background: var(--bg-2); }
+    .compose-canvas-inspector textarea { min-height: 58px; resize: vertical; font-family: ui-monospace, monospace; }
+    @media (max-width: 900px) { .compose-canvas-workspace { grid-template-columns: minmax(0, 1fr) 260px; } }
     .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; flex: 0 0 auto; }
     .db-toolbar .field { margin: 0; min-width: 150px; flex: 0 1 170px; }
     .db-toolbar .combo { width: 100%; }
@@ -953,7 +962,7 @@
     const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
     const composePoll = { timer: null, inflight: false };
     const projectFiles = { path: "", selected: "", editor: null, resizeObs: null, loadedProject: "" };
-    const composeCanvas = { yaml: "", projectId: "", resizeObs: null };
+    const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false };
@@ -3252,11 +3261,18 @@
         <div class="card tab-panel" id="panel-edit" data-panel="edit" role="tabpanel" aria-labelledby="tab-edit">
           <div class="compose-canvas-toolbar">
             <button class="btn" id="compose-canvas-refresh" type="button">刷新图形</button>
-            <button class="btn primary" id="compose-canvas-source" type="button">编辑源文件</button>
+            <button class="btn" id="compose-canvas-link" type="button">连接依赖</button>
+            <button class="btn" id="compose-canvas-source" type="button">ACE 编辑源文件</button>
+            <button class="btn primary" id="compose-canvas-save" type="button" disabled>保存 Compose</button>
             <span class="hint" id="compose-canvas-status">读取 Compose 文件后绘制服务拓扑</span>
           </div>
-          <div class="compose-canvas-viewport" id="compose-canvas-viewport">
-            <canvas id="compose-canvas" aria-label="Docker Compose 服务拓扑图"></canvas>
+          <div class="compose-canvas-workspace">
+            <div class="compose-canvas-viewport" id="compose-canvas-viewport">
+              <canvas id="compose-canvas" aria-label="Docker Compose 服务拓扑图"></canvas>
+            </div>
+            <aside class="compose-canvas-inspector" id="compose-canvas-inspector">
+              <div class="compose-inspector-empty">点击服务节点编辑属性</div>
+            </aside>
           </div>
         </div>
         <div class="card tab-panel" id="panel-files" data-panel="files" role="tabpanel" aria-labelledby="tab-files">
@@ -3340,8 +3356,10 @@
       $("#project-files-up").onclick = projectFilesUp;
       $("#project-files-refresh").onclick = loadProjectFiles;
       $("#project-file-save").onclick = saveProjectFile;
-      $("#compose-canvas-refresh").onclick = loadComposeCanvas;
-      $("#compose-canvas-source").onclick = openComposeEditor;
+      $("#compose-canvas-refresh").onclick = refreshComposeCanvas;
+      $("#compose-canvas-link").onclick = () => composeCanvas.editor && composeCanvas.editor.startLink();
+      $("#compose-canvas-source").onclick = openComposeCanvasSource;
+      $("#compose-canvas-save").onclick = saveComposeCanvas;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
@@ -3380,28 +3398,56 @@
         try { composeCanvas.resizeObs.disconnect(); } catch {}
         composeCanvas.resizeObs = null;
       }
+      if (composeCanvas.editor) {
+        try { composeCanvas.editor.destroy(); } catch {}
+        composeCanvas.editor = null;
+      }
     }
 
     function renderComposeCanvas() {
-      const canvas = $("#compose-canvas");
-      const status = $("#compose-canvas-status");
-      if (!canvas || !window.ComposeCanvas) return;
-      const model = window.ComposeCanvas.render(canvas, composeCanvas.yaml || "");
-      if (status) {
-        status.textContent = `${state.compose && state.compose.compose_file ? state.compose.compose_file : "Compose"} · ${model.services.length} 个服务 · ${model.networks.length || 1} 个网络 · ${model.volumes.length} 个命名卷`;
-      }
+      if (composeCanvas.editor) composeCanvas.editor.render();
+    }
+
+    function setComposeCanvasDirty(dirty, message) {
+      composeCanvas.dirty = !!dirty;
+      const save = $("#compose-canvas-save");
+      if (save) save.disabled = !composeCanvas.dirty || !!state.busy;
+      if (message && $("#compose-canvas-status")) $("#compose-canvas-status").textContent = message + (dirty ? "（未保存）" : "");
     }
 
     async function loadComposeCanvas() {
       if (!state.current || currentProjectTab() !== "edit") return;
+      if (composeCanvas.editor && composeCanvas.projectId === state.current.id) {
+        composeCanvas.editor.render();
+        return;
+      }
       const status = $("#compose-canvas-status");
       if (status) status.textContent = "正在读取 Compose 文件…";
       try {
         const file = await api("/api/projects/" + state.current.id + "/compose/file");
+        destroyComposeCanvas();
         composeCanvas.yaml = file.content || "";
         composeCanvas.projectId = state.current.id;
-        renderComposeCanvas();
-        destroyComposeCanvas();
+        composeCanvas.etag = file.etag || "";
+        setComposeCanvasDirty(false);
+        const canvas = $("#compose-canvas");
+        const inspector = $("#compose-canvas-inspector");
+        if (!canvas || !inspector || !window.ComposeCanvas) throw new Error("Canvas 编辑组件未加载");
+        composeCanvas.editor = window.ComposeCanvas.create({
+          canvas,
+          inspector,
+          yaml: composeCanvas.yaml,
+          storageKey: "cangling-compose-layout:" + composeCanvas.projectId,
+          onChange: (yaml, message) => {
+            composeCanvas.yaml = yaml;
+            setComposeCanvasDirty(true, message);
+          },
+          onStatus: (message) => {
+            if ($("#compose-canvas-status")) $("#compose-canvas-status").textContent = message + (composeCanvas.dirty ? "（未保存）" : "");
+          },
+        });
+        const model = composeCanvas.editor.model;
+        if (status) status.textContent = `${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`;
         const viewport = $("#compose-canvas-viewport");
         if (viewport && window.ResizeObserver) {
           let lastWidth = viewport.clientWidth;
@@ -3410,13 +3456,46 @@
             const width = viewport.clientWidth;
             if (Math.abs(width - lastWidth) < 2) return;
             lastWidth = width;
-            renderComposeCanvas();
+            if (composeCanvas.editor) composeCanvas.editor.render();
           });
           observer.observe(viewport);
           composeCanvas.resizeObs = observer;
         }
       } catch (e) {
         if (status) status.textContent = "无法读取 Compose 文件：" + e.message;
+      }
+    }
+
+    async function refreshComposeCanvas() {
+      if (composeCanvas.dirty && !(await confirmDialog("Canvas 中有未保存的配置修改，确定重新读取磁盘文件吗？", { danger: true }))) return;
+      await loadComposeCanvas();
+    }
+
+    async function openComposeCanvasSource() {
+      if (composeCanvas.dirty) {
+        if ($("#compose-canvas-status")) $("#compose-canvas-status").textContent = "请先保存 Canvas 草稿，再打开 ACE 编辑器";
+        return;
+      }
+      openComposeEditor();
+    }
+
+    async function saveComposeCanvas() {
+      if (!state.current || !composeCanvas.editor || !composeCanvas.dirty || state.busy) return;
+      const save = $("#compose-canvas-save");
+      if (save) save.disabled = true;
+      if ($("#compose-canvas-status")) $("#compose-canvas-status").textContent = "正在保存 Compose…";
+      try {
+        const data = await api("/api/projects/" + state.current.id + "/compose/file", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: composeCanvas.yaml, note: "Canvas 编辑", recreate: false, expected_etag: composeCanvas.etag }),
+        });
+        composeCanvas.etag = data.etag || "";
+        composeCanvas.yaml = data.content || composeCanvas.yaml;
+        setComposeCanvasDirty(false, data.unchanged ? "内容与磁盘一致" : "Compose 已保存");
+        refreshComposeStatus();
+      } catch (e) {
+        setComposeCanvasDirty(true, "保存失败：" + e.message);
       }
     }
 
@@ -4395,7 +4474,7 @@
 
     function setBusy(kind) {
       state.busy = kind;
-      const ids = ["btn-update", "btn-replace", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-del", "btn-refresh"];
+      const ids = ["btn-update", "btn-replace", "btn-snap", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-del", "btn-refresh", "compose-canvas-refresh", "compose-canvas-link", "compose-canvas-source", "compose-canvas-save"];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.disabled = true;

@@ -1,225 +1,245 @@
 (function (global) {
   "use strict";
-
-  function indentOf(line) {
-    return (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
-  }
-
-  function cleanValue(value) {
-    return String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
-  }
-
-  function inlineList(value) {
-    const text = cleanValue(value);
-    if (!text.startsWith("[") || !text.endsWith("]")) return [];
-    return text.slice(1, -1).split(",").map(cleanValue).filter(Boolean);
-  }
+  const SW = 164, SH = 54, VW = 148, VH = 34;
+  const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
+  const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
+  const unique = values => [...new Set((values || []).map(v => String(v).trim()).filter(Boolean))];
+  const inlineList = value => {
+    const text = clean(value);
+    return text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1).split(",").map(clean).filter(Boolean) : [];
+  };
 
   function parse(yaml) {
     const model = { services: [], networks: [], volumes: [] };
-    const serviceMap = new Map();
-    let section = "";
-    let service = null;
-    let nested = "";
-
+    let section = "", service = null, nested = "";
     for (const raw of String(yaml || "").split(/\r?\n/)) {
-      const noComment = raw.replace(/\s+#.*$/, "");
-      if (!noComment.trim()) continue;
-      const indent = indentOf(noComment);
-      const text = noComment.trim();
-      if (indent === 0 && /^[\w.-]+:\s*$/.test(text)) {
-        section = text.slice(0, -1);
-        service = null;
-        nested = "";
-        continue;
+      const line = raw.replace(/\s+#.*$/, "");
+      if (!line.trim()) continue;
+      const n = indent(line), text = line.trim();
+      if (n === 0 && /^[\w.-]+:\s*$/.test(text)) {
+        section = text.slice(0, -1); service = null; nested = ""; continue;
       }
-      if (section === "services" && indent === 2 && /^[^:]+:\s*$/.test(text)) {
-        const name = cleanValue(text.slice(0, -1));
-        service = { name, image: "", container: "", depends: [], networks: [], volumes: [], ports: [] };
-        model.services.push(service);
-        serviceMap.set(name, service);
-        nested = "";
-        continue;
+      if (section === "services" && n === 2 && /^[^:]+:\s*$/.test(text)) {
+        service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", depends: [], networks: [], volumes: [], ports: [] };
+        model.services.push(service); nested = ""; continue;
       }
       if (section === "services" && service) {
-        if (indent === 4) {
-          const split = text.indexOf(":");
-          if (split < 0) continue;
-          const key = text.slice(0, split).trim();
-          const value = cleanValue(text.slice(split + 1));
+        if (n === 4) {
+          const at = text.indexOf(":");
+          if (at < 0) continue;
+          const key = text.slice(0, at).trim(), value = clean(text.slice(at + 1));
           nested = key;
           if (key === "image") service.image = value;
-          else if (key === "container_name") service.container = value;
+          else if (key === "container_name") service.containerName = value;
+          else if (key === "command") service.command = value;
+          else if (key === "restart") service.restart = value;
           else if (key === "depends_on") service.depends.push(...inlineList(value));
           else if (key === "networks") service.networks.push(...inlineList(value));
           else if (key === "volumes") service.volumes.push(...inlineList(value));
           else if (key === "ports") service.ports.push(...inlineList(value));
           continue;
         }
-        if (indent >= 6 && text.startsWith("- ")) {
-          const value = cleanValue(text.slice(2));
+        if (n >= 6 && text.startsWith("- ")) {
+          const value = clean(text.slice(2));
           if (nested === "depends_on") service.depends.push(value);
           else if (nested === "networks") service.networks.push(value);
           else if (nested === "volumes") service.volumes.push(value);
           else if (nested === "ports") service.ports.push(value);
-          continue;
-        }
-        if (indent === 6 && (nested === "depends_on" || nested === "networks")) {
-          const key = cleanValue(text.split(":", 1)[0]);
+        } else if (n === 6 && (nested === "depends_on" || nested === "networks")) {
+          const key = clean(text.split(":", 1)[0]);
           if (key) service[nested === "depends_on" ? "depends" : "networks"].push(key);
         }
-      } else if ((section === "networks" || section === "volumes") && indent === 2) {
-        const name = cleanValue(text.split(":", 1)[0]);
+      } else if ((section === "networks" || section === "volumes") && n === 2) {
+        const name = clean(text.split(":", 1)[0]);
         if (name) model[section].push(name);
       }
     }
-
+    const names = new Set(model.services.map(s => s.name));
     for (const item of model.services) {
-      item.depends = [...new Set(item.depends.filter(name => serviceMap.has(name)))];
-      item.networks = [...new Set(item.networks.map(value => value.split(":")[0]).filter(Boolean))];
-      item.volumes = [...new Set(item.volumes.filter(Boolean))];
-      item.ports = [...new Set(item.ports.filter(Boolean))];
+      item.depends = unique(item.depends.filter(name => names.has(name)));
+      item.networks = unique(item.networks.map(v => v.split(":")[0]));
+      item.volumes = unique(item.volumes); item.ports = unique(item.ports);
     }
-    model.networks = [...new Set(model.networks)];
-    model.volumes = [...new Set(model.volumes)];
+    model.networks = unique(model.networks); model.volumes = unique(model.volumes);
     return model;
   }
 
-  function css(name, fallback) {
-    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    return value || fallback;
+  const quote = value => /[:#{}[\],&*!|>'"%@`\s]/.test(String(value || "")) ? JSON.stringify(String(value)) : String(value);
+  function locateService(lines, name) {
+    let services = lines.findIndex(line => indent(line) === 0 && line.trim() === "services:");
+    if (services < 0) return null;
+    let start = -1, end = lines.length;
+    for (let i = services + 1; i < lines.length; i += 1) {
+      const text = lines[i].trim(), n = indent(lines[i]);
+      if (text && n === 0) break;
+      if (n === 2 && clean(text.replace(/:\s*$/, "")) === name) { start = i; break; }
+    }
+    if (start < 0) return null;
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (lines[i].trim() && indent(lines[i]) <= 2) { end = i; break; }
+    }
+    return { start, end };
   }
 
-  function roundedRect(ctx, x, y, w, h, r) {
-    const radius = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.roundRect(x, y, w, h, radius);
+  function replaceKey(block, key, value, list) {
+    let start = -1, end = block.length;
+    for (let i = 1; i < block.length; i += 1) {
+      if (indent(block[i]) === 4 && block[i].trim().startsWith(key + ":")) { start = i; break; }
+    }
+    if (start >= 0) for (let i = start + 1; i < block.length; i += 1) {
+      if (block[i].trim() && indent(block[i]) <= 4) { end = i; break; }
+    }
+    const values = list ? unique(value) : String(value || "").trim();
+    const next = list
+      ? (values.length ? ["    " + key + ":", ...values.map(v => "      - " + quote(v))] : [])
+      : (values ? ["    " + key + ": " + quote(values)] : []);
+    if (start >= 0) block.splice(start, end - start, ...next);
+    else if (next.length) block.splice(1, 0, ...next);
   }
 
-  function clipText(ctx, text, maxWidth) {
-    let value = String(text || "");
-    if (ctx.measureText(value).width <= maxWidth) return value;
-    while (value.length && ctx.measureText(value + "…").width > maxWidth) value = value.slice(0, -1);
-    return value + "…";
-  }
-
-  function drawArrow(ctx, from, to, color) {
-    const x1 = from.x + from.w / 2;
-    const y1 = from.y + from.h;
-    const x2 = to.x + to.w / 2;
-    const y2 = to.y;
-    const mid = y1 + (y2 - y1) / 2;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.bezierCurveTo(x1, mid, x2, mid, x2, y2 - 7);
-    ctx.stroke();
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.moveTo(x2, y2);
-    ctx.lineTo(x2 - 4, y2 - 8);
-    ctx.lineTo(x2 + 4, y2 - 8);
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  function render(canvas, yaml) {
-    const model = parse(yaml);
-    const parentWidth = Math.max(680, canvas.parentElement ? canvas.parentElement.clientWidth : 0);
-    const cardW = 250;
-    const cardH = 142;
-    const gapX = 36;
-    const gapY = 72;
-    const cols = Math.max(1, Math.min(4, Math.floor((parentWidth - 48) / (cardW + gapX))));
-    const rows = Math.max(1, Math.ceil(model.services.length / cols));
-    const logicalW = Math.max(parentWidth, 48 + cols * cardW + (cols - 1) * gapX);
-    const logicalH = 70 + rows * cardH + Math.max(0, rows - 1) * gapY + 120;
-    const ratio = Math.max(1, global.devicePixelRatio || 1);
-    canvas.width = logicalW * ratio;
-    canvas.height = logicalH * ratio;
-    canvas.style.width = logicalW + "px";
-    canvas.style.height = logicalH + "px";
-    const ctx = canvas.getContext("2d");
-    ctx.scale(ratio, ratio);
-
-    const bg = css("--bg-2", "#161b22");
-    const card = css("--bg-3", "#21262d");
-    const text = css("--text", "#f0f6fc");
-    const muted = css("--muted", "#8b949e");
-    const line = css("--line", "#30363d");
-    const accent = css("--accent", "#58a6ff");
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, logicalW, logicalH);
-
-    ctx.fillStyle = text;
-    ctx.font = "600 16px system-ui, sans-serif";
-    ctx.fillText("Docker Compose 服务拓扑", 24, 30);
-    ctx.fillStyle = muted;
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText(model.services.length + " 个服务 · 箭头表示 depends_on", 24, 50);
-
-    const boxes = new Map();
-    model.services.forEach((service, index) => {
-      const col = index % cols;
-      const row = Math.floor(index / cols);
-      boxes.set(service.name, {
-        x: 24 + col * (cardW + gapX),
-        y: 68 + row * (cardH + gapY),
-        w: cardW,
-        h: cardH,
-      });
+  function updateServiceYaml(yaml, name, values) {
+    const hadNewline = String(yaml || "").endsWith("\n");
+    const lines = String(yaml || "").split(/\r?\n/), range = locateService(lines, name);
+    if (!range) throw new Error("未能在 Compose 源文件中定位服务 " + name);
+    const block = lines.slice(range.start, range.end);
+    const fields = [
+      ["image", "image", false], ["container_name", "containerName", false],
+      ["command", "command", false], ["restart", "restart", false],
+      ["depends_on", "depends", true], ["ports", "ports", true],
+      ["volumes", "volumes", true], ["networks", "networks", true],
+    ];
+    fields.forEach(([yamlKey, field, list]) => {
+      if (Object.prototype.hasOwnProperty.call(values, field)) replaceKey(block, yamlKey, values[field], list);
     });
-    for (const service of model.services) {
-      const to = boxes.get(service.name);
-      for (const dependency of service.depends) {
-        const from = boxes.get(dependency);
-        if (from && to) drawArrow(ctx, from, to, accent);
+    lines.splice(range.start, range.end - range.start, ...block);
+    let result = lines.join("\n");
+    if (hadNewline && !result.endsWith("\n")) result += "\n";
+    return result;
+  }
+
+  const color = (name, fallback) => getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  function clip(ctx, text, width) {
+    let value = String(text || "");
+    while (value && ctx.measureText(value).width > width) value = value.slice(0, -1);
+    return value === text ? value : value + "…";
+  }
+  const html = value => String(value == null ? "" : value).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
+
+  class Editor {
+    constructor(options) {
+      Object.assign(this, { selected: "", linkFrom: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
+      try { this.positions = JSON.parse(localStorage.getItem(this.storageKey) || "{}"); } catch (_) { this.positions = {}; }
+      this.down = e => this.pointerDown(e); this.move = e => this.pointerMove(e); this.up = e => this.pointerUp(e);
+      this.canvas.addEventListener("pointerdown", this.down); this.canvas.addEventListener("pointermove", this.move);
+      this.canvas.addEventListener("pointerup", this.up); this.canvas.addEventListener("pointercancel", this.up);
+      this.renderInspector(); this.render();
+    }
+    destroy() {
+      this.canvas.removeEventListener("pointerdown", this.down); this.canvas.removeEventListener("pointermove", this.move);
+      this.canvas.removeEventListener("pointerup", this.up); this.canvas.removeEventListener("pointercancel", this.up);
+    }
+    ensurePositions() {
+      const width = Math.max(720, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0);
+      const cols = Math.max(1, Math.floor((width - 230) / 220));
+      this.model.services.forEach((s, i) => { if (!this.positions[s.name]) this.positions[s.name] = { x: 210 + i % cols * 220, y: 55 + Math.floor(i / cols) * 120 }; });
+    }
+    serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
+    volumeBox(i) { return { x: 24, y: 68 + i * 50, w: VW, h: VH }; }
+    point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    hitService(p) {
+      return [...this.model.services].reverse().find(s => { const b = this.serviceBox(s); return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }) || null;
+    }
+    hitVolume(p) {
+      for (let i = 0; i < this.model.volumes.length; i += 1) { const b = this.volumeBox(i); if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return this.model.volumes[i]; }
+      return "";
+    }
+    pointerDown(e) {
+      const p = this.point(e), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      if (service && this.linkFrom) {
+        if (service.name !== this.linkFrom) this.addDependency(this.linkFrom, service.name);
+        this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
+      }
+      if (service) {
+        this.selected = service.name; const pos = this.positions[service.name];
+        this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y };
+        this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
+      } else if (volume) {
+        this.drag = { type: "volume", name: volume }; this.canvas.setPointerCapture(e.pointerId); this.render();
       }
     }
-
-    model.services.forEach(service => {
-      const box = boxes.get(service.name);
-      roundedRect(ctx, box.x, box.y, box.w, box.h, 8);
-      ctx.fillStyle = card;
-      ctx.fill();
-      ctx.strokeStyle = line;
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = accent;
-      ctx.fillRect(box.x, box.y, 4, box.h);
-      ctx.fillStyle = text;
-      ctx.font = "600 15px system-ui, sans-serif";
-      ctx.fillText(clipText(ctx, service.name, cardW - 28), box.x + 16, box.y + 25);
-      ctx.fillStyle = muted;
-      ctx.font = "12px ui-monospace, monospace";
-      const details = [
-        ["镜像", service.image || "—"],
-        ["端口", service.ports.join(", ") || "—"],
-        ["网络", service.networks.join(", ") || "default"],
-        ["挂载", service.volumes.length ? service.volumes.length + " 项" : "—"],
-      ];
-      details.forEach((item, i) => {
-        ctx.fillStyle = muted;
-        ctx.fillText(item[0], box.x + 16, box.y + 51 + i * 21);
-        ctx.fillStyle = text;
-        ctx.fillText(clipText(ctx, item[1], cardW - 70), box.x + 58, box.y + 51 + i * 21);
-      });
-    });
-
-    const footerY = logicalH - 68;
-    ctx.fillStyle = muted;
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("网络: " + (model.networks.join(", ") || "default"), 24, footerY);
-    ctx.fillText("命名卷: " + (model.volumes.join(", ") || "—"), 24, footerY + 24);
-    if (!model.services.length) {
-      ctx.fillStyle = muted;
-      ctx.font = "14px system-ui, sans-serif";
-      ctx.fillText("Compose 文件中未解析到 services", 24, 92);
+    pointerMove(e) {
+      if (!this.drag) return; const p = this.point(e); this.pointer = p;
+      if (this.drag.type === "service") this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
+      this.render();
     }
-    canvas.title = model.services.map(s => s.name + (s.image ? " · " + s.image : "")).join("\n");
-    return model;
+    pointerUp(e) {
+      if (!this.drag) return; const p = this.point(e);
+      if (this.drag.type === "volume") { const service = this.hitService(p); if (service) this.attachVolume(this.drag.name, service.name); }
+      else try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
+      this.drag = null; this.render();
+    }
+    startLink() {
+      if (!this.selected) { this.onStatus("请先点击作为依赖来源的服务"); return; }
+      this.linkFrom = this.selected; this.onStatus("请点击依赖该服务的目标服务"); this.render();
+    }
+    addDependency(from, to) {
+      const service = this.model.services.find(s => s.name === to);
+      if (service && !service.depends.includes(from)) { service.depends.push(from); this.commit(service, { depends: service.depends }, `已添加依赖 ${from} → ${to}`); }
+    }
+    attachVolume(volume, name) {
+      const service = this.model.services.find(s => s.name === name);
+      if (!service || service.volumes.some(v => v.split(":")[0] === volume)) { this.onStatus(`${volume} 已挂载到 ${name}`); return; }
+      service.volumes.push(`${volume}:/mnt/${volume}`); this.commit(service, { volumes: service.volumes }, `已将卷 ${volume} 挂载到 ${name}`);
+    }
+    commit(service, values, message) {
+      this.yaml = updateServiceYaml(this.yaml, service.name, values); this.model = parse(this.yaml);
+      this.onChange(this.yaml, message); this.onStatus(message); this.renderInspector(); this.render();
+    }
+    renderInspector() {
+      const service = this.model.services.find(s => s.name === this.selected);
+      if (!service) { this.inspector.innerHTML = '<div class="compose-inspector-empty">点击服务节点编辑属性</div>'; return; }
+      const field = (label, key, value, area) => `<label>${label}${area ? `<textarea data-field="${key}" rows="3">${html((value || []).join("\n"))}</textarea>` : `<input data-field="${key}" type="text" value="${html(value || "")}" />`}</label>`;
+      this.inspector.innerHTML = `<div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${field("重启策略","restart",service.restart)}${field("依赖服务（每行一个）","depends",service.depends,true)}${field("端口（每行一个）","ports",service.ports,true)}${field("挂载（每行一个）","volumes",service.volumes,true)}${field("网络（每行一个）","networks",service.networks,true)}<button type="button" class="btn primary" data-apply>应用到草稿</button>`;
+      this.inspector.querySelector("[data-apply]").onclick = () => {
+        const patch = {};
+        this.inspector.querySelectorAll("[data-field]").forEach(input => {
+          const key = input.dataset.field, value = input.tagName === "TEXTAREA" ? unique(input.value.split(/\r?\n/)) : input.value.trim();
+          if (JSON.stringify(value) !== JSON.stringify(service[key])) patch[key] = value;
+        });
+        if (!Object.keys(patch).length) { this.onStatus("服务属性没有变化"); return; }
+        this.commit(service, patch, `已更新服务 ${service.name} 的属性`);
+      };
+    }
+    render() {
+      this.ensurePositions(); let width = Math.max(820, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0), height = Math.max(360, 110 + this.model.volumes.length * 50);
+      this.model.services.forEach(s => { const b = this.serviceBox(s); width = Math.max(width, b.x + b.w + 40); height = Math.max(height, b.y + b.h + 40); });
+      const dpr = Math.max(1, global.devicePixelRatio || 1); this.canvas.width = width * dpr; this.canvas.height = height * dpr; this.canvas.style.width = width + "px"; this.canvas.style.height = height + "px";
+      const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
+      const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33") };
+      ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷（拖到服务）", 24, 40);
+      this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));
+      if (this.drag && this.drag.type === "volume") { ctx.globalAlpha=.8; this.drawPill(ctx,this.pointer.x-VW/2,this.pointer.y-VH/2,VW,VH,this.drag.name,c); ctx.globalAlpha=1; }
+    }
+    drawLinks(ctx,c) {
+      ctx.strokeStyle=c.accent; ctx.fillStyle=c.accent; ctx.lineWidth=1.5;
+      this.model.services.forEach(targetService => targetService.depends.forEach(name => {
+        const sourceService=this.model.services.find(s=>s.name===name); if(!sourceService)return;
+        const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),x1=a.x+a.w/2,y1=a.y+a.h/2,x2=b.x+b.w/2,y2=b.y+b.h/2,ang=Math.atan2(y2-y1,x2-x1);
+        const sx=x1+Math.cos(ang)*a.w/2,sy=y1+Math.sin(ang)*a.h/2,tx=x2-Math.cos(ang)*b.w/2,ty=y2-Math.sin(ang)*b.h/2;
+        ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tx,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(ang-.45)*9,ty-Math.sin(ang-.45)*9);ctx.lineTo(tx-Math.cos(ang+.45)*9,ty-Math.sin(ang+.45)*9);ctx.closePath();ctx.fill();
+      }));
+    }
+    drawService(ctx,s,c) {
+      const b=this.serviceBox(s);roundRect(ctx,b.x,b.y,b.w,b.h,18);ctx.fillStyle=s.name===this.selected?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom)?c.accent:c.line;ctx.lineWidth=(s.name===this.selected||s.name===this.linkFrom)?2:1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+    }
+    drawPill(ctx,x,y,w,h,text,c) { roundRect(ctx,x,y,w,h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,text,w-20),x+10,y+h/2);ctx.textBaseline="alphabetic"; }
+    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i);this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c); }
   }
 
-  global.ComposeCanvas = { parse, render };
+  global.ComposeCanvas = { parse, updateServiceYaml, create: options => new Editor(options) };
 })(window);
