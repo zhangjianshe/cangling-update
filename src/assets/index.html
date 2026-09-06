@@ -401,12 +401,12 @@
       display: flex; flex-direction: column; position: relative;
     }
     .compose-canvas-toolbar {
-      position: absolute; z-index: 8; top: 12px; left: 50%; transform: translateX(-50%);
+      position: absolute; z-index: 8; top: 6px; left: 50%; transform: translateX(-50%);
       display: flex; align-items: center; max-width: calc(100% - 32px); padding: 7px 12px;
       border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
       box-shadow: 0 4px 14px rgba(0,0,0,.22); pointer-events: none;
     }
-    .compose-canvas-toolbar .hint { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .compose-canvas-toolbar .hint { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
     .compose-canvas-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
     .compose-canvas-viewport { min-height: 0; overflow: auto; background: var(--bg-2); }
     .compose-canvas-viewport canvas { display: block; cursor: default; touch-action: none; user-select: none; }
@@ -926,7 +926,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-55"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-56"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
