@@ -116,6 +116,17 @@ pub struct BrowseDirBody {
     pub path: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateDirBody {
+    pub parent: String,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateDirResult {
+    pub path: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct BrowseDirEntry {
     pub name: String,

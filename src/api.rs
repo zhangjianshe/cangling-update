@@ -57,6 +57,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/gitrepo/file", get(crate::gitrepo::file))
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/browse-directory", post(browse_directory))
+        .route("/api/create-directory", post(create_directory))
         .route("/api/orphans", get(list_orphans))
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
         .route("/api/np4/deploy/status", get(np4_deploy_status))
@@ -437,6 +438,33 @@ async fn browse_directory(
         parent,
         entries,
     }))
+}
+
+async fn create_directory(
+    Json(body): Json<CreateDirBody>,
+) -> Result<Json<CreateDirResult>, AppError> {
+    let path = create_subdirectory(&body.parent, &body.name)?;
+    Ok(Json(CreateDirResult {
+        path: path.display().to_string(),
+    }))
+}
+
+fn create_subdirectory(parent: &str, name: &str) -> Result<PathBuf, AppError> {
+    let parent = require_absolute_dir(parent).map_err(|e| AppError::bad(e.to_string()))?;
+    let name = name.trim();
+    let mut components = FsPath::new(name).components();
+    let valid = matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none()
+        && !name.starts_with('.');
+    if !valid {
+        return Err(AppError::bad("目录名不能为空、隐藏名称或包含路径分隔符"));
+    }
+    let path = parent.join(name);
+    std::fs::create_dir(&path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::AlreadyExists => AppError::conflict(format!("目录已存在：{}", path.display())),
+        _ => AppError::internal(format!("无法创建目录 {}：{error}", path.display())),
+    })?;
+    Ok(path.canonicalize().unwrap_or(path))
 }
 
 async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project>>, AppError> {
@@ -3416,5 +3444,17 @@ mod tests {
         }
         assert!(!project_file_is_editable(FsPath::new("image.tar.gz")));
         assert!(!project_file_is_editable(FsPath::new("app.jar")));
+    }
+
+    #[test]
+    fn create_subdirectory_creates_one_safe_child() {
+        let root = temp_root();
+        let child = create_subdirectory(root.to_str().unwrap(), "volume-data").unwrap();
+        assert_eq!(child, root.join("volume-data"));
+        assert!(child.is_dir());
+        for invalid in ["", "..", "../escape", "nested/path", ".hidden"] {
+            assert!(create_subdirectory(root.to_str().unwrap(), invalid).is_err(), "{invalid}");
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 }

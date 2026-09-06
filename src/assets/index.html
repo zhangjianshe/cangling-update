@@ -647,6 +647,9 @@
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
     .dir-picker-bar .btn { flex: 0 0 auto; white-space: nowrap; }
+    .dir-picker-create { display: flex; gap: 8px; margin-bottom: 10px; }
+    .dir-picker-create[hidden] { display: none; }
+    .dir-picker-create input { flex: 1; min-width: 0; }
     .dir-picker-flash { margin-bottom: 10px; }
     .dir-picker-list {
       flex: 1; min-height: 0; overflow: auto;
@@ -2672,6 +2675,12 @@
             <input id="dir-picker-path" type="text" placeholder="/" autocomplete="off" spellcheck="false" />
             <button type="button" class="btn" id="dir-picker-go">跳转</button>
             <button type="button" class="btn" id="dir-picker-up">上级</button>
+            <button type="button" class="btn" id="dir-picker-new">新建目录</button>
+          </div>
+          <div class="dir-picker-create" id="dir-picker-create" hidden>
+            <input id="dir-picker-new-name" type="text" placeholder="子目录名称" autocomplete="off" spellcheck="false" />
+            <button type="button" class="btn primary" id="dir-picker-create-confirm">创建</button>
+            <button type="button" class="btn" id="dir-picker-create-cancel">取消</button>
           </div>
           <div class="dir-picker-flash flash err" id="dir-picker-flash" hidden></div>
           <div class="dir-picker-list" id="dir-picker-list"></div>
@@ -2684,6 +2693,11 @@
       $("#dir-picker-up").onclick = () => {
         if (dirPicker.parent) renderDirPicker(dirPicker.parent);
       };
+      const createRow = $("#dir-picker-create"), createName = $("#dir-picker-new-name");
+      $("#dir-picker-new").onclick = () => { createRow.hidden = false; createName.focus(); };
+      $("#dir-picker-create-cancel").onclick = () => { createRow.hidden = true; createName.value = ""; };
+      $("#dir-picker-create-confirm").onclick = createCurrentSubdirectory;
+      createName.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); createCurrentSubdirectory(); } });
       if (bar) {
         bar.addEventListener("keydown", (e) => {
           if (e.key === "Enter") {
@@ -2695,6 +2709,25 @@
 
       const initial = ($("#" + targetId) && $("#" + targetId).value.trim()) || "/";
       renderDirPicker(initial);
+    }
+
+    async function createCurrentSubdirectory() {
+      const input = $("#dir-picker-new-name"), button = $("#dir-picker-create-confirm"), flash = $("#dir-picker-flash");
+      const name = input ? input.value.trim() : "";
+      if (!name) { if (flash) { flash.textContent = "请输入子目录名称"; flash.hidden = false; } return; }
+      try {
+        if (button) { button.disabled = true; button.textContent = "创建中…"; }
+        const data = await api("/api/create-directory", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({parent:dirPicker.path,name})});
+        await renderDirPicker(dirPicker.path);
+        dirPicker.selected = data.path;
+        const row = Array.from(document.querySelectorAll("#dir-picker-list .dir-entry")).find(item => item.dataset.path === data.path);
+        if (row) row.classList.add("active");
+        const createRow = $("#dir-picker-create");if(createRow)createRow.hidden=true;if(input)input.value="";
+      } catch (e) {
+        if (flash) { flash.textContent = e.message; flash.hidden = false; }
+      } finally {
+        if (button) { button.disabled = false; button.textContent = "创建"; }
+      }
     }
 
     async function renderDirPicker(path) {
@@ -2742,6 +2775,7 @@
         const row = document.createElement("button");
         row.type = "button";
         row.className = "dir-entry";
+        row.dataset.path = ent.path;
         row.innerHTML =
           '<span class="dir-ico">' + DIR_ICON + '</span>' +
           '<span class="dir-name">' + esc(ent.name) + '</span>' +
