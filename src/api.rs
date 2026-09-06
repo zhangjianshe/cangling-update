@@ -3196,7 +3196,9 @@ async fn vendor_compose_canvas() -> impl IntoResponse {
                 header::CONTENT_TYPE,
                 "application/javascript; charset=utf-8",
             ),
-            (header::CACHE_CONTROL, "public, max-age=86400"),
+            // This module and the inline page code share an API. Never let a
+            // newly loaded page execute against yesterday's cached module.
+            (header::CACHE_CONTROL, "no-cache, must-revalidate"),
         ],
         include_str!("assets/compose-canvas.js"),
     )
