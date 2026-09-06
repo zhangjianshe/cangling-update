@@ -169,6 +169,7 @@
       if (handle) {
         this.selected = handle.name; this.linkFrom = handle.name;
         this.drag = { type: "link", name: handle.name };
+        this.canvas.style.cursor = "crosshair";
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
       }
       if (service && this.linkFrom) {
@@ -184,7 +185,12 @@
       }
     }
     pointerMove(e) {
-      if (!this.drag) return; const p = this.point(e); this.pointer = p;
+      const p = this.point(e); this.pointer = p;
+      if (!this.drag) {
+        this.canvas.style.cursor = this.hitLinkHandle(p) ? "crosshair" : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
+        return;
+      }
+      this.canvas.style.cursor = this.drag.type === "link" ? "crosshair" : "grabbing";
       if (this.drag.type === "service") this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
       this.render();
     }
@@ -198,6 +204,7 @@
         this.linkFrom = "";
       } else try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
       this.drag = null; this.render();
+      this.canvas.style.cursor = this.hitLinkHandle(p) ? "crosshair" : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
     }
     startLink() {
       if (!this.selected) { this.onStatus("请先点击作为依赖来源的服务"); return; }
@@ -258,10 +265,10 @@
       ctx.strokeStyle=c.accent; ctx.fillStyle=c.accent; ctx.lineWidth=1.5;
       this.model.services.forEach(targetService => targetService.depends.forEach(name => {
         const sourceService=this.model.services.find(s=>s.name===name); if(!sourceService)return;
-        const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;const ang=Math.atan2(dy,dx);
-        const edgeScale=1/Math.max(Math.abs(dx)/(b.w/2),Math.abs(dy)/(b.h/2));
-        const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale;
-        ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tx,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(ang-.45)*9,ty-Math.sin(ang-.45)*9);ctx.lineTo(tx-Math.cos(ang+.45)*9,ty-Math.sin(ang+.45)*9);ctx.closePath();ctx.fill();
+        const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;
+        const xr=Math.abs(dx)/(b.w/2),yr=Math.abs(dy)/(b.h/2),edgeScale=1/Math.max(xr,yr);
+        const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale,nx=xr>=yr?(dx>0?-1:1):0,ny=xr>=yr?0:(dy>0?-1:1),px=tx+nx*10,py=ty+ny*10,arrowAng=Math.atan2(ty-py,tx-px);
+        ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(px,py);ctx.lineTo(tx,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(arrowAng-.45)*9,ty-Math.sin(arrowAng-.45)*9);ctx.lineTo(tx-Math.cos(arrowAng+.45)*9,ty-Math.sin(arrowAng+.45)*9);ctx.closePath();ctx.fill();
       }));
     }
     drawService(ctx,s,c) {
