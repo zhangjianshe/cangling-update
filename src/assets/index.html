@@ -924,7 +924,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-48"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-49"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3484,6 +3484,7 @@
           onAddMount: openServiceMountDialog,
           onEditMount: openServiceMountDialog,
           onEditPort: openServicePortDialog,
+          onEditNetwork: openServiceNetworkDialog,
         });
         const model = composeCanvas.editor.model;
         if (status) status.textContent = `${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`;
@@ -3524,6 +3525,10 @@
       $("#dialog").hidden=false;
       setDialogAction(editing?"保存端口":"添加端口",()=>{const value=$("#service-port-value").value.trim(),error=$("#service-port-error");if(!value||/\s/.test(value)){error.textContent=value?"端口映射不能包含空格":"请填写端口映射";error.hidden=false;return;}closeDialog();onSave(value);});
       $("#service-port-value").focus();
+    }
+
+    function openServiceNetworkDialog(serviceName, networks, current, onSave) {
+      closeDialog();const available=networks||[];$("#dialog-title").textContent=`${current?"编辑":"添加"}网络 · ${serviceName}`;$("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>命名网络</label><select id="service-network-value">${available.map(name=>`<option value="${esc(name)}" ${name===current?"selected":""}>${esc(name)}</option>`).join("")}</select></div><div class="flash err" id="service-network-error" ${available.length?"hidden":""}>请先在 Canvas 底部创建一个网络</div></div>`;$("#dialog").hidden=false;setDialogAction(current?"保存网络":"添加网络",()=>{const input=$("#service-network-value"),value=input&&input.value;if(!value)return;closeDialog();onSave(value);});
     }
 
     async function refreshComposeCanvas() {
