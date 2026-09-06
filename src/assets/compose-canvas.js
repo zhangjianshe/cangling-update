@@ -221,7 +221,8 @@
       });
     }
     serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
-    volumeBox(i) { return { x: 24, y: 68 + i * 50, w: VW, h: VH }; }
+    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});return bottom+72; }
+    volumeBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.volumeTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
     point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     hitService(p) {
       return [...this.model.services].reverse().find(s => { const b = this.serviceBox(s); return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }) || null;
@@ -263,7 +264,7 @@
     hitDelete(p) { if(!this.selectedLink)return false;const at=this.linkMidpoint(this.selectedLink);return Math.hypot(p.x-at.x,p.y-at.y)<=11; }
     mountGeometry(serviceName,volumeName) {
       const service=this.model.services.find(s=>s.name===serviceName),index=this.model.volumes.indexOf(volumeName);if(!service||index<0)return null;
-      const handle=this.mountHandleBox(service),volume=this.volumeBox(index);return{service:serviceName,volume:volumeName,points:[{x:handle.x+handle.w/2,y:handle.y+handle.h/2},{x:volume.x+volume.w,y:volume.y+volume.h/2}]};
+      const handle=this.mountHandleBox(service),volume=this.volumeBox(index);return{service:serviceName,volume:volumeName,points:[{x:handle.x+handle.w/2,y:handle.y+handle.h/2},{x:volume.x+volume.w/2,y:volume.y}]};
     }
     sameMount(a,b) { return !!a&&!!b&&a.service===b.service&&a.volume===b.volume; }
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
@@ -291,7 +292,7 @@
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
-        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.selectedMount=null; this.drag = { type: "volume", name: volume }; this.canvas.focus(); this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
+        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.selectedMount=null; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
       } else {
         const mount=this.hitMount(p),link=mount?null:this.hitDependency(p);this.selectedMount=mount;this.selectedLink=link;this.canvas.focus();
         this.onStatus(mount?`已选择挂载 ${mount.service} → ${mount.volume}，按 Delete 删除`:(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : "")); this.render();
@@ -301,7 +302,7 @@
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
         const previous=this.hoverLink,previousMount=this.hoverMount,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p);this.hoverMount=handle||mountHandle||node||volume?null:this.hitMount(p);this.hoverLink=handle||mountHandle||node||volume||this.hoverMount?null:this.hitDependency(p);
-        this.canvas.style.cursor = this.hitDelete(p)||this.hitMountDelete(p)||this.hoverLink||this.hoverMount?"pointer":(handle||mountHandle?LINK_CURSOR:(node||volume?"grab":"default"));
+        this.canvas.style.cursor = this.hitDelete(p)||this.hitMountDelete(p)||this.hoverLink||this.hoverMount||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
         if(!this.sameLink(previous,this.hoverLink)||!this.sameMount(previousMount,this.hoverMount))this.render();
         return;
       }
@@ -319,8 +320,7 @@
     }
     pointerUp(e) {
       if (!this.drag) return; const p = this.point(e);
-      if (this.drag.type === "volume") { const service = this.hitService(p); if (service) this.attachVolume(this.drag.name, service.name); }
-      else if (this.drag.type === "link") {
+      if (this.drag.type === "link") {
         const target = e.type === "pointercancel" ? null : (this.model.services.find(service => service.name === this.linkTarget) || this.hitService(p)), from = this.drag.name;
         if (target && target.name !== from) this.addDependency(from, target.name);
         else this.onStatus("未连接：请在另一个服务上松开鼠标");
@@ -333,7 +333,7 @@
         this.onChange(this.yaml, "已更新 Canvas 布局"); this.onStatus("已更新 Canvas 布局");
       }
       this.drag = null; this.render();
-      this.canvas.style.cursor = this.hitLinkHandle(p)||this.hitMountHandle(p) ? LINK_CURSOR : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
+      this.canvas.style.cursor = this.hitLinkHandle(p)||this.hitMountHandle(p) ? LINK_CURSOR : (this.hitService(p) ? "grab" : (this.hitVolume(p)?"pointer":"default"));
     }
     startLink() {
       if (!this.selected) { this.onStatus("请先点击需要添加依赖的服务"); return; }
@@ -411,14 +411,14 @@
       };
     }
     render() {
-      this.ensurePositions(); let width = Math.max(820, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0), height = Math.max(360, 110 + this.model.volumes.length * 50);
+      this.ensurePositions(); let width = Math.max(820, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0), height = 360;
       this.model.services.forEach(s => { const b = this.serviceBox(s); width = Math.max(width, b.x + b.w + 40); height = Math.max(height, b.y + b.h + 40); });
+      this.model.volumes.forEach((v,i)=>{const b=this.volumeBox(i);height=Math.max(height,b.y+b.h+32);});
       const dpr = Math.max(1, global.devicePixelRatio || 1); this.canvas.width = width * dpr; this.canvas.height = height * dpr; this.canvas.style.width = width + "px"; this.canvas.style.height = height + "px";
       const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
       const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33") };
-      ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷（拖到服务）", 24, 40);
+      ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷", 24, this.volumeTop()-20);
       this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));
-      if (this.drag && this.drag.type === "volume") { ctx.globalAlpha=.8; this.drawPill(ctx,this.pointer.x-VW/2,this.pointer.y-VH/2,VW,VH,this.drag.name,c); ctx.globalAlpha=1; }
       if (this.drag && this.drag.type === "link") {
         const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
         if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(b.x-15,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
@@ -438,9 +438,9 @@
       if(this.selectedLink){const at=this.linkMidpoint(this.selectedLink);ctx.save();ctx.beginPath();ctx.arc(at.x,at.y,10,0,Math.PI*2);ctx.fillStyle="#d1242f";ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();ctx.strokeStyle="#fff";ctx.lineWidth=1.7;ctx.beginPath();ctx.moveTo(at.x-3.5,at.y-3.5);ctx.lineTo(at.x+3.5,at.y+3.5);ctx.moveTo(at.x+3.5,at.y-3.5);ctx.lineTo(at.x-3.5,at.y+3.5);ctx.stroke();ctx.restore();}
     }
     drawService(ctx,s,c) {
-      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget,count=s.volumes.filter(mount=>this.model.volumes.includes(mount.split(":")[0])).length,linked=count>0;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget||linked)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
-      const mh=this.mountHandleBox(s),count=s.volumes.filter(mount=>this.model.volumes.includes(mount.split(":")[0])).length;roundRect(ctx,mh.x,mh.y,mh.w,mh.h,3);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.stroke();ctx.fillStyle=c.text;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),mh.x+mh.w/2,mh.y+mh.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const mh=this.mountHandleBox(s);roundRect(ctx,mh.x,mh.y,mh.w,mh.h,3);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=linked?c.accent:c.line;ctx.lineWidth=1.5;ctx.stroke();ctx.fillStyle=linked?c.text:c.muted;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),mh.x+mh.w/2,mh.y+mh.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
     }
     drawPill(ctx,x,y,w,h,text,c) { roundRect(ctx,x,y,w,h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,text,w-20),x+10,y+h/2);ctx.textBaseline="alphabetic"; }
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget;this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c);if(active){ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,12);ctx.strokeStyle=c.accent;ctx.lineWidth=v===this.mountTarget?3:2.5;ctx.stroke();ctx.restore();} }
