@@ -269,7 +269,7 @@
         const targetService=this.model.services.find(s=>s.name===name); if(!targetService)return;
         const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;
         const xr=Math.abs(dx)/(b.w/2),yr=Math.abs(dy)/(b.h/2),edgeScale=1/Math.max(xr,yr);
-        const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale,nx=xr>=yr?(dx>0?-1:1):0,ny=xr>=yr?0:(dy>0?-1:1),px=tx+nx*10,py=ty+ny*10,arrowAng=Math.atan2(ty-py,tx-px);
+        const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale,nx=xr>=yr?(dx>0?-1:1):0,ny=xr>=yr?0:(dy>0?-1:1),px=tx+nx*20,py=ty+ny*20,arrowAng=Math.atan2(ty-py,tx-px);
         ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx-15,sy);ctx.lineTo(px,py);ctx.lineTo(tx,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(arrowAng-.45)*9,ty-Math.sin(arrowAng-.45)*9);ctx.lineTo(tx-Math.cos(arrowAng+.45)*9,ty-Math.sin(arrowAng+.45)*9);ctx.closePath();ctx.fill();
       }));
     }
