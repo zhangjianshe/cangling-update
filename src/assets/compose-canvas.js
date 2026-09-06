@@ -258,8 +258,9 @@
       ctx.strokeStyle=c.accent; ctx.fillStyle=c.accent; ctx.lineWidth=1.5;
       this.model.services.forEach(targetService => targetService.depends.forEach(name => {
         const sourceService=this.model.services.find(s=>s.name===name); if(!sourceService)return;
-        const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),x1=a.x+a.w/2,y1=a.y+a.h/2,x2=b.x+b.w/2,y2=b.y+b.h/2,ang=Math.atan2(y2-y1,x2-x1);
-        const sx=x1+Math.cos(ang)*a.w/2,sy=y1+Math.sin(ang)*a.h/2,tx=x2-Math.cos(ang)*b.w/2,ty=y2-Math.sin(ang)*b.h/2;
+        const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;const ang=Math.atan2(dy,dx);
+        const edgeScale=1/Math.max(Math.abs(dx)/(b.w/2),Math.abs(dy)/(b.h/2));
+        const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale;
         ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tx,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(ang-.45)*9,ty-Math.sin(ang-.45)*9);ctx.lineTo(tx-Math.cos(ang+.45)*9,ty-Math.sin(ang+.45)*9);ctx.closePath();ctx.fill();
       }));
     }
