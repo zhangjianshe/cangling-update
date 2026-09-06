@@ -256,6 +256,7 @@
     hitServiceVolumeIcon(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.serviceVolumes(service).map((mount,index)=>({service,mount,index,at:this.serviceVolumeIconAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
     serviceVolumeDeleteAt(service,index) { const handle=this.mountHandleBox(service);return{x:handle.x+handle.w/2+38,y:handle.y+handle.h+18+index*26}; }
     hitServiceVolumeDelete(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.serviceVolumes(service).map((mount,index)=>({service,mount,index,at:this.serviceVolumeDeleteAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
+    hitServiceVolumeRow(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);return this.serviceVolumes(service).map((mount,index)=>({service,mount,index,y:handle.y+handle.h+18+index*26})).find(row=>p.x>=x+48&&p.x<=x+14+maxWidth&&Math.abs(p.y-row.y)<=10)||null; }
     hitMountHandle(p) {
       return [...this.model.services].reverse().find(service=>{const b=this.mountHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null;
     }
@@ -293,6 +294,7 @@
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
       const serviceVolumeDelete=this.hitServiceVolumeDelete(p);if(serviceVolumeDelete){this.removeServiceVolume(serviceVolumeDelete);return;}
       const serviceVolume=this.hitServiceVolumeIcon(p);if(serviceVolume){this.toggleServiceVolumeMode(serviceVolume);return;}
+      const serviceVolumeRow=this.hitServiceVolumeRow(p);if(serviceVolumeRow){this.editServiceVolume(serviceVolumeRow);return;}
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
         this.selectedLink = null; this.selectedVolume = "";
@@ -320,8 +322,8 @@
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p);this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete?null:this.hitDependency(p);
-        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
+        const previous=this.hoverLink,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p);this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow?null:this.hitDependency(p);
+        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
         if(!this.sameLink(previous,this.hoverLink))this.render();
         return;
       }
@@ -374,6 +376,9 @@
     }
     removeServiceVolume(row) {
       const volumes=row.service.volumes.filter((mount,index)=>index!==row.index);this.commit(row.service,{volumes},`已删除 ${row.service.name} 的挂载 ${row.mount}`);
+    }
+    editServiceVolume(row) {
+      if(typeof this.onEditMount!=="function"){this.onStatus("挂载编辑器不可用");return;}const parsed=parseVolumeMount(row.mount),named=this.model.volumes.includes(row.mount.split(":")[0]),initial={editing:true,type:named?"named":parsed.kind,source:named?row.mount.split(":")[0]:parsed.source,target:parsed.target,mode:parsed.mode.toLowerCase()};this.onEditMount(row.service.name,this.model.volumes,mount=>{const volumes=row.service.volumes.map((value,index)=>index===row.index?mount:value);this.commit(row.service,{volumes},`已更新 ${row.service.name} 的挂载 ${mount}`);},initial);
     }
     addDependency(from, to) {
       const service = this.model.services.find(s => s.name === from);
