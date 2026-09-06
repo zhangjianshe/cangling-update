@@ -292,6 +292,7 @@
       const handle=this.mountHandleBox(service),volume=this.volumeBox(index);return{service:serviceName,volume:volumeName,points:[{x:handle.x+handle.w/2,y:handle.y+handle.h/2},{x:volume.x+volume.w/2,y:volume.y}]};
     }
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
+    volumeReferenceCount(volume) { return this.model.services.reduce((count,service)=>count+service.volumes.filter(mount=>mount.split(":")[0]===volume).length,0); }
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
       const serviceVolumeDelete=this.hitServiceVolumeDelete(p);if(serviceVolumeDelete){this.removeServiceVolume(serviceVolumeDelete);return;}
@@ -485,7 +486,7 @@
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
       const mh=this.mountHandleBox(s);roundRect(ctx,mh.x,mh.y,mh.w,mh.h,3);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=linked?c.accent:c.line;ctx.lineWidth=1.5;ctx.stroke();ctx.fillStyle=linked?c.text:c.muted;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),mh.x+mh.w/2,mh.y+mh.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
     }
-    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget;ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=active?c.accent:c.line;ctx.lineWidth=active?(v===this.mountTarget?3:2.5):1;ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,v,b.w-20),b.x+10,b.y+b.h/2);ctx.textBaseline="alphabetic"; }
+    drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget,count=this.volumeReferenceCount(v),cy=b.y+b.h/2;ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=active?c.accent:c.line;ctx.lineWidth=active?(v===this.mountTarget?3:2.5):1;ctx.stroke();ctx.shadowBlur=0;ctx.strokeStyle=active?c.accent:c.muted;ctx.lineWidth=1.2;ctx.beginPath();ctx.ellipse(b.x+15,cy-4,6,2.5,0,0,Math.PI*2);ctx.moveTo(b.x+9,cy-4);ctx.lineTo(b.x+9,cy+4);ctx.ellipse(b.x+15,cy+4,6,2.5,0,0,Math.PI);ctx.lineTo(b.x+21,cy-4);ctx.stroke();ctx.beginPath();ctx.arc(b.x+b.w-15,cy,9,0,Math.PI*2);ctx.fillStyle=active?c.accent:c.line;ctx.fill();ctx.fillStyle=c.text;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),b.x+b.w-15,cy);ctx.font="12px ui-monospace";ctx.fillText(clip(ctx,v,b.w-62),b.x+b.w/2,cy);ctx.restore();ctx.textAlign="left";ctx.textBaseline="alphabetic"; }
   }
 
   global.ComposeCanvas = { parse, parseVolumeMount, toggleVolumeMountMode, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
