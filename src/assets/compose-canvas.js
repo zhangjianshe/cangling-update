@@ -59,7 +59,7 @@
 
   function parse(yaml) {
     const model = { services: [], networks: [], volumes: [], volumeDetails: {}, networkDetails: {} };
-    let section = "", service = null, volumeDef = null, nested = "", volumeNested = "";
+    let section = "", service = null, volumeDef = null, nested = "", volumeNested = "", serviceNetwork = "";
     for (const raw of String(yaml || "").split(/\r?\n/)) {
       const line = raw.replace(/\s+#.*$/, "");
       if (!line.trim()) continue;
@@ -68,7 +68,7 @@
         section = text.slice(0, -1); service = null; volumeDef = null; nested = ""; volumeNested = ""; continue;
       }
       if (section === "services" && n === 2 && /^[^:]+:\s*$/.test(text)) {
-        service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", depends: [], networks: [], volumes: [], ports: [] };
+        service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", depends: [], networks: [], networkIps: {}, volumes: [], ports: [] };
         model.services.push(service); nested = ""; continue;
       }
       if (section === "services" && service) {
@@ -76,7 +76,7 @@
           const at = text.indexOf(":");
           if (at < 0) continue;
           const key = text.slice(0, at).trim(), value = clean(text.slice(at + 1));
-          nested = key;
+          nested = key;serviceNetwork="";
           if (key === "image") service.image = value;
           else if (key === "container_name") service.containerName = value;
           else if (key === "command") service.command = value;
@@ -95,7 +95,8 @@
           else if (nested === "ports") service.ports.push(value);
         } else if (n === 6 && (nested === "depends_on" || nested === "networks")) {
           const key = clean(text.split(":", 1)[0]);
-          if (key) service[nested === "depends_on" ? "depends" : "networks"].push(key);
+          if (key) { service[nested === "depends_on" ? "depends" : "networks"].push(key);if(nested==="networks")serviceNetwork=key; }
+        } else if(n===8&&nested==="networks"&&serviceNetwork){const at=text.indexOf(":");if(at>0&&text.slice(0,at).trim()==="ipv4_address")service.networkIps[serviceNetwork]=clean(text.slice(at+1));
         }
       } else if ((section === "networks" || section === "volumes") && n === 2) {
         const name = clean(text.split(":", 1)[0]);
@@ -168,6 +169,7 @@
     fields.forEach(([yamlKey, field, list]) => {
       if (Object.prototype.hasOwnProperty.call(values, field)) replaceKey(block, yamlKey, values[field], list);
     });
+    if(Object.prototype.hasOwnProperty.call(values,"networkIps")){let start=block.findIndex((line,index)=>index>0&&indent(line)===4&&line.trim().startsWith("networks:")),end=start<0?start:block.length;if(start>=0)for(let i=start+1;i<block.length;i+=1){if(block[i].trim()&&indent(block[i])<=4){end=i;break;}}const networks=unique(values.networks||[]),ips=values.networkIps||{},next=networks.length?["    networks:",...networks.flatMap(network=>ips[network]?[`      ${quote(network)}:`,`        ipv4_address: ${quote(ips[network])}`]:[`      ${quote(network)}:`])]:[];if(start>=0)block.splice(start,end-start,...next);else if(next.length)block.splice(1,0,...next);}
     lines.splice(range.start, range.end - range.start, ...block);
     let result = lines.join("\n");
     if (hadNewline && !result.endsWith("\n")) result += "\n";
@@ -443,8 +445,8 @@
     }
     removeServicePort(row) { const ports=row.service.ports.filter((port,index)=>index!==row.index);this.commit(row.service,{ports},`已删除 ${row.service.name} 的端口 ${row.port}`); }
     editServicePort(row) { if(typeof this.onEditPort!=="function"){this.onStatus("端口编辑器不可用");return;}this.onEditPort(row.service.name,row.port,port=>{const ports=row.index<0?[...row.service.ports,port]:row.service.ports.map((value,index)=>index===row.index?port:value);this.commit(row.service,{ports:unique(ports)},`${row.index<0?"已添加":"已更新"} ${row.service.name} 的端口 ${port}`);}); }
-    removeServiceNetwork(row) { this.commit(row.service,{networks:row.service.networks.filter((value,index)=>index!==row.index)},`已删除 ${row.service.name} 的网络 ${row.network}`); }
-    editServiceNetwork(row) { if(typeof this.onEditNetwork!=="function"){this.onStatus("网络编辑器不可用");return;}this.onEditNetwork(row.service.name,this.model.networks,row.network,network=>{const networks=row.index<0?[...row.service.networks,network]:row.service.networks.map((value,index)=>index===row.index?network:value);this.commit(row.service,{networks:unique(networks)},`${row.index<0?"已添加":"已更新"} ${row.service.name} 的网络 ${network}`);}); }
+    removeServiceNetwork(row) { const networks=row.service.networks.filter((value,index)=>index!==row.index),networkIps={...row.service.networkIps};delete networkIps[row.network];this.commit(row.service,{networks,networkIps},`已删除 ${row.service.name} 的网络 ${row.network}`); }
+    editServiceNetwork(row) { if(typeof this.onEditNetwork!=="function"){this.onStatus("网络编辑器不可用");return;}this.onEditNetwork(row.service.name,this.model.networks,{network:row.network,ipv4Address:row.service.networkIps[row.network]||""},result=>{const network=result.network,networks=row.index<0?[...row.service.networks,network]:row.service.networks.map((value,index)=>index===row.index?network:value),networkIps={...row.service.networkIps};if(row.network&&row.network!==network)delete networkIps[row.network];if(result.ipv4Address)networkIps[network]=result.ipv4Address;else delete networkIps[network];this.commit(row.service,{networks:unique(networks),networkIps},`${row.index<0?"已添加":"已更新"} ${row.service.name} 的网络 ${network}`);}); }
     addDependency(from, to) {
       const service = this.model.services.find(s => s.name === from);
       if (service && !service.depends.includes(to)) { service.depends.push(to); this.commit(service, { depends: service.depends }, `已添加依赖 ${from} → ${to}`); }

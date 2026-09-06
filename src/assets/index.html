@@ -623,6 +623,7 @@
     .modal.narrow { width: min(1200px, 100%); }
     .modal.dir-modal { width: min(760px, 100%); height: min(600px, 100%); }
     .modal.form-modal { width: min(600px, 100%); height: auto; max-height: calc(100vh - 96px); }
+    .modal.network-modal { width: min(420px, 100%); height: auto; }
     .modal.form-modal .modal-body { overflow: auto; }
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -928,7 +929,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-61"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-62"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3522,8 +3523,8 @@
       $("#service-port-value").focus();
     }
 
-    function openServiceNetworkDialog(serviceName, networks, current, onSave) {
-      closeDialog();const available=networks||[];$("#dialog-title").textContent=`${current?"编辑":"添加"}网络 · ${serviceName}`;$("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>命名网络</label><select id="service-network-value">${available.map(name=>`<option value="${esc(name)}" ${name===current?"selected":""}>${esc(name)}</option>`).join("")}</select></div><div class="flash err" id="service-network-error" ${available.length?"hidden":""}>请先在 Canvas 底部创建一个网络</div></div>`;$("#dialog").hidden=false;setDialogAction(current?"保存网络":"添加网络",()=>{const input=$("#service-network-value"),value=input&&input.value;if(!value)return;closeDialog();onSave(value);});
+    function openServiceNetworkDialog(serviceName, networks, initial, onSave) {
+      closeDialog();const available=networks||[],current=initial&&initial.network||"",modal=$("#dialog-modal");if(modal)modal.classList.add("network-modal");$("#dialog-title").textContent=`${current?"编辑":"添加"}网络 · ${serviceName}`;$("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>命名网络</label><select id="service-network-value">${available.map(name=>`<option value="${esc(name)}" ${name===current?"selected":""}>${esc(name)}</option>`).join("")}</select></div><div class="field"><label>静态 IPv4（可选）</label><input id="service-network-ipv4" type="text" value="${esc(initial&&initial.ipv4Address||"")}" placeholder="172.28.0.10" /></div><div class="flash err" id="service-network-error" ${available.length?"hidden":""}>请先在 Canvas 底部创建一个网络</div></div>`;$("#dialog").hidden=false;setDialogAction(current?"保存网络":"添加网络",()=>{const input=$("#service-network-value"),network=input&&input.value,ipv4Address=$("#service-network-ipv4").value.trim(),error=$("#service-network-error");if(!network)return;if(ipv4Address&&!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ipv4Address)){error.textContent="请输入有效的 IPv4 地址";error.hidden=false;return;}closeDialog();onSave({network,ipv4Address});});
     }
 
     async function refreshComposeCanvas() {
@@ -4910,6 +4911,7 @@
         modal.classList.remove("narrow");
         modal.classList.remove("dir-modal");
         modal.classList.remove("form-modal");
+        modal.classList.remove("network-modal");
       }
       const box = $("#dialog");
       if (box) box.hidden = true;
