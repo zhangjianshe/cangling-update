@@ -3,6 +3,7 @@
   const SW = 164, SH = 54, VW = 148, VH = 34;
   const LAYOUT_BEGIN = "# cangling-canvas-layout:begin";
   const LAYOUT_END = "# cangling-canvas-layout:end";
+  const NOTE_BEGIN = "# cangling-compose-note:begin", NOTE_END = "# cangling-compose-note:end";
   const SELECT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path d="M3 3l14 6.5-6.2 2.6L8 18z" fill="#24292f" stroke="white" stroke-width="1.4" stroke-linejoin="round"/></svg>')}" ) 3 3, default`;
   const LINK_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M3 2l14 13-7 .7-3.7 6.1z" fill="white" stroke="#24292f" stroke-width="1.5" stroke-linejoin="round"/><circle cx="19" cy="19" r="7" fill="#0d99ff" stroke="white" stroke-width="1.5"/><path d="M19 15v8m-4-4h8" stroke="white" stroke-width="1.6" stroke-linecap="round"/></svg>')}" ) 3 2, crosshair`;
   const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
@@ -53,6 +54,8 @@
     lines.push("", LAYOUT_BEGIN, "# " + JSON.stringify({ version: 1, positions: saved }), LAYOUT_END, "");
     return lines.join(eol);
   }
+  function readHeaderNote(yaml){const lines=String(yaml||"").split(/\r?\n/),begin=lines.findIndex(line=>line.trim()===NOTE_BEGIN),end=lines.findIndex((line,index)=>index>begin&&line.trim()===NOTE_END);return begin>=0&&end>begin?lines.slice(begin+1,end).map(line=>line.replace(/^\s*#\s?/,"")).join("\n"):"";}
+  function writeHeaderNote(yaml,note){const source=String(yaml||""),eol=source.includes("\r\n")?"\r\n":"\n",lines=source.split(/\r?\n/),begin=lines.findIndex(line=>line.trim()===NOTE_BEGIN),end=lines.findIndex((line,index)=>index>begin&&line.trim()===NOTE_END);if(begin>=0)lines.splice(begin,(end>=0?end:begin)-begin+1);const text=String(note||"").trim(),block=text?[NOTE_BEGIN,...text.split(/\r?\n/).map(line=>"# "+line),NOTE_END,""]:[];lines.unshift(...block);return lines.join(eol);}
 
   function parse(yaml) {
     const model = { services: [], networks: [], volumes: [], volumeDetails: {}, networkDetails: {} };
@@ -489,7 +492,7 @@
         this.inspector.querySelector("[data-volume-delete]").onclick=()=>this.removeSelectedVolume();return;
       }
       const service = this.model.services.find(s => s.name === this.selected);
-      if (!service) { this.inspector.innerHTML = '<div class="compose-inspector-empty">点击服务节点编辑属性</div>'; return; }
+      if (!service) { const note=readHeaderNote(this.yaml);this.inspector.innerHTML=`<div class="compose-inspector-title">Compose</div><label>文件头注释<textarea data-compose-note rows="5" placeholder="输入 Compose 文件说明">${html(note)}</textarea></label><button type="button" class="btn primary" data-compose-save>保存 Compose</button>`;this.inspector.querySelector("[data-compose-save]").onclick=()=>{const yaml=writeHeaderNote(this.yaml,this.inspector.querySelector("[data-compose-note]").value);if(yaml!==this.yaml){this.yaml=yaml;this.model=parse(yaml);this.onChange(yaml,"已更新 Compose 文件头注释");}if(typeof this.onSaveCompose==="function")this.onSaveCompose();};return; }
       const field = (label, key, value, area) => `<label>${label}${area ? `<textarea data-field="${key}" rows="3">${html((value || []).join("\n"))}</textarea>` : `<input data-field="${key}" type="text" value="${html(value || "")}" />`}</label>`;
       const restart=service.restart||"unless-stopped",restartField=`<label>重启策略<select data-field="restart"><option value="no" ${restart==="no"?"selected":""}>no</option><option value="always" ${restart==="always"?"selected":""}>always</option><option value="on-failure" ${restart==="on-failure"?"selected":""}>on-failure</option><option value="unless-stopped" ${restart==="unless-stopped"?"selected":""}>unless-stopped</option></select></label>`;
       this.inspector.innerHTML = `<div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${restartField}${field("端口（每行一个）","ports",service.ports,true)}<button type="button" class="btn primary" data-apply>应用到草稿</button>`;
@@ -558,5 +561,5 @@
     drawNetwork(ctx,v,i,c) { const b=this.networkBox(i),active=v===this.selectedNetwork,count=this.networkReferenceCount(v),cy=b.y+b.h/2;ctx.save();roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=active?c.networkActive:c.card;ctx.fill();ctx.strokeStyle=c.network;ctx.lineWidth=active?2.5:1;ctx.stroke();ctx.beginPath();ctx.arc(b.x+15,cy,7,0,Math.PI*2);ctx.stroke();ctx.beginPath();ctx.arc(b.x+15,cy,2,0,Math.PI*2);ctx.fillStyle=c.network;ctx.fill();ctx.beginPath();ctx.arc(b.x+b.w-15,cy,9,0,Math.PI*2);ctx.fill();ctx.fillStyle="#fff";ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),b.x+b.w-15,cy);ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.fillText(clip(ctx,v,b.w-62),b.x+b.w/2,cy);ctx.restore();ctx.textAlign="left";ctx.textBaseline="alphabetic"; }
   }
 
-  global.ComposeCanvas = { parse, parseVolumeMount, toggleVolumeMountMode, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, updateNetworkYaml, removeNetworkYaml, create: options => new Editor(options) };
+  global.ComposeCanvas = { parse, parseVolumeMount, toggleVolumeMountMode, readLayout, writeLayout, readHeaderNote, writeHeaderNote, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, updateNetworkYaml, removeNetworkYaml, create: options => new Editor(options) };
 })(window);

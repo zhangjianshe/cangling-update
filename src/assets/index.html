@@ -924,7 +924,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-53"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-54"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -964,7 +964,7 @@
     const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
     const composePoll = { timer: null, inflight: false };
     const projectFiles = { path: "", selected: "", editor: null, resizeObs: null, loadedProject: "" };
-    const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false };
+    const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false, statusTimer: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false };
@@ -3294,11 +3294,6 @@
         </div>
         <div class="card tab-panel" id="panel-edit" data-panel="edit" role="tabpanel" aria-labelledby="tab-edit">
           <div class="compose-canvas-toolbar">
-            <button class="btn" id="compose-canvas-refresh" type="button">刷新图形</button>
-            <button class="btn" id="compose-canvas-add-volume" type="button">＋ 命名卷</button>
-            <button class="btn" id="compose-canvas-link" type="button">连接依赖</button>
-            <button class="btn" id="compose-canvas-source" type="button">ACE 编辑源文件</button>
-            <button class="btn primary" id="compose-canvas-save" type="button" disabled>保存 Compose</button>
             <span class="hint" id="compose-canvas-status">读取 Compose 文件后绘制服务拓扑</span>
           </div>
           <div class="compose-canvas-workspace">
@@ -3391,11 +3386,6 @@
       $("#project-files-up").onclick = projectFilesUp;
       $("#project-files-refresh").onclick = loadProjectFiles;
       $("#project-file-save").onclick = saveProjectFile;
-      $("#compose-canvas-refresh").onclick = refreshComposeCanvas;
-      $("#compose-canvas-add-volume").onclick = () => composeCanvas.editor && composeCanvas.editor.addVolume();
-      $("#compose-canvas-link").onclick = () => composeCanvas.editor && composeCanvas.editor.startLink();
-      $("#compose-canvas-source").onclick = openComposeCanvasSource;
-      $("#compose-canvas-save").onclick = saveComposeCanvas;
       for (const b of document.querySelectorAll("[data-restore]")) {
         b.onclick = () => restore(b.getAttribute("data-restore"));
       }
@@ -3446,10 +3436,10 @@
 
     function setComposeCanvasDirty(dirty, message) {
       composeCanvas.dirty = !!dirty;
-      const save = $("#compose-canvas-save");
-      if (save) save.disabled = !composeCanvas.dirty || !!state.busy;
-      if (message && $("#compose-canvas-status")) $("#compose-canvas-status").textContent = message + (dirty ? "（未保存）" : "");
+      if(message)showComposeCanvasStatus(message+(dirty?"（未保存）":""));
     }
+
+    function showComposeCanvasStatus(message){const status=$("#compose-canvas-status");if(!status)return;clearTimeout(composeCanvas.statusTimer);status.textContent=message||"";status.hidden=!message;if(message)composeCanvas.statusTimer=setTimeout(()=>{status.textContent="";status.hidden=true;},5000);}
 
     async function loadComposeCanvas() {
       if (!state.current || currentProjectTab() !== "edit") return;
@@ -3458,7 +3448,7 @@
         return;
       }
       const status = $("#compose-canvas-status");
-      if (status) status.textContent = "正在读取 Compose 文件…";
+      showComposeCanvasStatus("正在读取 Compose 文件…");
       try {
         const file = await api("/api/projects/" + state.current.id + "/compose/file");
         destroyComposeCanvas();
@@ -3479,15 +3469,16 @@
             setComposeCanvasDirty(true, message);
           },
           onStatus: (message) => {
-            if ($("#compose-canvas-status")) $("#compose-canvas-status").textContent = message + (composeCanvas.dirty ? "（未保存）" : "");
+            showComposeCanvasStatus(message+(composeCanvas.dirty?"（未保存）":""));
           },
+          onSaveCompose: saveComposeCanvas,
           onAddMount: openServiceMountDialog,
           onEditMount: openServiceMountDialog,
           onEditPort: openServicePortDialog,
           onEditNetwork: openServiceNetworkDialog,
         });
         const model = composeCanvas.editor.model;
-        if (status) status.textContent = `${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`;
+        showComposeCanvasStatus(`${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`);
         const viewport = $("#compose-canvas-viewport");
         if (viewport && window.ResizeObserver) {
           let lastWidth = viewport.clientWidth;
@@ -3502,7 +3493,7 @@
           composeCanvas.resizeObs = observer;
         }
       } catch (e) {
-        if (status) status.textContent = "无法读取 Compose 文件：" + e.message;
+        showComposeCanvasStatus("无法读取 Compose 文件："+e.message);
       }
     }
 
@@ -3548,7 +3539,7 @@
       if (!state.current || !composeCanvas.editor || !composeCanvas.dirty || state.busy) return;
       const save = $("#compose-canvas-save");
       if (save) save.disabled = true;
-      if ($("#compose-canvas-status")) $("#compose-canvas-status").textContent = "正在保存 Compose…";
+      showComposeCanvasStatus("正在保存 Compose…");
       try {
         const data = await api("/api/projects/" + state.current.id + "/compose/file", {
           method: "PUT",
