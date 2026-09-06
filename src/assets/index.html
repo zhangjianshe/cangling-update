@@ -397,9 +397,10 @@
     .project-file-editor { flex: 1; min-height: 0; width: 100%; background: var(--log-bg); }
     .project-file-editor .ace_editor, .project-file-editor .ace_editor * { border-radius: 0 !important; }
     #panel-edit:not([hidden]) {
-      flex: 1 1 auto; min-height: 0; margin-bottom: 0; overflow: hidden;
+      flex: 1 1 auto; min-height: 0; margin-bottom: 0; padding: 0; overflow: hidden;
       display: flex; flex-direction: column; position: relative;
     }
+    .tabs:has(#tab-edit.active) { margin-bottom: 0; }
     .compose-canvas-toolbar {
       position: absolute; z-index: 8; top: 6px; left: 50%; transform: translateX(-50%);
       display: flex; align-items: center; max-width: calc(100% - 32px); padding: 7px 12px;
