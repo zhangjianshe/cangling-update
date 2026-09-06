@@ -55,13 +55,13 @@
 
   function parse(yaml) {
     const model = { services: [], networks: [], volumes: [], volumeDetails: {} };
-    let section = "", service = null, volumeDef = null, nested = "";
+    let section = "", service = null, volumeDef = null, nested = "", volumeNested = "";
     for (const raw of String(yaml || "").split(/\r?\n/)) {
       const line = raw.replace(/\s+#.*$/, "");
       if (!line.trim()) continue;
       const n = indent(line), text = line.trim();
       if (n === 0 && /^[\w.-]+:\s*$/.test(text)) {
-        section = text.slice(0, -1); service = null; volumeDef = null; nested = ""; continue;
+        section = text.slice(0, -1); service = null; volumeDef = null; nested = ""; volumeNested = ""; continue;
       }
       if (section === "services" && n === 2 && /^[^:]+:\s*$/.test(text)) {
         service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", depends: [], networks: [], volumes: [], ports: [] };
@@ -97,11 +97,13 @@
         const name = clean(text.split(":", 1)[0]);
         if (name) {
           model[section].push(name);
-          if (section === "volumes") volumeDef = model.volumeDetails[name] = { name, driver: "", external: false };
+          if (section === "volumes") { volumeDef = model.volumeDetails[name] = { name, driver: "", external: false, driverOpts: { type: "", o: "", device: "" } }; volumeNested = ""; }
         }
       } else if (section === "volumes" && volumeDef && n === 4) {
         const at=text.indexOf(":");if(at<0)continue;const key=text.slice(0,at).trim(),value=clean(text.slice(at+1));
-        if(key==="driver")volumeDef.driver=value;else if(key==="external")volumeDef.external=value.toLowerCase()==="true";
+        volumeNested=key;if(key==="driver")volumeDef.driver=value;else if(key==="external")volumeDef.external=value.toLowerCase()==="true";
+      } else if(section==="volumes"&&volumeDef&&volumeNested==="driver_opts"&&n===6){
+        const at=text.indexOf(":");if(at<0)continue;const key=text.slice(0,at).trim(),value=clean(text.slice(at+1));if(Object.prototype.hasOwnProperty.call(volumeDef.driverOpts,key))volumeDef.driverOpts[key]=value;
       }
     }
     const names = new Set(model.services.map(s => s.name));
@@ -181,6 +183,8 @@
     if(range&&range.start>=0){block=lines.slice(range.start,range.end);block[0]="  "+quote(values.name)+":";}
     const setKey=(key,value)=>{let at=block.findIndex((line,index)=>index>0&&indent(line)===4&&line.trim().startsWith(key+":")),end=at<0?at:block.length;if(at>=0)for(let i=at+1;i<block.length;i+=1){if(block[i].trim()&&indent(block[i])<=4){end=i;break;}}const next=value?["    "+key+": "+value]:[];if(at>=0)block.splice(at,end-at,...next);else if(next.length)block.push(...next);};
     setKey("driver",values.driver?quote(values.driver):"");setKey("external",values.external?"true":"");
+    let optsAt=block.findIndex((line,index)=>index>0&&indent(line)===4&&line.trim().startsWith("driver_opts:")),optsEnd=optsAt<0?optsAt:block.length;if(optsAt>=0)for(let i=optsAt+1;i<block.length;i+=1){if(block[i].trim()&&indent(block[i])<=4){optsEnd=i;break;}}
+    const opts=values.driverOpts||{},optsLines=["type","o","device"].filter(key=>opts[key]).map(key=>`      ${key}: ${quote(opts[key])}`),nextOpts=optsLines.length?["    driver_opts:",...optsLines]:[];if(optsAt>=0)block.splice(optsAt,optsEnd-optsAt,...nextOpts);else if(nextOpts.length)block.push(...nextOpts);
     if(!range){let at=lines.findIndex(line=>line.trim()===LAYOUT_BEGIN);if(at<0)at=lines.length;lines.splice(at,0,"volumes:",...block);}
     else if(range.start<0)lines.splice(range.sectionEnd,0,...block);
     else lines.splice(range.start,range.end-range.start,...block);
@@ -384,7 +388,8 @@
       const oldName=this.selectedVolume,newName=String(values.name||"").trim();if(!oldName)return;
       if(!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newName)){this.onStatus("卷名称只能包含字母、数字、点、下划线和连字符");return;}
       if(newName!==oldName&&this.model.volumes.includes(newName)){this.onStatus(`命名卷 ${newName} 已存在`);return;}
-      let yaml=updateVolumeYaml(this.yaml,oldName,{name:newName,driver:String(values.driver||"").trim(),external:!!values.external});
+      const volumeType=["nfs","cifs"].includes(values.volumeType)?values.volumeType:"local",device=String(values.device||"").trim(),options=String(values.options||"").trim();if(volumeType!=="local"&&!device){this.onStatus(`${volumeType.toUpperCase()} 需要填写远程路径`);return;}const driverOpts=device?{type:volumeType==="local"?"none":volumeType,o:options||(volumeType==="local"?"bind":""),device}:{type:"",o:"",device:""};
+      let yaml=updateVolumeYaml(this.yaml,oldName,{name:newName,driver:"local",driverOpts,external:!!values.external});
       if(newName!==oldName)this.model.services.forEach(service=>{const mounts=service.volumes.map(mount=>{const parts=mount.split(":");if(parts[0]===oldName)parts[0]=newName;return parts.join(":");});if(JSON.stringify(mounts)!==JSON.stringify(service.volumes))yaml=updateServiceYaml(yaml,service.name,{volumes:mounts});});
       this.yaml=yaml;this.model=parse(yaml);this.selectedVolume=newName;this.onChange(yaml,`已更新命名卷 ${newName}`);this.onStatus(`已更新命名卷 ${newName}`);this.renderInspector();this.render();
     }
@@ -406,9 +411,11 @@
     }
     renderInspector() {
       if (this.selectedVolume) {
-        const volume=this.model.volumeDetails[this.selectedVolume]||{name:this.selectedVolume,driver:"",external:false};
-        this.inspector.innerHTML=`<div class="compose-inspector-title">命名卷 ${html(volume.name)}</div><label>卷名称<input data-volume-name type="text" value="${html(volume.name)}" /></label><label>Driver<input data-volume-driver type="text" value="${html(volume.driver||"")}" placeholder="local" /></label><label style="flex-direction:row;align-items:center"><input data-volume-external type="checkbox" style="width:auto" ${volume.external?"checked":""} /> External volume</label><div style="display:flex;gap:8px"><button type="button" class="btn primary" data-volume-apply>应用到草稿</button><button type="button" class="btn danger" data-volume-delete>删除</button></div>`;
-        this.inspector.querySelector("[data-volume-apply]").onclick=()=>this.updateSelectedVolume({name:this.inspector.querySelector("[data-volume-name]").value,driver:this.inspector.querySelector("[data-volume-driver]").value,external:this.inspector.querySelector("[data-volume-external]").checked});
+        const volume=this.model.volumeDetails[this.selectedVolume]||{name:this.selectedVolume,driver:"local",external:false,driverOpts:{type:"",o:"",device:""}},opts=volume.driverOpts||{},volumeType=["nfs","cifs"].includes(opts.type)?opts.type:"local";
+        this.inspector.innerHTML=`<div class="compose-inspector-title">命名卷 ${html(volume.name)}</div><label>卷名称<input data-volume-name type="text" value="${html(volume.name)}" /></label><label>Driver<select data-volume-type><option value="local" ${volumeType==="local"?"selected":""}>local</option><option value="nfs" ${volumeType==="nfs"?"selected":""}>nfs</option><option value="cifs" ${volumeType==="cifs"?"selected":""}>cifs</option></select></label><div data-volume-params></div><label style="flex-direction:row;align-items:center"><input data-volume-external type="checkbox" style="width:auto" ${volume.external?"checked":""} /> External volume</label><div style="display:flex;gap:8px"><button type="button" class="btn primary" data-volume-apply>应用到草稿</button><button type="button" class="btn danger" data-volume-delete>删除</button></div>`;
+        const renderParams=(type,initial)=>{const defaults=type==="nfs"?{device:":/exports/data",options:"addr=127.0.0.1,rw,nfsvers=4"}:(type==="cifs"?{device:"//server/share",options:"username=user,password=secret,vers=3.0"}:{device:"/srv/data",options:"bind"}),labels=type==="local"?{device:"宿主机目录（可选）",options:"挂载选项"}:{device:type==="nfs"?"NFS 远程路径":"CIFS 共享路径",options:"连接与挂载选项"},values=initial?{device:opts.device||"",options:opts.o||""}:{device:"",options:""};this.inspector.querySelector("[data-volume-params]").innerHTML=`<label>${labels.device}<input data-volume-device type="text" value="${html(values.device)}" placeholder="${html(defaults.device)}" /></label><label>${labels.options}<input data-volume-options type="text" value="${html(values.options)}" placeholder="${html(defaults.options)}" /></label>`;};
+        renderParams(volumeType,true);this.inspector.querySelector("[data-volume-type]").onchange=e=>renderParams(e.target.value,false);
+        this.inspector.querySelector("[data-volume-apply]").onclick=()=>this.updateSelectedVolume({name:this.inspector.querySelector("[data-volume-name]").value,volumeType:this.inspector.querySelector("[data-volume-type]").value,device:this.inspector.querySelector("[data-volume-device]").value,options:this.inspector.querySelector("[data-volume-options]").value,external:this.inspector.querySelector("[data-volume-external]").checked});
         this.inspector.querySelector("[data-volume-delete]").onclick=()=>this.removeSelectedVolume();return;
       }
       const service = this.model.services.find(s => s.name === this.selected);

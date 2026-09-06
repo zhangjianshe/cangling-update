@@ -413,7 +413,7 @@
     .compose-inspector-empty { padding: 28px 8px; color: var(--muted); text-align: center; }
     .compose-inspector-title { margin-bottom: 14px; font-size: 16px; font-weight: 650; }
     .compose-canvas-inspector label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
-    .compose-canvas-inspector input, .compose-canvas-inspector textarea { width: 100%; color: var(--text); background: var(--bg-2); }
+    .compose-canvas-inspector input, .compose-canvas-inspector textarea, .compose-canvas-inspector select { width: 100%; color: var(--text); background: var(--bg-2); }
     .compose-canvas-inspector textarea { min-height: 58px; resize: vertical; font-family: ui-monospace, monospace; }
     @media (max-width: 900px) { .compose-canvas-workspace { grid-template-columns: minmax(0, 1fr) 260px; } }
     .db-toolbar { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end; margin-bottom: 12px; flex: 0 0 auto; }
@@ -922,7 +922,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-29"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-30"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
