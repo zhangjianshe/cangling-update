@@ -250,6 +250,8 @@
     serviceVolumes(service) { return service&&service.volumes||[]; }
     serviceVolumeIconAt(service,index) { const handle=this.mountHandleBox(service);return{x:handle.x+handle.w/2+15,y:handle.y+handle.h+18+index*26}; }
     hitServiceVolumeIcon(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.serviceVolumes(service).map((mount,index)=>({service,mount,index,at:this.serviceVolumeIconAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
+    serviceVolumeDeleteAt(service,index) { const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);return{x:x+14+maxWidth-7,y:handle.y+handle.h+18+index*26}; }
+    hitServiceVolumeDelete(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.serviceVolumes(service).map((mount,index)=>({service,mount,index,at:this.serviceVolumeDeleteAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
     hitMountHandle(p) {
       return [...this.model.services].reverse().find(service=>{const b=this.mountHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null;
     }
@@ -285,6 +287,7 @@
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      const serviceVolumeDelete=this.hitServiceVolumeDelete(p);if(serviceVolumeDelete){this.removeServiceVolume(serviceVolumeDelete);return;}
       const serviceVolume=this.hitServiceVolumeIcon(p);if(serviceVolume){this.toggleServiceVolumeMode(serviceVolume);return;}
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
@@ -313,8 +316,8 @@
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p);this.hoverLink=handle||mountHandle||node||volume||serviceVolume?null:this.hitDependency(p);
-        this.canvas.style.cursor = serviceVolume||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
+        const previous=this.hoverLink,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p);this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete?null:this.hitDependency(p);
+        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
         if(!this.sameLink(previous,this.hoverLink))this.render();
         return;
       }
@@ -364,6 +367,9 @@
     }
     toggleServiceVolumeMode(row) {
       const item=parseVolumeMount(row.mount),readOnly=item.mode==="RO",volumes=row.service.volumes.map(mount=>mount===row.mount?toggleVolumeMountMode(mount):mount);this.commit(row.service,{volumes},`${item.kind==="bind"?item.source+" → ":""}${item.target} 已切换为${readOnly?"读写":"只读"}`);
+    }
+    removeServiceVolume(row) {
+      const volumes=row.service.volumes.filter((mount,index)=>index!==row.index);this.commit(row.service,{volumes},`已删除 ${row.service.name} 的挂载 ${row.mount}`);
     }
     addDependency(from, to) {
       const service = this.model.services.find(s => s.name === from);
@@ -443,7 +449,7 @@
       const service=this.model.services.find(item=>item.name===this.selected),items=this.serviceVolumes(service);if(!service||!items.length)return;
       const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=start+18+(items.length-1)*26,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);
       ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.textBaseline="middle";
-      items.forEach((mount,index)=>{const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]),item=named?{...parsed,kind:"named"}:parsed,y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:(item.kind==="named"?`${mount.split(":")[0]} → ${item.target}`:item.target);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?c.muted:c.accent;if(item.kind==="named"){const cx=x+20,size=7;ctx.beginPath();ctx.moveTo(cx,y-size);ctx.lineTo(cx+size,y);ctx.lineTo(cx,y+size);ctx.lineTo(cx-size,y);ctx.closePath();if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}else if(item.kind==="bind"){const size=11;ctx.beginPath();ctx.rect(x+20-size/2,y-size/2,size,size);if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}else{ctx.beginPath();ctx.arc(x+20,y,6,0,Math.PI*2);if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,maxWidth-30),x+30,y);});ctx.restore();
+      items.forEach((mount,index)=>{const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]),item=named?{...parsed,kind:"named"}:parsed,y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:(item.kind==="named"?`${mount.split(":")[0]} → ${item.target}`:item.target);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?c.muted:c.accent;if(item.kind==="named"){const cx=x+20,size=7;ctx.beginPath();ctx.moveTo(cx,y-size);ctx.lineTo(cx+size,y);ctx.lineTo(cx,y+size);ctx.lineTo(cx-size,y);ctx.closePath();if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}else if(item.kind==="bind"){const size=11;ctx.beginPath();ctx.rect(x+20-size/2,y-size/2,size,size);if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}else{ctx.beginPath();ctx.arc(x+20,y,6,0,Math.PI*2);if(item.mode==="RO"){ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle=c.line;}ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,maxWidth-52),x+30,y);const remove=this.serviceVolumeDeleteAt(service,index);ctx.strokeStyle="#f85149";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(remove.x-4,remove.y-4);ctx.lineTo(remove.x+4,remove.y+4);ctx.moveTo(remove.x+4,remove.y-4);ctx.lineTo(remove.x-4,remove.y+4);ctx.stroke();ctx.strokeStyle=c.line;});ctx.restore();
     }
     drawLinks(ctx,c) {
       this.model.services.forEach(sourceService => sourceService.depends.forEach(name => {
