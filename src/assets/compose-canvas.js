@@ -264,7 +264,7 @@
     volumeBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.volumeTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
     networkTop() { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20))),rows=Math.max(1,Math.ceil(this.model.volumes.length/cols));return this.volumeTop()+rows*50+38; }
     networkBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.networkTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
-    sectionAddBox(kind) { const y=(kind==="volume"?this.volumeTop():this.networkTop())-29;return{x:kind==="volume"?88:64,y,w:22,h:18}; }
+    sectionAddBox(kind) { const y=(kind==="volume"?this.volumeTop():this.networkTop())-29;return{x:kind==="volume"?72:60,y,w:22,h:18}; }
     hitSectionAdd(p,kind) { const b=this.sectionAddBox(kind);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h; }
     point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     hitService(p) {
@@ -525,7 +525,7 @@
       this.mountLinks().filter(link=>link.volume===this.selectedVolume).forEach(link=>{ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
     }
     drawNetworkLinks(ctx,c) { if(!this.selectedNetwork)return;this.networkLinks().filter(link=>link.network===this.selectedNetwork).forEach(link=>{ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();}); }
-    drawSectionHeader(ctx,label,kind,colorValue) { const top=kind==="volume"?this.volumeTop():this.networkTop(),button=this.sectionAddBox(kind);ctx.fillStyle=colorValue;ctx.font="600 12px system-ui";ctx.textBaseline="alphabetic";ctx.fillText(label,24,top-20);roundRect(ctx,button.x,button.y,button.w,button.h,5);ctx.strokeStyle=colorValue;ctx.lineWidth=1.25;ctx.stroke();ctx.beginPath();ctx.moveTo(button.x+7,button.y+9);ctx.lineTo(button.x+15,button.y+9);ctx.moveTo(button.x+11,button.y+5);ctx.lineTo(button.x+11,button.y+13);ctx.stroke(); }
+    drawSectionHeader(ctx,label,kind,colorValue) { const top=kind==="volume"?this.volumeTop():this.networkTop(),button=this.sectionAddBox(kind),centerY=button.y+button.h/2;ctx.fillStyle=colorValue;ctx.font="600 12px system-ui";ctx.textBaseline="middle";ctx.fillText(label,24,centerY);roundRect(ctx,button.x,button.y,button.w,button.h,5);ctx.strokeStyle=colorValue;ctx.lineWidth=1.25;ctx.stroke();ctx.beginPath();ctx.moveTo(button.x+7,centerY);ctx.lineTo(button.x+15,centerY);ctx.moveTo(button.x+11,centerY-4);ctx.lineTo(button.x+11,centerY+4);ctx.stroke();ctx.textBaseline="alphabetic"; }
     drawServiceVolumes(ctx,c) {
       c={...c,accent:c.volume,active:c.volumeActive,muted:c.volume};
       const service=this.model.services.find(item=>item.name===this.volumePanelService),items=this.serviceVolumes(service);if(!service)return;
