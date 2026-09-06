@@ -162,7 +162,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", linkFrom: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
@@ -204,7 +204,7 @@
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
       if (handle) {
-        this.selected = handle.name; this.linkFrom = handle.name;
+        this.selected = handle.name; this.linkFrom = handle.name; this.linkTarget = "";
         this.drag = { type: "link", name: handle.name };
         this.canvas.style.cursor = LINK_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
@@ -228,6 +228,10 @@
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link" ? LINK_CURSOR : "grabbing";
+      if (this.drag.type === "link") {
+        const target = this.hitService(p);
+        this.linkTarget = target && target.name !== this.drag.name ? target.name : "";
+      }
       if (this.drag.type === "service") {
         this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
         this.drag.moved = true;
@@ -238,10 +242,10 @@
       if (!this.drag) return; const p = this.point(e);
       if (this.drag.type === "volume") { const service = this.hitService(p); if (service) this.attachVolume(this.drag.name, service.name); }
       else if (this.drag.type === "link") {
-        const target = this.hitService(p), from = this.drag.name;
+        const target = e.type === "pointercancel" ? null : (this.model.services.find(service => service.name === this.linkTarget) || this.hitService(p)), from = this.drag.name;
         if (target && target.name !== from) this.addDependency(from, target.name);
         else this.onStatus("未连接：请在另一个服务上松开鼠标");
-        this.linkFrom = "";
+        this.linkFrom = ""; this.linkTarget = "";
       } else if (this.drag.moved) {
         try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
         this.yaml = writeLayout(this.yaml, this.positions);
@@ -317,7 +321,7 @@
       }));
     }
     drawService(ctx,s,c) {
-      const b=this.serviceBox(s);roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=s.name===this.selected?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom)?c.accent:c.line;ctx.lineWidth=(s.name===this.selected||s.name===this.linkFrom)?2:1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
     }
     drawPill(ctx,x,y,w,h,text,c) { roundRect(ctx,x,y,w,h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,text,w-20),x+10,y+h/2);ctx.textBaseline="alphabetic"; }
