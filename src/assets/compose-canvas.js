@@ -3,7 +3,7 @@
   const SW = 164, SH = 54, VW = 148, VH = 34;
   const LAYOUT_BEGIN = "# cangling-canvas-layout:begin";
   const LAYOUT_END = "# cangling-canvas-layout:end";
-  const SELECT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 2.5l13.2 12.2-6.1.8-3.5 5.2z" fill="#24292f" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>')}" ) 4 3, default`;
+  const SELECT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><path d="M3 3l14 6.5-6.2 2.6L8 18z" fill="#24292f" stroke="white" stroke-width="1.4" stroke-linejoin="round"/></svg>')}" ) 3 3, default`;
   const LINK_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M3 2l14 13-7 .7-3.7 6.1z" fill="white" stroke="#24292f" stroke-width="1.5" stroke-linejoin="round"/><circle cx="19" cy="19" r="7" fill="#0d99ff" stroke="white" stroke-width="1.5"/><path d="M19 15v8m-4-4h8" stroke="white" stroke-width="1.6" stroke-linecap="round"/></svg>')}" ) 3 2, crosshair`;
   const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
   const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
