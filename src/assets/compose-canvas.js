@@ -207,7 +207,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, hoverLink: null, selectedMount: null, hoverMount: null, mountTarget: "", linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, hoverLink: null, mountTarget: "", linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
@@ -234,7 +234,7 @@
       });
     }
     serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
-    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});const selected=this.model.services.find(service=>service.name===this.selected),items=this.nonNamedVolumes(selected);if(selected&&items.length){const handle=this.mountHandleBox(selected);bottom=Math.max(bottom,handle.y+handle.h+18+items.length*26);}return bottom+72; }
+    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});const selected=this.model.services.find(service=>service.name===this.selected),items=this.serviceVolumes(selected);if(selected&&items.length){const handle=this.mountHandleBox(selected);bottom=Math.max(bottom,handle.y+handle.h+18+items.length*26);}return bottom+72; }
     volumeBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.volumeTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
     point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     hitService(p) {
@@ -247,9 +247,9 @@
       }) || null;
     }
     mountHandleBox(service) { const b=this.serviceBox(service);return{x:b.x+b.w/2-15,y:b.y+b.h-8,w:30,h:16}; }
-    nonNamedVolumes(service) { return (service&&service.volumes||[]).filter(mount=>!this.model.volumes.includes(mount.split(":")[0])); }
-    nonNamedVolumeIconAt(service,index) { const handle=this.mountHandleBox(service);return{x:handle.x+handle.w/2+15,y:handle.y+handle.h+18+index*26}; }
-    hitNonNamedVolumeIcon(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.nonNamedVolumes(service).map((mount,index)=>({service,mount,index,at:this.nonNamedVolumeIconAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
+    serviceVolumes(service) { return service&&service.volumes||[]; }
+    serviceVolumeIconAt(service,index) { const handle=this.mountHandleBox(service);return{x:handle.x+handle.w/2+15,y:handle.y+handle.h+18+index*26}; }
+    hitServiceVolumeIcon(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.serviceVolumes(service).map((mount,index)=>({service,mount,index,at:this.serviceVolumeIconAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
     hitMountHandle(p) {
       return [...this.model.services].reverse().find(service=>{const b=this.mountHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null;
     }
@@ -282,48 +282,42 @@
       const service=this.model.services.find(s=>s.name===serviceName),index=this.model.volumes.indexOf(volumeName);if(!service||index<0)return null;
       const handle=this.mountHandleBox(service),volume=this.volumeBox(index);return{service:serviceName,volume:volumeName,points:[{x:handle.x+handle.w/2,y:handle.y+handle.h/2},{x:volume.x+volume.w/2,y:volume.y}]};
     }
-    sameMount(a,b) { return !!a&&!!b&&a.service===b.service&&a.volume===b.volume; }
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
-    hitMount(p) { return this.mountLinks().filter(link=>link.service===this.selected).reverse().find(link=>this.pointSegmentDistance(p,link.points[0],link.points[1])<=7)||null; }
-    mountMidpoint(link) { return{x:(link.points[0].x+link.points[1].x)/2,y:(link.points[0].y+link.points[1].y)/2}; }
-    mountToolbar(link) { const at=this.mountMidpoint(link);return{x:at.x-58,y:at.y-15,w:116,h:30}; }
-    hitMountTool(p) { if(!this.selectedMount)return"";const b=this.mountToolbar(this.selectedMount);if(p.x<b.x||p.x>b.x+b.w||p.y<b.y||p.y>b.y+b.h)return"";return p.x<b.x+b.w/2?"delete":"mode"; }
     mountSpec(link) { const service=link&&this.model.services.find(s=>s.name===link.service);return service&&service.volumes.find(mount=>mount.split(":")[0]===link.volume)||""; }
     mountReadOnly(link) { const parts=this.mountSpec(link).split(":");return (parts[2]||"").split(",").includes("ro"); }
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
-      const nonNamedVolume=this.hitNonNamedVolumeIcon(p);if(nonNamedVolume){this.toggleNonNamedVolumeMode(nonNamedVolume);return;}
-      const mountTool=this.hitMountTool(p);if(mountTool){if(mountTool==="delete")this.removeSelectedMount();else this.toggleSelectedMountMode();return;}
+      const serviceVolume=this.hitServiceVolumeIcon(p);if(serviceVolume){this.toggleServiceVolumeMode(serviceVolume);return;}
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
-        this.selectedLink = null; this.selectedMount=null; this.selectedVolume = "";
+        this.selectedLink = null; this.selectedVolume = "";
         this.selected = handle.name; this.linkFrom = handle.name; this.linkTarget = "";
         this.drag = { type: "link", name: handle.name };
         this.canvas.style.cursor = LINK_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
       }
-      if(mountHandle){this.selected=mountHandle.name;this.selectedVolume="";this.selectedLink=null;this.selectedMount=null;this.mountTarget="";this.drag={type:"mount",name:mountHandle.name};this.canvas.style.cursor=LINK_CURSOR;this.canvas.setPointerCapture(e.pointerId);this.renderInspector();this.onStatus(`拖到命名卷，为 ${mountHandle.name} 创建挂载`);this.render();return;}
+      if(mountHandle){this.selected=mountHandle.name;this.selectedVolume="";this.selectedLink=null;this.mountTarget="";this.drag={type:"mount",name:mountHandle.name};this.canvas.style.cursor=LINK_CURSOR;this.canvas.setPointerCapture(e.pointerId);this.renderInspector();this.onStatus(`拖到命名卷，为 ${mountHandle.name} 创建挂载`);this.render();return;}
       if (service && this.linkFrom) {
         if (service.name !== this.linkFrom) this.addDependency(this.linkFrom, service.name);
         this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
       }
       if (service) {
-        this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; this.selectedMount=null; const pos = this.positions[service.name];
+        this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; const pos = this.positions[service.name];
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
-        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.selectedMount=null; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
+        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
       } else {
-        const mount=this.hitMount(p),link=mount?null:this.hitDependency(p);this.selectedMount=mount;this.selectedLink=link;this.canvas.focus();
-        this.onStatus(mount?`已选择挂载 ${mount.service} → ${mount.volume}，按 Delete 删除`:(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : "")); this.render();
+        const link=this.hitDependency(p);this.selectedLink=link;this.canvas.focus();
+        this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : ""); this.render();
       }
     }
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,previousMount=this.hoverMount,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),nonNamedVolume=this.hitNonNamedVolumeIcon(p);this.hoverMount=handle||mountHandle||node||volume||nonNamedVolume?null:this.hitMount(p);this.hoverLink=handle||mountHandle||node||volume||nonNamedVolume||this.hoverMount?null:this.hitDependency(p);
-        this.canvas.style.cursor = nonNamedVolume||this.hitDelete(p)||this.hitMountTool(p)||this.hoverLink||this.hoverMount||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
-        if(!this.sameLink(previous,this.hoverLink)||!this.sameMount(previousMount,this.hoverMount))this.render();
+        const previous=this.hoverLink,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p);this.hoverLink=handle||mountHandle||node||volume||serviceVolume?null:this.hitDependency(p);
+        this.canvas.style.cursor = serviceVolume||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
+        if(!this.sameLink(previous,this.hoverLink))this.render();
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link"||this.drag.type==="mount" ? LINK_CURSOR : "grabbing";
@@ -361,9 +355,8 @@
     }
     keyDown(e) {
       if ((e.key === "Delete" || e.key === "Backspace") && this.selectedLink) { e.preventDefault(); this.removeSelectedDependency(); }
-      else if ((e.key === "Delete" || e.key === "Backspace") && this.selectedMount) { e.preventDefault(); this.removeSelectedMount(); }
       else if ((e.key === "Delete" || e.key === "Backspace") && this.selectedVolume) { e.preventDefault(); this.removeSelectedVolume(); }
-      else if (e.key === "Escape" && (this.selectedLink || this.selectedMount || this.selectedVolume)) { e.preventDefault(); this.selectedLink = null; this.selectedMount=null; this.selectedVolume = ""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
+      else if (e.key === "Escape" && (this.selectedLink || this.selectedVolume)) { e.preventDefault(); this.selectedLink = null; this.selectedVolume = ""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
     }
     removeSelectedDependency() {
       const link=this.selectedLink;if(!link)return;
@@ -371,17 +364,7 @@
       const depends=service.depends.filter(name=>name!==link.to);this.selectedLink=null;this.hoverLink=null;
       this.commit(service,{depends},`已删除依赖 ${link.from} → ${link.to}`);
     }
-    removeSelectedMount() {
-      const link=this.selectedMount;if(!link)return;const service=this.model.services.find(s=>s.name===link.service);if(!service)return;
-      const volumes=service.volumes.filter(mount=>mount.split(":")[0]!==link.volume);this.selectedMount=null;this.hoverMount=null;
-      this.commit(service,{volumes},`已删除挂载 ${link.service} → ${link.volume}`);
-    }
-    toggleSelectedMountMode() {
-      const link=this.selectedMount;if(!link)return;const service=this.model.services.find(s=>s.name===link.service),current=this.mountSpec(link);if(!service||!current)return;
-      const parts=current.split(":"),options=(parts[2]||"").split(",").filter(Boolean),readOnly=options.includes("ro"),kept=options.filter(option=>option!=="ro"&&option!=="rw");kept.unshift(readOnly?"rw":"ro");parts[2]=kept.join(",");
-      const volumes=service.volumes.map(mount=>mount===current?parts.slice(0,3).join(":"):mount);this.commit(service,{volumes},`挂载 ${link.service} → ${link.volume} 已切换为${readOnly?"读写":"只读"}`);
-    }
-    toggleNonNamedVolumeMode(row) {
+    toggleServiceVolumeMode(row) {
       const item=parseVolumeMount(row.mount),readOnly=item.mode==="RO",volumes=row.service.volumes.map(mount=>mount===row.mount?toggleVolumeMountMode(mount):mount);this.commit(row.service,{volumes},`${item.kind==="bind"?item.source+" → ":""}${item.target} 已切换为${readOnly?"读写":"只读"}`);
     }
     addDependency(from, to) {
@@ -447,7 +430,7 @@
       const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
       const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33") };
       ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷", 24, this.volumeTop()-20);
-      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));this.drawNonNamedVolumes(ctx,c);this.drawMountToolbar(ctx,c);
+      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));this.drawServiceVolumes(ctx,c);
       if (this.drag && this.drag.type === "link") {
         const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
         if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(b.x-15,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
@@ -455,16 +438,15 @@
       if(this.drag&&this.drag.type==="mount"){const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.mountHandleBox(service);if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}}
     }
     drawMounts(ctx,c) {
-      if (!this.selected) return;
-      this.mountLinks().filter(link=>link.service===this.selected).forEach(link=>{const active=this.sameMount(link,this.selectedMount)||this.sameMount(link,this.hoverMount),readOnly=this.mountReadOnly(link);ctx.save();ctx.strokeStyle=active?c.accent:c.muted;ctx.lineWidth=active?3:1.25;ctx.setLineDash(readOnly?[6,5]:[]);if(active){ctx.shadowColor=c.accent;ctx.shadowBlur=7;}ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
+      if (!this.selectedVolume) return;
+      this.mountLinks().filter(link=>link.volume===this.selectedVolume).forEach(link=>{const readOnly=this.mountReadOnly(link);ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.75;ctx.setLineDash(readOnly?[6,5]:[]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();});
     }
-    drawNonNamedVolumes(ctx,c) {
-      const service=this.model.services.find(item=>item.name===this.selected),items=this.nonNamedVolumes(service);if(!service||!items.length)return;
+    drawServiceVolumes(ctx,c) {
+      const service=this.model.services.find(item=>item.name===this.selected),items=this.serviceVolumes(service);if(!service||!items.length)return;
       const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=start+18+(items.length-1)*26,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);
       ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.textBaseline="middle";
-      items.forEach((mount,index)=>{const item=parseVolumeMount(mount),y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:item.target,icon=item.kind==="bind"?(item.mode==="RO"?"□":"▣"):(item.mode==="RO"?"○":"◉");ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?c.muted:c.accent;ctx.font="12px system-ui";ctx.fillText(icon,x+15,y);ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,maxWidth-30),x+30,y);});ctx.restore();
+      items.forEach((mount,index)=>{const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]),item=named?{...parsed,kind:"named"}:parsed,y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:(item.kind==="named"?`${mount.split(":")[0]} → ${item.target}`:item.target),icon=item.kind==="bind"?(item.mode==="RO"?"□":"▣"):(item.kind==="named"?(item.mode==="RO"?"◇":"◆"):(item.mode==="RO"?"○":"◉"));ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?c.muted:c.accent;ctx.font="12px system-ui";ctx.fillText(icon,x+15,y);ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,maxWidth-30),x+30,y);});ctx.restore();
     }
-    drawMountToolbar(ctx,c) { if(!this.selectedMount)return;const b=this.mountToolbar(this.selectedMount),readOnly=this.mountReadOnly(this.selectedMount);ctx.save();ctx.shadowColor="rgba(0,0,0,.35)";ctx.shadowBlur=8;roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=c.card;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y);ctx.lineTo(b.x+b.w/2,b.y+b.h);ctx.stroke();ctx.fillStyle="#f85149";ctx.font="600 11px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("删除",b.x+b.w/4,b.y+b.h/2);ctx.fillStyle=readOnly?c.accent:c.text;ctx.fillText(readOnly?"只读":"读写",b.x+b.w*3/4,b.y+b.h/2);ctx.restore();}
     drawLinks(ctx,c) {
       this.model.services.forEach(sourceService => sourceService.depends.forEach(name => {
         const link=this.dependencyGeometry(sourceService.name,name);if(!link)return;const active=this.sameLink(link,this.selectedLink)||this.sameLink(link,this.hoverLink),points=link.points,target=points[points.length-1];
