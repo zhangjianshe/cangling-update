@@ -8,10 +8,17 @@
   const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
   const unique = values => [...new Set((values || []).map(v => String(v).trim()).filter(Boolean))];
   const parseVolumeMount = mount => {
-    const parts = String(mount || "").split(":"), source = parts[0] || "";
+    const parts = String(mount || "").split(":"), source = parts[0] || "",anonymousOptions=parts.length===2&&parts[1].split(",").every(option=>["ro","rw","z","Z"].includes(option));
     if (parts.length === 1) return { kind: "anonymous", source: "", target: source, mode: "RW" };
+    if(anonymousOptions)return{kind:"anonymous",source:"",target:source,mode:parts[1].split(",").includes("ro")?"RO":"RW"};
     const options = parts.slice(2).join(":").split(",").filter(Boolean);
     return { kind: "bind", source, target: parts[1] || "", mode: options.includes("ro") ? "RO" : "RW" };
+  };
+  const toggleVolumeMountMode = mount => {
+    const item=parseVolumeMount(mount),parts=String(mount||"").split(":"),readOnly=item.mode==="RO";
+    if(item.kind==="anonymous")parts.splice(1,parts.length-1,readOnly?"rw":"ro");
+    else{const options=(parts[2]||"").split(",").filter(Boolean).filter(option=>option!=="ro"&&option!=="rw");options.unshift(readOnly?"rw":"ro");parts.splice(2,parts.length-2,options.join(","));}
+    return parts.join(":");
   };
   const inlineList = value => {
     const text = clean(value);
@@ -241,6 +248,8 @@
     }
     mountHandleBox(service) { const b=this.serviceBox(service);return{x:b.x+b.w/2-15,y:b.y+b.h-8,w:30,h:16}; }
     nonNamedVolumes(service) { return (service&&service.volumes||[]).filter(mount=>!this.model.volumes.includes(mount.split(":")[0])); }
+    nonNamedVolumeIconAt(service,index) { const handle=this.mountHandleBox(service);return{x:handle.x+handle.w/2+15,y:handle.y+handle.h+18+index*26}; }
+    hitNonNamedVolumeIcon(p) { const service=this.model.services.find(item=>item.name===this.selected);if(!service)return null;return this.nonNamedVolumes(service).map((mount,index)=>({service,mount,index,at:this.nonNamedVolumeIconAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
     hitMountHandle(p) {
       return [...this.model.services].reverse().find(service=>{const b=this.mountHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null;
     }
@@ -283,6 +292,7 @@
     mountReadOnly(link) { const parts=this.mountSpec(link).split(":");return (parts[2]||"").split(",").includes("ro"); }
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      const nonNamedVolume=this.hitNonNamedVolumeIcon(p);if(nonNamedVolume){this.toggleNonNamedVolumeMode(nonNamedVolume);return;}
       const mountTool=this.hitMountTool(p);if(mountTool){if(mountTool==="delete")this.removeSelectedMount();else this.toggleSelectedMountMode();return;}
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
@@ -311,8 +321,8 @@
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,previousMount=this.hoverMount,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p);this.hoverMount=handle||mountHandle||node||volume?null:this.hitMount(p);this.hoverLink=handle||mountHandle||node||volume||this.hoverMount?null:this.hitDependency(p);
-        this.canvas.style.cursor = this.hitDelete(p)||this.hitMountTool(p)||this.hoverLink||this.hoverMount||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
+        const previous=this.hoverLink,previousMount=this.hoverMount,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),nonNamedVolume=this.hitNonNamedVolumeIcon(p);this.hoverMount=handle||mountHandle||node||volume||nonNamedVolume?null:this.hitMount(p);this.hoverLink=handle||mountHandle||node||volume||nonNamedVolume||this.hoverMount?null:this.hitDependency(p);
+        this.canvas.style.cursor = nonNamedVolume||this.hitDelete(p)||this.hitMountTool(p)||this.hoverLink||this.hoverMount||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
         if(!this.sameLink(previous,this.hoverLink)||!this.sameMount(previousMount,this.hoverMount))this.render();
         return;
       }
@@ -370,6 +380,9 @@
       const link=this.selectedMount;if(!link)return;const service=this.model.services.find(s=>s.name===link.service),current=this.mountSpec(link);if(!service||!current)return;
       const parts=current.split(":"),options=(parts[2]||"").split(",").filter(Boolean),readOnly=options.includes("ro"),kept=options.filter(option=>option!=="ro"&&option!=="rw");kept.unshift(readOnly?"rw":"ro");parts[2]=kept.join(",");
       const volumes=service.volumes.map(mount=>mount===current?parts.slice(0,3).join(":"):mount);this.commit(service,{volumes},`挂载 ${link.service} → ${link.volume} 已切换为${readOnly?"读写":"只读"}`);
+    }
+    toggleNonNamedVolumeMode(row) {
+      const item=parseVolumeMount(row.mount),readOnly=item.mode==="RO",volumes=row.service.volumes.map(mount=>mount===row.mount?toggleVolumeMountMode(mount):mount);this.commit(row.service,{volumes},`${item.kind==="bind"?item.source+" → ":""}${item.target} 已切换为${readOnly?"读写":"只读"}`);
     }
     addDependency(from, to) {
       const service = this.model.services.find(s => s.name === from);
@@ -449,7 +462,7 @@
       const service=this.model.services.find(item=>item.name===this.selected),items=this.nonNamedVolumes(service);if(!service||!items.length)return;
       const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=start+18+(items.length-1)*26,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);
       ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.textBaseline="middle";
-      items.forEach((mount,index)=>{const item=parseVolumeMount(mount),y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:item.target,tag=item.kind==="bind"?item.mode:"Anonymous",tagWidth=item.kind==="bind"?28:68,textX=x+30,textWidth=Math.max(24,maxWidth-30-tagWidth-8);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=c.muted;ctx.font="12px system-ui";ctx.fillText(item.kind==="bind"?"▣":"●",x+15,y);ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,textWidth),textX,y);const tagX=x+14+maxWidth-tagWidth;roundRect(ctx,tagX,y-9,tagWidth,18,9);ctx.fillStyle=item.kind==="bind"&&item.mode==="RO"?c.active:c.card;ctx.fill();ctx.strokeStyle=item.kind==="bind"&&item.mode==="RO"?c.accent:c.line;ctx.stroke();ctx.fillStyle=item.kind==="bind"&&item.mode==="RO"?c.accent:c.muted;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.fillText(tag,tagX+tagWidth/2,y);ctx.textAlign="left";ctx.strokeStyle=c.line;});ctx.restore();
+      items.forEach((mount,index)=>{const item=parseVolumeMount(mount),y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:item.target,icon=item.kind==="bind"?(item.mode==="RO"?"▣":"□"):(item.mode==="RO"?"◉":"○");ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?c.accent:c.muted;ctx.font="12px system-ui";ctx.fillText(icon,x+15,y);ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,maxWidth-30),x+30,y);});ctx.restore();
     }
     drawMountToolbar(ctx,c) { if(!this.selectedMount)return;const b=this.mountToolbar(this.selectedMount),readOnly=this.mountReadOnly(this.selectedMount);ctx.save();ctx.shadowColor="rgba(0,0,0,.35)";ctx.shadowBlur=8;roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=c.card;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y);ctx.lineTo(b.x+b.w/2,b.y+b.h);ctx.stroke();ctx.fillStyle="#f85149";ctx.font="600 11px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("删除",b.x+b.w/4,b.y+b.h/2);ctx.fillStyle=readOnly?c.accent:c.text;ctx.fillText(readOnly?"只读":"读写",b.x+b.w*3/4,b.y+b.h/2);ctx.restore();}
     drawLinks(ctx,c) {
@@ -460,7 +473,7 @@
       if(this.selectedLink){const at=this.linkMidpoint(this.selectedLink);ctx.save();ctx.beginPath();ctx.arc(at.x,at.y,10,0,Math.PI*2);ctx.fillStyle="#d1242f";ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();ctx.strokeStyle="#fff";ctx.lineWidth=1.7;ctx.beginPath();ctx.moveTo(at.x-3.5,at.y-3.5);ctx.lineTo(at.x+3.5,at.y+3.5);ctx.moveTo(at.x+3.5,at.y-3.5);ctx.lineTo(at.x-3.5,at.y+3.5);ctx.stroke();ctx.restore();}
     }
     drawService(ctx,s,c) {
-      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget,count=s.volumes.filter(mount=>this.model.volumes.includes(mount.split(":")[0])).length,linked=count>0;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget||linked)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget,count=s.volumes.length,linked=s.volumes.some(mount=>this.model.volumes.includes(mount.split(":")[0]));ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget||linked)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
       const mh=this.mountHandleBox(s);roundRect(ctx,mh.x,mh.y,mh.w,mh.h,3);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=linked?c.accent:c.line;ctx.lineWidth=1.5;ctx.stroke();ctx.fillStyle=linked?c.text:c.muted;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),mh.x+mh.w/2,mh.y+mh.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
     }
@@ -468,5 +481,5 @@
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget;this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c);if(active){ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,12);ctx.strokeStyle=c.accent;ctx.lineWidth=v===this.mountTarget?3:2.5;ctx.stroke();ctx.restore();} }
   }
 
-  global.ComposeCanvas = { parse, parseVolumeMount, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
+  global.ComposeCanvas = { parse, parseVolumeMount, toggleVolumeMountMode, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
 })(window);
