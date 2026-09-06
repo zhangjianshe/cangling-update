@@ -398,13 +398,15 @@
     .project-file-editor .ace_editor, .project-file-editor .ace_editor * { border-radius: 0 !important; }
     #panel-edit:not([hidden]) {
       flex: 1 1 auto; min-height: 0; margin-bottom: 0; overflow: hidden;
-      display: flex; flex-direction: column;
+      display: flex; flex-direction: column; position: relative;
     }
     .compose-canvas-toolbar {
-      display: flex; align-items: center; gap: 10px; flex: 0 0 auto;
-      padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--bg-2);
+      position: absolute; z-index: 8; top: 12px; left: 50%; transform: translateX(-50%);
+      display: flex; align-items: center; max-width: calc(100% - 32px); padding: 7px 12px;
+      border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+      box-shadow: 0 4px 14px rgba(0,0,0,.22); pointer-events: none;
     }
-    .compose-canvas-toolbar .hint { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .compose-canvas-toolbar .hint { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .compose-canvas-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
     .compose-canvas-viewport { min-height: 0; overflow: auto; background: var(--bg-2); }
     .compose-canvas-viewport canvas { display: block; cursor: default; touch-action: none; user-select: none; }
@@ -924,7 +926,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-54"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-55"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3293,7 +3295,7 @@
           </table>
         </div>
         <div class="card tab-panel" id="panel-edit" data-panel="edit" role="tabpanel" aria-labelledby="tab-edit">
-          <div class="compose-canvas-toolbar">
+          <div class="compose-canvas-toolbar" hidden>
             <span class="hint" id="compose-canvas-status">读取 Compose 文件后绘制服务拓扑</span>
           </div>
           <div class="compose-canvas-workspace">
@@ -3439,7 +3441,7 @@
       if(message)showComposeCanvasStatus(message+(dirty?"（未保存）":""));
     }
 
-    function showComposeCanvasStatus(message){const status=$("#compose-canvas-status");if(!status)return;clearTimeout(composeCanvas.statusTimer);status.textContent=message||"";status.hidden=!message;if(message)composeCanvas.statusTimer=setTimeout(()=>{status.textContent="";status.hidden=true;},5000);}
+    function showComposeCanvasStatus(message){const status=$("#compose-canvas-status");if(!status)return;const floating=status.closest(".compose-canvas-toolbar");clearTimeout(composeCanvas.statusTimer);status.textContent=message||"";status.hidden=!message;if(floating)floating.hidden=!message;if(message)composeCanvas.statusTimer=setTimeout(()=>{status.textContent="";status.hidden=true;if(floating)floating.hidden=true;},5000);}
 
     async function loadComposeCanvas() {
       if (!state.current || currentProjectTab() !== "edit") return;
