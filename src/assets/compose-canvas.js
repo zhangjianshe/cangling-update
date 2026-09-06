@@ -212,7 +212,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, volumePanelService: "", hoverLink: null, hoverServiceVolumeRow: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", selectedVolume: "", selectedLink: null, volumePanelService: "", portPanelService: "", hoverLink: null, hoverServiceVolumeRow: null, hoverServicePortRow: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
@@ -239,7 +239,7 @@
       });
     }
     serviceBox(s) { const p = this.positions[s.name]; return { x: p.x, y: p.y, w: SW, h: SH }; }
-    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});const panelService=this.model.services.find(service=>service.name===this.volumePanelService),items=this.serviceVolumes(panelService);if(panelService){const handle=this.mountHandleBox(panelService);bottom=Math.max(bottom,handle.y+handle.h+18+(items.length+1)*26);}return bottom+72; }
+    volumeTop() { let bottom=80;this.model.services.forEach(service=>{const b=this.serviceBox(service);bottom=Math.max(bottom,b.y+b.h);});const volumeService=this.model.services.find(service=>service.name===this.volumePanelService),portService=this.model.services.find(service=>service.name===this.portPanelService),panelService=volumeService||portService,items=volumeService?this.serviceVolumes(volumeService):(portService?portService.ports:[]);if(panelService){const handle=volumeService?this.mountHandleBox(panelService):this.portHandleBox(panelService);bottom=Math.max(bottom,handle.y+handle.h+18+(items.length+1)*26);}return bottom+72; }
     volumeBox(i) { const width=Math.max(820,this.canvas.parentElement?this.canvas.parentElement.clientWidth:0),cols=Math.max(1,Math.floor((width-48)/(VW+20)));return{x:24+(i%cols)*(VW+20),y:this.volumeTop()+Math.floor(i/cols)*50,w:VW,h:VH}; }
     point(e) { const r = this.canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
     hitService(p) {
@@ -251,7 +251,8 @@
         return Math.hypot(p.x - b.x, p.y - (b.y + b.h / 2)) <= 10;
       }) || null;
     }
-    mountHandleBox(service) { const b=this.serviceBox(service);return{x:b.x+b.w/2-15,y:b.y+b.h-8,w:30,h:16}; }
+    mountHandleBox(service) { const b=this.serviceBox(service);return{x:b.x+b.w/2-34,y:b.y+b.h-8,w:30,h:16}; }
+    portHandleBox(service) { const b=this.serviceBox(service);return{x:b.x+b.w/2+4,y:b.y+b.h-8,w:30,h:16}; }
     serviceVolumes(service) { return service&&service.volumes||[]; }
     serviceVolumeLabel(mount) { const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]);return parsed.kind==="bind"&&!named?`${parsed.source} → ${parsed.target}`:(named?`${mount.split(":")[0]} → ${parsed.target}`:parsed.target); }
     serviceVolumePanelWidth(service) { const ctx=this.canvas.getContext("2d"),handle=this.mountHandleBox(service),x=handle.x+handle.w/2,canvasWidth=parseFloat(this.canvas.style.width||"820");ctx.save();ctx.font="600 12px ui-monospace, monospace";const textWidth=this.serviceVolumes(service).reduce((width,mount)=>Math.max(width,ctx.measureText(this.serviceVolumeLabel(mount)).width),0);ctx.restore();return Math.min(Math.max(150,Math.ceil(textWidth)+90),Math.max(150,canvasWidth-x)); }
@@ -265,6 +266,13 @@
     hitMountHandle(p) {
       return [...this.model.services].reverse().find(service=>{const b=this.mountHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null;
     }
+    portPanelWidth(service) { const ctx=this.canvas.getContext("2d"),handle=this.portHandleBox(service),x=handle.x+handle.w/2,canvasWidth=parseFloat(this.canvas.style.width||"820");ctx.save();ctx.font="600 12px ui-monospace, monospace";const textWidth=(service.ports||[]).reduce((width,port)=>Math.max(width,ctx.measureText(port).width),0);ctx.restore();return Math.min(Math.max(150,Math.ceil(textWidth)+66),Math.max(150,canvasWidth-x)); }
+    servicePortDeleteAt(service,index) { const handle=this.portHandleBox(service);return{x:handle.x+handle.w/2+20,y:handle.y+handle.h+44+index*26}; }
+    servicePortAddAt(service) { const handle=this.portHandleBox(service),x=handle.x+handle.w/2,width=this.portPanelWidth(service);return{x:x-14+width-20,y:handle.y+handle.h+18}; }
+    hitPortHandle(p) { return [...this.model.services].reverse().find(service=>{const b=this.portHandleBox(service);return p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h;})||null; }
+    hitServicePortAdd(p) { const service=this.model.services.find(item=>item.name===this.portPanelService);if(!service)return null;const at=this.servicePortAddAt(service);return Math.abs(p.x-at.x)<=12&&Math.abs(p.y-at.y)<=9?service:null; }
+    hitServicePortDelete(p) { const service=this.model.services.find(item=>item.name===this.portPanelService);if(!service)return null;return (service.ports||[]).map((port,index)=>({service,port,index,at:this.servicePortDeleteAt(service,index)})).find(row=>Math.hypot(p.x-row.at.x,p.y-row.at.y)<=9)||null; }
+    hitServicePortRow(p) { const service=this.model.services.find(item=>item.name===this.portPanelService);if(!service)return null;const handle=this.portHandleBox(service),x=handle.x+handle.w/2,width=this.portPanelWidth(service);return (service.ports||[]).map((port,index)=>({service,port,index,y:handle.y+handle.h+44+index*26})).find(row=>p.x>=x+8&&p.x<=x-14+width&&Math.abs(p.y-row.y)<=10)||null; }
     hitVolume(p) {
       for (let i = 0; i < this.model.volumes.length; i += 1) { const b = this.volumeBox(i); if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return this.model.volumes[i]; }
       return "";
@@ -297,42 +305,46 @@
     mountLinks() { const links=[];this.model.services.forEach(service=>service.volumes.forEach(mount=>{const volume=mount.split(":")[0],link=this.mountGeometry(service.name,volume);if(link)links.push(link);}));return links; }
     volumeReferenceCount(volume) { return this.model.services.reduce((count,service)=>count+service.volumes.filter(mount=>mount.split(":")[0]===volume).length,0); }
     pointerDown(e) {
-      const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), portHandle=this.hitPortHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      const servicePortAdd=this.hitServicePortAdd(p);if(servicePortAdd){this.editServicePort({service:servicePortAdd,port:"",index:-1});return;}
+      const servicePortDelete=this.hitServicePortDelete(p);if(servicePortDelete){this.removeServicePort(servicePortDelete);return;}
+      const servicePortRow=this.hitServicePortRow(p);if(servicePortRow){this.editServicePort(servicePortRow);return;}
       const serviceVolumeAdd=this.hitServiceVolumeAdd(p);if(serviceVolumeAdd){if(typeof this.onAddMount==="function")this.onAddMount(serviceVolumeAdd.name,this.model.volumes,mount=>this.addServiceVolume(serviceVolumeAdd,mount));else this.onStatus("挂载编辑器不可用");return;}
       const serviceVolumeDelete=this.hitServiceVolumeDelete(p);if(serviceVolumeDelete){this.removeServiceVolume(serviceVolumeDelete);return;}
       const serviceVolume=this.hitServiceVolumeIcon(p);if(serviceVolume){this.toggleServiceVolumeMode(serviceVolume);return;}
       const serviceVolumeRow=this.hitServiceVolumeRow(p);if(serviceVolumeRow){this.editServiceVolume(serviceVolumeRow);return;}
       if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
-        this.selectedLink = null; this.selectedVolume = ""; this.volumePanelService="";
+        this.selectedLink = null; this.selectedVolume = ""; this.volumePanelService="";this.portPanelService="";
         this.selected = handle.name; this.linkFrom = handle.name; this.linkTarget = "";
         this.drag = { type: "link", name: handle.name };
         this.canvas.style.cursor = LINK_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
       }
-      if(mountHandle){this.selected="";this.selectedVolume="";this.selectedLink=null;this.volumePanelService=mountHandle.name;this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${mountHandle.name} 的数据卷`);this.render();return;}
+      if(mountHandle){this.selected="";this.selectedVolume="";this.selectedLink=null;this.volumePanelService=mountHandle.name;this.portPanelService="";this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${mountHandle.name} 的数据卷`);this.render();return;}
+      if(portHandle){this.selected="";this.selectedVolume="";this.selectedLink=null;this.volumePanelService="";this.portPanelService=portHandle.name;this.drag=null;this.canvas.style.cursor="pointer";this.canvas.focus();this.renderInspector();this.onStatus(`已打开 ${portHandle.name} 的端口`);this.render();return;}
       if (service && this.linkFrom) {
         if (service.name !== this.linkFrom) this.addDependency(this.linkFrom, service.name);
         this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
       }
       if (service) {
-        this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; this.volumePanelService=""; const pos = this.positions[service.name];
+        this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; this.volumePanelService="";this.portPanelService=""; const pos = this.positions[service.name];
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.style.cursor = SELECT_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
-        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.volumePanelService=""; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
+        this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.volumePanelService="";this.portPanelService=""; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
       } else {
-        const link=this.hitDependency(p);this.selected="";this.selectedVolume="";this.selectedLink=link;this.volumePanelService="";this.hoverServiceVolumeRow=null;this.canvas.focus();this.renderInspector();
+        const link=this.hitDependency(p);this.selected="";this.selectedVolume="";this.selectedLink=link;this.volumePanelService="";this.portPanelService="";this.hoverServiceVolumeRow=null;this.hoverServicePortRow=null;this.canvas.focus();this.renderInspector();
         this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : ""); this.render();
       }
     }
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p),serviceVolumeAdd=this.hitServiceVolumeAdd(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd?null:this.hitDependency(p);
-        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||mountHandle||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle?LINK_CURSOR:(node?SELECT_CURSOR:"default"));
-        if(!this.sameLink(previous,this.hoverLink)||(previousRow&&previousRow.index)!==(serviceVolumeRow&&serviceVolumeRow.index))this.render();
+        const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,previousPortRow=this.hoverServicePortRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),portHandle=this.hitPortHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p),serviceVolumeAdd=this.hitServiceVolumeAdd(p),servicePortAdd=this.hitServicePortAdd(p),servicePortDelete=this.hitServicePortDelete(p),servicePortRow=this.hitServicePortRow(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverServicePortRow=servicePortRow;this.hoverLink=handle||mountHandle||portHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow?null:this.hitDependency(p);
+        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow||mountHandle||portHandle||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle?LINK_CURSOR:(node?SELECT_CURSOR:"default"));
+        if(!this.sameLink(previous,this.hoverLink)||(previousRow&&previousRow.index)!==(serviceVolumeRow&&serviceVolumeRow.index)||(previousPortRow&&previousPortRow.index)!==(servicePortRow&&servicePortRow.index))this.render();
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link" ? LINK_CURSOR : SELECT_CURSOR;
@@ -359,7 +371,7 @@
         this.onChange(this.yaml, "已更新 Canvas 布局"); this.onStatus("已更新 Canvas 布局");
       }
       this.drag = null; this.render();
-      this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitMountHandle(p)||this.hitVolume(p)?"pointer":(this.hitService(p)?SELECT_CURSOR:"default"));
+      this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitMountHandle(p)||this.hitPortHandle(p)||this.hitVolume(p)?"pointer":(this.hitService(p)?SELECT_CURSOR:"default"));
     }
     startLink() {
       if (!this.selected) { this.onStatus("请先点击需要添加依赖的服务"); return; }
@@ -368,7 +380,7 @@
     keyDown(e) {
       if ((e.key === "Delete" || e.key === "Backspace") && this.selectedLink) { e.preventDefault(); this.removeSelectedDependency(); }
       else if ((e.key === "Delete" || e.key === "Backspace") && this.selectedVolume) { e.preventDefault(); this.removeSelectedVolume(); }
-      else if (e.key === "Escape" && (this.selectedLink || this.selectedVolume || this.volumePanelService)) { e.preventDefault(); this.selectedLink = null; this.selectedVolume = ""; this.volumePanelService=""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
+      else if (e.key === "Escape" && (this.selectedLink || this.selectedVolume || this.volumePanelService || this.portPanelService)) { e.preventDefault(); this.selectedLink = null; this.selectedVolume = ""; this.volumePanelService="";this.portPanelService=""; this.onStatus("已取消选择"); this.renderInspector(); this.render(); }
     }
     removeSelectedDependency() {
       const link=this.selectedLink;if(!link)return;
@@ -385,6 +397,8 @@
     editServiceVolume(row) {
       if(typeof this.onEditMount!=="function"){this.onStatus("挂载编辑器不可用");return;}const parsed=parseVolumeMount(row.mount),named=this.model.volumes.includes(row.mount.split(":")[0]),initial={editing:true,type:named?"named":parsed.kind,source:named?row.mount.split(":")[0]:parsed.source,target:parsed.target,mode:parsed.mode.toLowerCase()};this.onEditMount(row.service.name,this.model.volumes,mount=>{const volumes=row.service.volumes.map((value,index)=>index===row.index?mount:value);this.commit(row.service,{volumes},`已更新 ${row.service.name} 的挂载 ${mount}`);},initial);
     }
+    removeServicePort(row) { const ports=row.service.ports.filter((port,index)=>index!==row.index);this.commit(row.service,{ports},`已删除 ${row.service.name} 的端口 ${row.port}`); }
+    editServicePort(row) { if(typeof this.onEditPort!=="function"){this.onStatus("端口编辑器不可用");return;}this.onEditPort(row.service.name,row.port,port=>{const ports=row.index<0?[...row.service.ports,port]:row.service.ports.map((value,index)=>index===row.index?port:value);this.commit(row.service,{ports:unique(ports)},`${row.index<0?"已添加":"已更新"} ${row.service.name} 的端口 ${port}`);}); }
     addDependency(from, to) {
       const service = this.model.services.find(s => s.name === from);
       if (service && !service.depends.includes(to)) { service.depends.push(to); this.commit(service, { depends: service.depends }, `已添加依赖 ${from} → ${to}`); }
@@ -456,7 +470,7 @@
         const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
         if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(b.x-15,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
       }
-      this.drawServiceVolumes(ctx,c);
+      this.drawServiceVolumes(ctx,c);this.drawServicePorts(ctx,c);
     }
     drawMounts(ctx,c) {
       if (!this.selectedVolume) return;
@@ -468,6 +482,10 @@
       ctx.save();ctx.shadowColor="rgba(0,0,0,.18)";ctx.shadowBlur=10;roundRect(ctx,x-14,start+2,panelWidth,(items.length+1)*26+12,6);ctx.fillStyle="#fff";ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle="#d0d7de";ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.moveTo(x-14,start+31);ctx.lineTo(x-14+panelWidth,start+31);ctx.stroke();ctx.fillStyle="#57606a";ctx.font="600 12px system-ui";ctx.textBaseline="middle";ctx.fillText("数据卷",x+2,headerY);const add=this.serviceVolumeAddAt(service);roundRect(ctx,add.x-12,add.y-9,24,18,5);ctx.fillStyle="#f6f8fa";ctx.fill();ctx.strokeStyle="#d0d7de";ctx.stroke();ctx.strokeStyle="#0969da";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(add.x-4,add.y);ctx.lineTo(add.x+4,add.y);ctx.moveTo(add.x,add.y-4);ctx.lineTo(add.x,add.y+4);ctx.stroke();ctx.strokeStyle="#afb8c1";ctx.lineWidth=1.25;if(items.length){ctx.beginPath();ctx.moveTo(x,start+32);ctx.lineTo(x,lastY);ctx.stroke();}ctx.textBaseline="middle";
       items.forEach((mount,index)=>{const parsed=parseVolumeMount(mount),named=this.model.volumes.includes(mount.split(":")[0]),item=named?{...parsed,kind:"named"}:parsed,y=start+44+index*26,label=this.serviceVolumeLabel(mount),hovered=this.hoverServiceVolumeRow&&this.hoverServiceVolumeRow.index===index;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=item.mode==="RO"?"#57606a":c.accent;if(item.kind==="named"){const cx=x+20,size=7;ctx.beginPath();ctx.moveTo(cx,y-size);ctx.lineTo(cx+size,y);ctx.lineTo(cx,y+size);ctx.lineTo(cx-size,y);ctx.closePath();if(item.mode==="RO"){ctx.strokeStyle="#57606a";ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle="#afb8c1";}else if(item.kind==="bind"){const size=11;ctx.beginPath();ctx.rect(x+20-size/2,y-size/2,size,size);if(item.mode==="RO"){ctx.strokeStyle="#57606a";ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle="#afb8c1";}else{ctx.beginPath();ctx.arc(x+20,y,6,0,Math.PI*2);if(item.mode==="RO"){ctx.strokeStyle="#57606a";ctx.lineWidth=1.25;ctx.stroke();}else{ctx.fill();}ctx.strokeStyle="#afb8c1";}const remove=this.serviceVolumeDeleteAt(service,index);ctx.strokeStyle="#cf222e";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(remove.x-4,remove.y-4);ctx.lineTo(remove.x+4,remove.y+4);ctx.moveTo(remove.x+4,remove.y-4);ctx.lineTo(remove.x-4,remove.y+4);ctx.stroke();ctx.strokeStyle="#afb8c1";ctx.fillStyle="#24292f";ctx.font=`${hovered?"600":"400"} 12px ui-monospace, monospace`;ctx.fillText(clip(ctx,label,panelWidth-82),x+52,y);});ctx.restore();
     }
+    drawServicePorts(ctx,c) {
+      const service=this.model.services.find(item=>item.name===this.portPanelService);if(!service)return;const items=service.ports||[],handle=this.portHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=items.length?start+44+(items.length-1)*26:start,width=this.portPanelWidth(service),headerY=start+18;
+      ctx.save();ctx.shadowColor="rgba(0,0,0,.18)";ctx.shadowBlur=10;roundRect(ctx,x-14,start+2,width,(items.length+1)*26+12,6);ctx.fillStyle="#fff";ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle="#d0d7de";ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.moveTo(x-14,start+31);ctx.lineTo(x-14+width,start+31);ctx.stroke();ctx.fillStyle="#57606a";ctx.font="600 12px system-ui";ctx.textBaseline="middle";ctx.fillText("端口",x+2,headerY);const add=this.servicePortAddAt(service);roundRect(ctx,add.x-12,add.y-9,24,18,5);ctx.fillStyle="#f6f8fa";ctx.fill();ctx.strokeStyle="#d0d7de";ctx.stroke();ctx.strokeStyle="#0969da";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(add.x-4,add.y);ctx.lineTo(add.x+4,add.y);ctx.moveTo(add.x,add.y-4);ctx.lineTo(add.x,add.y+4);ctx.stroke();ctx.strokeStyle="#afb8c1";ctx.lineWidth=1.25;if(items.length){ctx.beginPath();ctx.moveTo(x,start+32);ctx.lineTo(x,lastY);ctx.stroke();}items.forEach((port,index)=>{const y=start+44+index*26,hovered=this.hoverServicePortRow&&this.hoverServicePortRow.index===index,remove=this.servicePortDeleteAt(service,index);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.strokeStyle="#cf222e";ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(remove.x-4,y-4);ctx.lineTo(remove.x+4,y+4);ctx.moveTo(remove.x+4,y-4);ctx.lineTo(remove.x-4,y+4);ctx.stroke();ctx.strokeStyle="#afb8c1";ctx.fillStyle="#24292f";ctx.font=`${hovered?"600":"400"} 12px ui-monospace, monospace`;ctx.fillText(clip(ctx,port,width-55),x+34,y);});ctx.restore();
+    }
     drawLinks(ctx,c) {
       this.model.services.forEach(sourceService => sourceService.depends.forEach(name => {
         const link=this.dependencyGeometry(sourceService.name,name);if(!link)return;const active=this.sameLink(link,this.selectedLink)||this.sameLink(link,this.hoverLink),points=link.points,target=points[points.length-1];
@@ -476,9 +494,10 @@
       if(this.selectedLink){const at=this.linkMidpoint(this.selectedLink);ctx.save();ctx.beginPath();ctx.arc(at.x,at.y,10,0,Math.PI*2);ctx.fillStyle="#d1242f";ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();ctx.strokeStyle="#fff";ctx.lineWidth=1.7;ctx.beginPath();ctx.moveTo(at.x-3.5,at.y-3.5);ctx.lineTo(at.x+3.5,at.y+3.5);ctx.moveTo(at.x+3.5,at.y-3.5);ctx.lineTo(at.x-3.5,at.y+3.5);ctx.stroke();ctx.restore();}
     }
     drawService(ctx,s,c) {
-      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget,linked=s.volumes.some(mount=>this.model.volumes.includes(mount.split(":")[0])),panelOpen=s.name===this.volumePanelService;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget||linked)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const b=this.serviceBox(s),isTarget=s.name===this.linkTarget,linked=s.volumes.some(mount=>this.model.volumes.includes(mount.split(":")[0])),panelOpen=s.name===this.volumePanelService,portsOpen=s.name===this.portPanelService;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget||linked)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
       ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
       const mh=this.mountHandleBox(s),cx=mh.x+mh.w/2,cy=mh.y+mh.h/2;roundRect(ctx,mh.x,mh.y,mh.w,mh.h,3);ctx.fillStyle=panelOpen?c.active:c.card;ctx.fill();ctx.strokeStyle=panelOpen||linked?c.accent:c.line;ctx.lineWidth=panelOpen?2:1.5;ctx.stroke();ctx.strokeStyle=panelOpen||linked?c.accent:c.muted;ctx.lineWidth=1.1;ctx.beginPath();ctx.ellipse(cx,cy-3,5,2,0,0,Math.PI*2);ctx.moveTo(cx-5,cy-3);ctx.lineTo(cx-5,cy+3);ctx.ellipse(cx,cy+3,5,2,0,0,Math.PI);ctx.lineTo(cx+5,cy-3);ctx.stroke();ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const ph=this.portHandleBox(s),px=ph.x+ph.w/2,py=ph.y+ph.h/2;roundRect(ctx,ph.x,ph.y,ph.w,ph.h,3);ctx.fillStyle=portsOpen?c.active:c.card;ctx.fill();ctx.strokeStyle=portsOpen?c.accent:c.line;ctx.lineWidth=portsOpen?2:1.5;ctx.stroke();ctx.strokeStyle=portsOpen?c.accent:c.muted;ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(px-4,py,2.5,0,Math.PI*2);ctx.moveTo(px-1.5,py);ctx.lineTo(px+5,py);ctx.moveTo(px+2,py-3);ctx.lineTo(px+5,py);ctx.lineTo(px+2,py+3);ctx.stroke();
     }
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume,count=this.volumeReferenceCount(v),cy=b.y+b.h/2;ctx.save();roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=active?c.accent:c.line;ctx.lineWidth=active?2.5:1;ctx.stroke();ctx.strokeStyle=active?c.accent:c.muted;ctx.lineWidth=1.2;ctx.beginPath();ctx.ellipse(b.x+15,cy-4,6,2.5,0,0,Math.PI*2);ctx.moveTo(b.x+9,cy-4);ctx.lineTo(b.x+9,cy+4);ctx.ellipse(b.x+15,cy+4,6,2.5,0,0,Math.PI);ctx.lineTo(b.x+21,cy-4);ctx.stroke();ctx.beginPath();ctx.arc(b.x+b.w-15,cy,9,0,Math.PI*2);ctx.fillStyle=active?c.accent:c.line;ctx.fill();ctx.fillStyle=c.text;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(String(count),b.x+b.w-15,cy);ctx.font="12px ui-monospace";ctx.fillText(clip(ctx,v,b.w-62),b.x+b.w/2,cy);ctx.restore();ctx.textAlign="left";ctx.textBaseline="alphabetic"; }
   }

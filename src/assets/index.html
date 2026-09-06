@@ -924,7 +924,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-43"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-44"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3483,6 +3483,7 @@
           },
           onAddMount: openServiceMountDialog,
           onEditMount: openServiceMountDialog,
+          onEditPort: openServicePortDialog,
         });
         const model = composeCanvas.editor.model;
         if (status) status.textContent = `${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`;
@@ -3513,6 +3514,16 @@
       const renderFields=(values={})=>{const type=$("#mount-add-type").value,box=$("#mount-add-fields"),target=esc(values.target||"");if(type==="named"){box.innerHTML=`<div class="field"><label>命名卷</label><select id="mount-add-source">${(namedVolumes||[]).map(name=>`<option value="${esc(name)}" ${values.source===name?"selected":""}>${esc(name)}</option>`).join("")}</select></div><div class="field"><label>容器路径</label><input id="mount-add-target" type="text" value="${target}" placeholder="/app/data" /></div>`;}else if(type==="bind"){box.innerHTML=`<div class="field"><label>宿主机路径</label><div class="dir-row"><input id="mount-add-source" type="text" value="${esc(values.source||"")}" placeholder="./data 或 /srv/data" /><button type="button" class="btn" id="mount-add-browse">选择</button></div></div><div class="field"><label>容器路径</label><input id="mount-add-target" type="text" value="${target}" placeholder="/app/data" /></div>`;$("#mount-add-browse").onclick=()=>{const draft={editing:initial.editing,type:"bind",source:$("#mount-add-source").value.trim(),target:$("#mount-add-target").value.trim(),mode:$("#mount-add-mode").value};openDirPicker("",dir=>openServiceMountDialog(serviceName,namedVolumes,onSave,{...draft,source:dir}),draft.source||"/");};}else{box.innerHTML=`<div class="field"><label>容器路径</label><input id="mount-add-target" type="text" value="${target}" placeholder="/cache" /></div>`;}};
       renderFields(initial);$("#mount-add-type").onchange=()=>renderFields();
       setDialogAction(initial.editing?"保存挂载":"添加挂载",()=>{const type=$("#mount-add-type").value,source=$("#mount-add-source")?$("#mount-add-source").value.trim():"",target=$("#mount-add-target").value.trim(),mode=$("#mount-add-mode").value,error=$("#mount-add-error");let message="";if(type==="named"&&!source)message="请先在 Compose 顶层创建命名卷";else if(type==="bind"&&!source)message="请填写宿主机路径";else if(!target.startsWith("/"))message="容器路径必须是以 / 开头的绝对路径";if(message){error.textContent=message;error.hidden=false;return;}const mount=type==="anonymous"?target+(mode==="ro"?":ro":""):`${source}:${target}${mode==="ro"?":ro":""}`;closeDialog();onSave(mount);});
+    }
+
+    function openServicePortDialog(serviceName, current, onSave) {
+      closeDialog();
+      const editing=!!current,modal=$("#dialog-modal");if(modal)modal.classList.add("form-modal");
+      $("#dialog-title").textContent=`${editing?"编辑":"添加"}端口 · ${serviceName}`;
+      $("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>端口映射</label><input id="service-port-value" type="text" value="${esc(current||"")}" placeholder="8080:80 或 127.0.0.1:8080:80/tcp" /></div><div class="hint hint-soft">格式：宿主机端口:容器端口，可追加 /tcp 或 /udp；也支持仅填写容器端口。</div><div class="flash err" id="service-port-error" hidden></div></div>`;
+      $("#dialog").hidden=false;
+      setDialogAction(editing?"保存端口":"添加端口",()=>{const value=$("#service-port-value").value.trim(),error=$("#service-port-error");if(!value||/\s/.test(value)){error.textContent=value?"端口映射不能包含空格":"请填写端口映射";error.hidden=false;return;}closeDialog();onSave(value);});
+      $("#service-port-value").focus();
     }
 
     async function refreshComposeCanvas() {
