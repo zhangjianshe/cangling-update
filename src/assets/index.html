@@ -925,7 +925,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-31"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-32"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3481,6 +3481,7 @@
           onStatus: (message) => {
             if ($("#compose-canvas-status")) $("#compose-canvas-status").textContent = message + (composeCanvas.dirty ? "（未保存）" : "");
           },
+          onAddMount: openServiceMountDialog,
         });
         const model = composeCanvas.editor.model;
         if (status) status.textContent = `${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`;
@@ -3500,6 +3501,17 @@
       } catch (e) {
         if (status) status.textContent = "无法读取 Compose 文件：" + e.message;
       }
+    }
+
+    function openServiceMountDialog(serviceName, namedVolumes, onSave) {
+      closeDialog();
+      const modal = $("#dialog-modal");if(modal)modal.classList.add("form-modal");
+      $("#dialog-title").textContent = `添加数据挂载 · ${serviceName}`;
+      $("#dialog-body").innerHTML = `<div class="storage-form"><div class="field"><label>挂载类型</label><select id="mount-add-type"><option value="named">命名卷</option><option value="bind">Bind Mount</option><option value="anonymous">匿名 Volume</option></select></div><div id="mount-add-fields"></div><div class="field"><label>访问模式</label><select id="mount-add-mode"><option value="rw">读写</option><option value="ro">只读</option></select></div><div class="flash err" id="mount-add-error" hidden></div></div>`;
+      $("#dialog").hidden=false;
+      const renderFields=()=>{const type=$("#mount-add-type").value,box=$("#mount-add-fields");if(type==="named"){box.innerHTML=`<div class="field"><label>命名卷</label><select id="mount-add-source">${(namedVolumes||[]).map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join("")}</select></div><div class="field"><label>容器路径</label><input id="mount-add-target" type="text" placeholder="/app/data" /></div>`;}else if(type==="bind"){box.innerHTML=`<div class="field"><label>宿主机路径</label><input id="mount-add-source" type="text" placeholder="./data 或 /srv/data" /></div><div class="field"><label>容器路径</label><input id="mount-add-target" type="text" placeholder="/app/data" /></div>`;}else{box.innerHTML=`<div class="field"><label>容器路径</label><input id="mount-add-target" type="text" placeholder="/cache" /></div>`;}};
+      renderFields();$("#mount-add-type").onchange=renderFields;
+      setDialogAction("添加挂载",()=>{const type=$("#mount-add-type").value,source=$("#mount-add-source")?$("#mount-add-source").value.trim():"",target=$("#mount-add-target").value.trim(),mode=$("#mount-add-mode").value,error=$("#mount-add-error");let message="";if(type==="named"&&!source)message="请先在 Compose 顶层创建命名卷";else if(type==="bind"&&!source)message="请填写宿主机路径";else if(!target.startsWith("/"))message="容器路径必须是以 / 开头的绝对路径";if(message){error.textContent=message;error.hidden=false;return;}const mount=type==="anonymous"?target+(mode==="ro"?":ro":""):`${source}:${target}${mode==="ro"?":ro":""}`;closeDialog();onSave(mount);});
     }
 
     async function refreshComposeCanvas() {

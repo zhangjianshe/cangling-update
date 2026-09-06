@@ -409,6 +409,10 @@
       this.yaml = updateServiceYaml(this.yaml, service.name, values); this.model = parse(this.yaml);
       this.onChange(this.yaml, message); this.onStatus(message); this.renderInspector(); this.render();
     }
+    addServiceVolume(service, mount) {
+      mount=String(mount||"").trim();if(!mount)return;if(service.volumes.includes(mount)){this.onStatus(`挂载 ${mount} 已存在`);return;}
+      this.commit(service,{volumes:[...service.volumes,mount]},`已为 ${service.name} 添加挂载 ${mount}`);
+    }
     renderInspector() {
       if (this.selectedVolume) {
         const volume=this.model.volumeDetails[this.selectedVolume]||{name:this.selectedVolume,driver:"local",external:false,driverOpts:{type:"",o:"",device:""}},opts=volume.driverOpts||{},volumeType=["nfs","cifs"].includes(opts.type)?opts.type:"local";
@@ -421,7 +425,9 @@
       const service = this.model.services.find(s => s.name === this.selected);
       if (!service) { this.inspector.innerHTML = '<div class="compose-inspector-empty">点击服务节点编辑属性</div>'; return; }
       const field = (label, key, value, area) => `<label>${label}${area ? `<textarea data-field="${key}" rows="3">${html((value || []).join("\n"))}</textarea>` : `<input data-field="${key}" type="text" value="${html(value || "")}" />`}</label>`;
-      this.inspector.innerHTML = `<div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${field("重启策略","restart",service.restart)}${field("依赖服务（每行一个）","depends",service.depends,true)}${field("端口（每行一个）","ports",service.ports,true)}${field("挂载（每行一个）","volumes",service.volumes,true)}${field("网络（每行一个）","networks",service.networks,true)}<button type="button" class="btn primary" data-apply>应用到草稿</button>`;
+      const volumeField=`<label><span style="display:flex;align-items:center;justify-content:space-between;gap:8px">数据挂载（每行一个）<button type="button" class="btn" data-add-volume style="padding:4px 8px">＋ 添加</button></span><textarea data-field="volumes" rows="3">${html(service.volumes.join("\n"))}</textarea></label>`;
+      this.inspector.innerHTML = `<div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${field("重启策略","restart",service.restart)}${field("依赖服务（每行一个）","depends",service.depends,true)}${field("端口（每行一个）","ports",service.ports,true)}${volumeField}${field("网络（每行一个）","networks",service.networks,true)}<button type="button" class="btn primary" data-apply>应用到草稿</button>`;
+      this.inspector.querySelector("[data-add-volume]").onclick=()=>{if(typeof this.onAddMount==="function")this.onAddMount(service.name,this.model.volumes,mount=>this.addServiceVolume(service,mount));else this.onStatus("挂载编辑器不可用");};
       this.inspector.querySelector("[data-apply]").onclick = () => {
         const patch = {};
         this.inspector.querySelectorAll("[data-field]").forEach(input => {
