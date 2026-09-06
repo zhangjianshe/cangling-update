@@ -162,20 +162,23 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
+      Object.assign(this, { selected: "", selectedLink: null, hoverLink: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 } }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {
         try { this.positions = JSON.parse(localStorage.getItem(this.storageKey) || "{}"); } catch (_) { this.positions = {}; }
       }
-      this.down = e => this.pointerDown(e); this.move = e => this.pointerMove(e); this.up = e => this.pointerUp(e);
+      this.down = e => this.pointerDown(e); this.move = e => this.pointerMove(e); this.up = e => this.pointerUp(e); this.key = e => this.keyDown(e);
+      this.canvas.tabIndex = 0;
       this.canvas.addEventListener("pointerdown", this.down); this.canvas.addEventListener("pointermove", this.move);
       this.canvas.addEventListener("pointerup", this.up); this.canvas.addEventListener("pointercancel", this.up);
+      this.canvas.addEventListener("keydown", this.key);
       this.renderInspector(); this.render();
     }
     destroy() {
       this.canvas.removeEventListener("pointerdown", this.down); this.canvas.removeEventListener("pointermove", this.move);
       this.canvas.removeEventListener("pointerup", this.up); this.canvas.removeEventListener("pointercancel", this.up);
+      this.canvas.removeEventListener("keydown", this.key);
     }
     ensurePositions() {
       const width = Math.max(720, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0);
@@ -201,9 +204,32 @@
       for (let i = 0; i < this.model.volumes.length; i += 1) { const b = this.volumeBox(i); if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return this.model.volumes[i]; }
       return "";
     }
+    dependencyGeometry(from, to) {
+      const source=this.model.services.find(s=>s.name===from),target=this.model.services.find(s=>s.name===to);if(!source||!target)return null;
+      const a=this.serviceBox(source),b=this.serviceBox(target),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;
+      const xr=Math.abs(dx)/(b.w/2),yr=Math.abs(dy)/(b.h/2),edgeScale=1/Math.max(xr,yr),tx=cx-dx*edgeScale,ty=cy-dy*edgeScale,nx=xr>=yr?(dx>0?-1:1):0,ny=xr>=yr?0:(dy>0?-1:1),px=tx+nx*20,py=ty+ny*20;
+      return { from, to, points:[{x:sx,y:sy},{x:sx-15,y:sy},{x:px,y:py},{x:tx,y:ty}], arrowAng:Math.atan2(ty-py,tx-px) };
+    }
+    sameLink(a,b) { return !!a && !!b && a.from===b.from && a.to===b.to; }
+    pointSegmentDistance(p,a,b) {
+      const dx=b.x-a.x,dy=b.y-a.y,length=dx*dx+dy*dy,t=length?Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/length)):0,x=a.x+t*dx,y=a.y+t*dy;
+      return Math.hypot(p.x-x,p.y-y);
+    }
+    hitDependency(p) {
+      const links=[];this.model.services.forEach(s=>s.depends.forEach(to=>links.push(this.dependencyGeometry(s.name,to))));
+      return links.reverse().find(link=>link&&link.points.slice(1).some((point,index)=>this.pointSegmentDistance(p,link.points[index],point)<=7))||null;
+    }
+    linkMidpoint(link) {
+      const lengths=link.points.slice(1).map((point,index)=>Math.hypot(point.x-link.points[index].x,point.y-link.points[index].y)),half=lengths.reduce((a,b)=>a+b,0)/2;let walked=0;
+      for(let i=0;i<lengths.length;i+=1){if(walked+lengths[i]>=half){const t=(half-walked)/lengths[i],a=link.points[i],b=link.points[i+1];return{x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t};}walked+=lengths[i];}
+      return link.points[1];
+    }
+    hitDelete(p) { if(!this.selectedLink)return false;const at=this.linkMidpoint(this.selectedLink);return Math.hypot(p.x-at.x,p.y-at.y)<=11; }
     pointerDown(e) {
       const p = this.point(e), handle = this.hitLinkHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      if (this.hitDelete(p)) { this.removeSelectedDependency(); return; }
       if (handle) {
+        this.selectedLink = null;
         this.selected = handle.name; this.linkFrom = handle.name; this.linkTarget = "";
         this.drag = { type: "link", name: handle.name };
         this.canvas.style.cursor = LINK_CURSOR;
@@ -214,17 +240,23 @@
         this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
       }
       if (service) {
-        this.selected = service.name; const pos = this.positions[service.name];
+        this.selected = service.name; this.selectedLink = null; const pos = this.positions[service.name];
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
-        this.drag = { type: "volume", name: volume }; this.canvas.setPointerCapture(e.pointerId); this.render();
+        this.selectedLink = null; this.drag = { type: "volume", name: volume }; this.canvas.setPointerCapture(e.pointerId); this.render();
+      } else {
+        const link = this.hitDependency(p);
+        this.selectedLink = link; this.canvas.focus();
+        this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : ""); this.render();
       }
     }
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
+        const previous=this.hoverLink,handle=this.hitLinkHandle(p),node=this.hitService(p),volume=this.hitVolume(p);this.hoverLink=handle||node||volume?null:this.hitDependency(p);
+        this.canvas.style.cursor = this.hitDelete(p) || this.hoverLink ? "pointer" : (handle ? LINK_CURSOR : (node || volume ? "grab" : "default"));
+        if(!this.sameLink(previous,this.hoverLink))this.render();
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link" ? LINK_CURSOR : "grabbing";
@@ -257,6 +289,16 @@
     startLink() {
       if (!this.selected) { this.onStatus("请先点击需要添加依赖的服务"); return; }
       this.linkFrom = this.selected; this.onStatus("请点击它所依赖的目标服务"); this.render();
+    }
+    keyDown(e) {
+      if ((e.key === "Delete" || e.key === "Backspace") && this.selectedLink) { e.preventDefault(); this.removeSelectedDependency(); }
+      else if (e.key === "Escape" && this.selectedLink) { e.preventDefault(); this.selectedLink = null; this.onStatus("已取消选择依赖"); this.render(); }
+    }
+    removeSelectedDependency() {
+      const link=this.selectedLink;if(!link)return;
+      const service=this.model.services.find(s=>s.name===link.from);if(!service)return;
+      const depends=service.depends.filter(name=>name!==link.to);this.selectedLink=null;this.hoverLink=null;
+      this.commit(service,{depends},`已删除依赖 ${link.from} → ${link.to}`);
     }
     addDependency(from, to) {
       const service = this.model.services.find(s => s.name === from);
@@ -311,14 +353,11 @@
       ctx.restore();
     }
     drawLinks(ctx,c) {
-      ctx.strokeStyle=c.accent; ctx.fillStyle=c.accent; ctx.lineWidth=1.5;
       this.model.services.forEach(sourceService => sourceService.depends.forEach(name => {
-        const targetService=this.model.services.find(s=>s.name===name); if(!targetService)return;
-        const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;
-        const xr=Math.abs(dx)/(b.w/2),yr=Math.abs(dy)/(b.h/2),edgeScale=1/Math.max(xr,yr);
-        const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale,nx=xr>=yr?(dx>0?-1:1):0,ny=xr>=yr?0:(dy>0?-1:1),px=tx+nx*20,py=ty+ny*20,arrowAng=Math.atan2(ty-py,tx-px);
-        ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(sx-15,sy);ctx.lineTo(px,py);ctx.lineTo(tx,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(arrowAng-.45)*9,ty-Math.sin(arrowAng-.45)*9);ctx.lineTo(tx-Math.cos(arrowAng+.45)*9,ty-Math.sin(arrowAng+.45)*9);ctx.closePath();ctx.fill();
+        const link=this.dependencyGeometry(sourceService.name,name);if(!link)return;const active=this.sameLink(link,this.selectedLink)||this.sameLink(link,this.hoverLink),points=link.points,target=points[points.length-1];
+        ctx.save();ctx.strokeStyle=c.accent;ctx.fillStyle=c.accent;ctx.lineWidth=active?3:1.5;if(active){ctx.shadowColor=c.accent;ctx.shadowBlur=7;}ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);points.slice(1).forEach(point=>ctx.lineTo(point.x,point.y));ctx.stroke();ctx.beginPath();ctx.moveTo(target.x,target.y);ctx.lineTo(target.x-Math.cos(link.arrowAng-.45)*9,target.y-Math.sin(link.arrowAng-.45)*9);ctx.lineTo(target.x-Math.cos(link.arrowAng+.45)*9,target.y-Math.sin(link.arrowAng+.45)*9);ctx.closePath();ctx.fill();ctx.restore();
       }));
+      if(this.selectedLink){const at=this.linkMidpoint(this.selectedLink);ctx.save();ctx.beginPath();ctx.arc(at.x,at.y,10,0,Math.PI*2);ctx.fillStyle="#d1242f";ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();ctx.strokeStyle="#fff";ctx.lineWidth=1.7;ctx.beginPath();ctx.moveTo(at.x-3.5,at.y-3.5);ctx.lineTo(at.x+3.5,at.y+3.5);ctx.moveTo(at.x+3.5,at.y-3.5);ctx.lineTo(at.x-3.5,at.y+3.5);ctx.stroke();ctx.restore();}
     }
     drawService(ctx,s,c) {
       const b=this.serviceBox(s),isTarget=s.name===this.linkTarget;ctx.save();if(isTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=(s.name===this.selected||isTarget)?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom||isTarget)?c.accent:c.line;ctx.lineWidth=isTarget?3:((s.name===this.selected||s.name===this.linkFrom)?2:1);ctx.stroke();ctx.restore();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
