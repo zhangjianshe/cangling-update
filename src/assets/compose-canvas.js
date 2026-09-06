@@ -3,6 +3,7 @@
   const SW = 164, SH = 54, VW = 148, VH = 34;
   const LAYOUT_BEGIN = "# cangling-canvas-layout:begin";
   const LAYOUT_END = "# cangling-canvas-layout:end";
+  const SELECT_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 2.5l13.2 12.2-6.1.8-3.5 5.2z" fill="#24292f" stroke="white" stroke-width="1.5" stroke-linejoin="round"/></svg>')}" ) 4 3, default`;
   const LINK_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M3 2l14 13-7 .7-3.7 6.1z" fill="white" stroke="#24292f" stroke-width="1.5" stroke-linejoin="round"/><circle cx="19" cy="19" r="7" fill="#0d99ff" stroke="white" stroke-width="1.5"/><path d="M19 15v8m-4-4h8" stroke="white" stroke-width="1.6" stroke-linecap="round"/></svg>')}" ) 3 2, crosshair`;
   const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
   const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
@@ -314,6 +315,7 @@
       if (service) {
         this.selected = service.name; this.selectedVolume = ""; this.selectedLink = null; const pos = this.positions[service.name];
         this.drag = { type: "service", name: service.name, dx: p.x - pos.x, dy: p.y - pos.y, moved: false };
+        this.canvas.style.cursor = SELECT_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.render();
       } else if (volume) {
         this.selected = ""; this.selectedVolume = volume; this.selectedLink = null; this.drag = null; this.canvas.focus(); this.renderInspector(); this.render();
@@ -326,11 +328,11 @@
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
         const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),node=this.hitService(p),volume=this.hitVolume(p),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverLink=handle||mountHandle||node||volume||serviceVolume||serviceVolumeDelete||serviceVolumeRow?null:this.hitDependency(p);
-        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?"grab":"default"));
+        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||this.hitDelete(p)||this.hoverLink||volume?"pointer":(handle||mountHandle?LINK_CURSOR:(node?SELECT_CURSOR:"default"));
         if(!this.sameLink(previous,this.hoverLink)||(previousRow&&previousRow.index)!==(serviceVolumeRow&&serviceVolumeRow.index))this.render();
         return;
       }
-      this.canvas.style.cursor = this.drag.type === "link"||this.drag.type==="mount" ? LINK_CURSOR : "grabbing";
+      this.canvas.style.cursor = this.drag.type === "link"||this.drag.type==="mount" ? LINK_CURSOR : SELECT_CURSOR;
       if (this.drag.type === "link") {
         const target = this.hitService(p);
         this.linkTarget = target && target.name !== this.drag.name ? target.name : "";
@@ -357,7 +359,7 @@
         this.onChange(this.yaml, "已更新 Canvas 布局"); this.onStatus("已更新 Canvas 布局");
       }
       this.drag = null; this.render();
-      this.canvas.style.cursor = this.hitLinkHandle(p)||this.hitMountHandle(p) ? LINK_CURSOR : (this.hitService(p) ? "grab" : (this.hitVolume(p)?"pointer":"default"));
+      this.canvas.style.cursor = this.hitLinkHandle(p)||this.hitMountHandle(p) ? LINK_CURSOR : (this.hitService(p) ? SELECT_CURSOR : (this.hitVolume(p)?"pointer":"default"));
     }
     startLink() {
       if (!this.selected) { this.onStatus("请先点击需要添加依赖的服务"); return; }
