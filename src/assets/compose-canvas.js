@@ -208,12 +208,12 @@
       this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
     }
     startLink() {
-      if (!this.selected) { this.onStatus("请先点击作为依赖来源的服务"); return; }
-      this.linkFrom = this.selected; this.onStatus("请点击依赖该服务的目标服务"); this.render();
+      if (!this.selected) { this.onStatus("请先点击需要添加依赖的服务"); return; }
+      this.linkFrom = this.selected; this.onStatus("请点击它所依赖的目标服务"); this.render();
     }
     addDependency(from, to) {
-      const service = this.model.services.find(s => s.name === to);
-      if (service && !service.depends.includes(from)) { service.depends.push(from); this.commit(service, { depends: service.depends }, `已添加依赖 ${from} → ${to}`); }
+      const service = this.model.services.find(s => s.name === from);
+      if (service && !service.depends.includes(to)) { service.depends.push(to); this.commit(service, { depends: service.depends }, `已添加依赖 ${from} → ${to}`); }
     }
     attachVolume(volume, name) {
       const service = this.model.services.find(s => s.name === name);
@@ -254,8 +254,9 @@
       }
     }
     drawMounts(ctx,c) {
+      if (!this.selected) return;
       ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.setLineDash([6,5]);
-      this.model.services.forEach(service => service.volumes.forEach(mount => {
+      this.model.services.filter(service => service.name === this.selected).forEach(service => service.volumes.forEach(mount => {
         const source=mount.split(":")[0],index=this.model.volumes.indexOf(source);if(index<0)return;
         const volume=this.volumeBox(index),target=this.serviceBox(service);
         ctx.beginPath();ctx.moveTo(volume.x+volume.w,volume.y+volume.h/2);ctx.lineTo(target.x,target.y+target.h/2);ctx.stroke();
@@ -264,8 +265,8 @@
     }
     drawLinks(ctx,c) {
       ctx.strokeStyle=c.accent; ctx.fillStyle=c.accent; ctx.lineWidth=1.5;
-      this.model.services.forEach(targetService => targetService.depends.forEach(name => {
-        const sourceService=this.model.services.find(s=>s.name===name); if(!sourceService)return;
+      this.model.services.forEach(sourceService => sourceService.depends.forEach(name => {
+        const targetService=this.model.services.find(s=>s.name===name); if(!targetService)return;
         const a=this.serviceBox(sourceService),b=this.serviceBox(targetService),sx=a.x,sy=a.y+a.h/2,cx=b.x+b.w/2,cy=b.y+b.h/2;let dx=cx-sx,dy=cy-sy;if(Math.abs(dx)+Math.abs(dy)<.01)dx=1;
         const xr=Math.abs(dx)/(b.w/2),yr=Math.abs(dy)/(b.h/2),edgeScale=1/Math.max(xr,yr);
         const tx=cx-dx*edgeScale,ty=cy-dy*edgeScale,nx=xr>=yr?(dx>0?-1:1):0,ny=xr>=yr?0:(dy>0?-1:1),px=tx+nx*10,py=ty+ny*10,arrowAng=Math.atan2(ty-py,tx-px);
