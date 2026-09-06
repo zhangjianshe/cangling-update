@@ -7,6 +7,12 @@
   const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
   const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
   const unique = values => [...new Set((values || []).map(v => String(v).trim()).filter(Boolean))];
+  const parseVolumeMount = mount => {
+    const parts = String(mount || "").split(":"), source = parts[0] || "";
+    if (parts.length === 1) return { kind: "anonymous", source: "", target: source, mode: "RW" };
+    const options = parts.slice(2).join(":").split(",").filter(Boolean);
+    return { kind: "bind", source, target: parts[1] || "", mode: options.includes("ro") ? "RO" : "RW" };
+  };
   const inlineList = value => {
     const text = clean(value);
     return text.startsWith("[") && text.endsWith("]") ? text.slice(1, -1).split(",").map(clean).filter(Boolean) : [];
@@ -442,8 +448,8 @@
     drawNonNamedVolumes(ctx,c) {
       const service=this.model.services.find(item=>item.name===this.selected),items=this.nonNamedVolumes(service);if(!service||!items.length)return;
       const handle=this.mountHandleBox(service),x=handle.x+handle.w/2,start=handle.y+handle.h,lastY=start+18+(items.length-1)*26,maxWidth=Math.max(100,parseFloat(this.canvas.style.width||"820")-x-28);
-      ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.fillStyle=c.muted;ctx.font="12px ui-monospace, monospace";ctx.textBaseline="middle";
-      items.forEach((mount,index)=>{const y=start+18+index*26;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillText(clip(ctx,mount,maxWidth),x+14,y);});ctx.restore();
+      ctx.save();ctx.strokeStyle=c.line;ctx.lineWidth=1.25;ctx.beginPath();ctx.moveTo(x,start);ctx.lineTo(x,lastY);ctx.stroke();ctx.textBaseline="middle";
+      items.forEach((mount,index)=>{const item=parseVolumeMount(mount),y=start+18+index*26,label=item.kind==="bind"?`${item.source} → ${item.target}`:item.target,tag=item.kind==="bind"?item.mode:"Anonymous",tagWidth=item.kind==="bind"?28:68,textX=x+30,textWidth=Math.max(24,maxWidth-30-tagWidth-8);ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+9,y);ctx.stroke();ctx.fillStyle=c.muted;ctx.font="12px system-ui";ctx.fillText(item.kind==="bind"?"▣":"●",x+15,y);ctx.font="12px ui-monospace, monospace";ctx.fillText(clip(ctx,label,textWidth),textX,y);const tagX=x+14+maxWidth-tagWidth;roundRect(ctx,tagX,y-9,tagWidth,18,9);ctx.fillStyle=item.kind==="bind"&&item.mode==="RO"?c.active:c.card;ctx.fill();ctx.strokeStyle=item.kind==="bind"&&item.mode==="RO"?c.accent:c.line;ctx.stroke();ctx.fillStyle=item.kind==="bind"&&item.mode==="RO"?c.accent:c.muted;ctx.font="600 10px system-ui";ctx.textAlign="center";ctx.fillText(tag,tagX+tagWidth/2,y);ctx.textAlign="left";ctx.strokeStyle=c.line;});ctx.restore();
     }
     drawMountToolbar(ctx,c) { if(!this.selectedMount)return;const b=this.mountToolbar(this.selectedMount),readOnly=this.mountReadOnly(this.selectedMount);ctx.save();ctx.shadowColor="rgba(0,0,0,.35)";ctx.shadowBlur=8;roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=c.card;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y);ctx.lineTo(b.x+b.w/2,b.y+b.h);ctx.stroke();ctx.fillStyle="#f85149";ctx.font="600 11px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText("删除",b.x+b.w/4,b.y+b.h/2);ctx.fillStyle=readOnly?c.accent:c.text;ctx.fillText(readOnly?"只读":"读写",b.x+b.w*3/4,b.y+b.h/2);ctx.restore();}
     drawLinks(ctx,c) {
@@ -462,5 +468,5 @@
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i),active=v===this.selectedVolume||v===this.mountTarget;this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c);if(active){ctx.save();if(v===this.mountTarget){ctx.shadowColor=c.accent;ctx.shadowBlur=12;}roundRect(ctx,b.x,b.y,b.w,b.h,12);ctx.strokeStyle=c.accent;ctx.lineWidth=v===this.mountTarget?3:2.5;ctx.stroke();ctx.restore();} }
   }
 
-  global.ComposeCanvas = { parse, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
+  global.ComposeCanvas = { parse, parseVolumeMount, readLayout, writeLayout, updateServiceYaml, updateVolumeYaml, removeVolumeYaml, create: options => new Editor(options) };
 })(window);
