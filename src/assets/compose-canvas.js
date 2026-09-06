@@ -154,12 +154,23 @@
     hitService(p) {
       return [...this.model.services].reverse().find(s => { const b = this.serviceBox(s); return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }) || null;
     }
+    hitLinkHandle(p) {
+      return [...this.model.services].reverse().find(s => {
+        const b = this.serviceBox(s);
+        return Math.hypot(p.x - b.x, p.y - (b.y + b.h / 2)) <= 10;
+      }) || null;
+    }
     hitVolume(p) {
       for (let i = 0; i < this.model.volumes.length; i += 1) { const b = this.volumeBox(i); if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return this.model.volumes[i]; }
       return "";
     }
     pointerDown(e) {
-      const p = this.point(e), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      const p = this.point(e), handle = this.hitLinkHandle(p), service = this.hitService(p), volume = this.hitVolume(p); this.pointer = p;
+      if (handle) {
+        this.selected = handle.name; this.linkFrom = handle.name;
+        this.drag = { type: "link", name: handle.name };
+        this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
+      }
       if (service && this.linkFrom) {
         if (service.name !== this.linkFrom) this.addDependency(this.linkFrom, service.name);
         this.linkFrom = ""; this.onStatus("依赖连接完成"); this.render(); return;
@@ -180,7 +191,12 @@
     pointerUp(e) {
       if (!this.drag) return; const p = this.point(e);
       if (this.drag.type === "volume") { const service = this.hitService(p); if (service) this.attachVolume(this.drag.name, service.name); }
-      else try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
+      else if (this.drag.type === "link") {
+        const target = this.hitService(p), from = this.drag.name;
+        if (target && target.name !== from) this.addDependency(from, target.name);
+        else this.onStatus("未连接：请在另一个服务上松开鼠标");
+        this.linkFrom = "";
+      } else try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
       this.drag = null; this.render();
     }
     startLink() {
@@ -222,8 +238,21 @@
       const ctx = this.canvas.getContext("2d"); ctx.scale(dpr, dpr);
       const c = { bg: color("--bg-2","#161b22"), card: color("--bg-3","#21262d"), text: color("--text","#f0f6fc"), muted: color("--muted","#8b949e"), line: color("--line","#30363d"), accent: color("--accent","#58a6ff"), active: color("--bg-active","#1f6feb33") };
       ctx.fillStyle = c.bg; ctx.fillRect(0, 0, width, height); ctx.fillStyle = c.muted; ctx.font = "600 12px system-ui"; ctx.fillText("命名卷（拖到服务）", 24, 40);
-      this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));
+      this.drawMounts(ctx, c); this.drawLinks(ctx, c); this.model.volumes.forEach((v,i) => this.drawVolume(ctx,v,i,c)); this.model.services.forEach(s => this.drawService(ctx,s,c));
       if (this.drag && this.drag.type === "volume") { ctx.globalAlpha=.8; this.drawPill(ctx,this.pointer.x-VW/2,this.pointer.y-VH/2,VW,VH,this.drag.name,c); ctx.globalAlpha=1; }
+      if (this.drag && this.drag.type === "link") {
+        const service=this.model.services.find(s=>s.name===this.drag.name),b=service&&this.serviceBox(service);
+        if(b){ctx.save();ctx.strokeStyle=c.accent;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x,b.y+b.h/2);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore();}
+      }
+    }
+    drawMounts(ctx,c) {
+      ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.25;ctx.setLineDash([6,5]);
+      this.model.services.forEach(service => service.volumes.forEach(mount => {
+        const source=mount.split(":")[0],index=this.model.volumes.indexOf(source);if(index<0)return;
+        const volume=this.volumeBox(index),target=this.serviceBox(service);
+        ctx.beginPath();ctx.moveTo(volume.x+volume.w,volume.y+volume.h/2);ctx.lineTo(target.x,target.y+target.h/2);ctx.stroke();
+      }));
+      ctx.restore();
     }
     drawLinks(ctx,c) {
       ctx.strokeStyle=c.accent; ctx.fillStyle=c.accent; ctx.lineWidth=1.5;
@@ -235,7 +264,8 @@
       }));
     }
     drawService(ctx,s,c) {
-      const b=this.serviceBox(s);roundRect(ctx,b.x,b.y,b.w,b.h,18);ctx.fillStyle=s.name===this.selected?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom)?c.accent:c.line;ctx.lineWidth=(s.name===this.selected||s.name===this.linkFrom)?2:1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      const b=this.serviceBox(s);roundRect(ctx,b.x,b.y,b.w,b.h,6);ctx.fillStyle=s.name===this.selected?c.active:c.card;ctx.fill();ctx.strokeStyle=(s.name===this.selected||s.name===this.linkFrom)?c.accent:c.line;ctx.lineWidth=(s.name===this.selected||s.name===this.linkFrom)?2:1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="600 14px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(clip(ctx,s.name,b.w-24),b.x+b.w/2,b.y+b.h/2);ctx.textAlign="left";ctx.textBaseline="alphabetic";
+      ctx.beginPath();ctx.arc(b.x,b.y+b.h/2,6,0,Math.PI*2);ctx.fillStyle=c.bg;ctx.fill();ctx.strokeStyle=c.accent;ctx.lineWidth=2;ctx.stroke();
     }
     drawPill(ctx,x,y,w,h,text,c) { roundRect(ctx,x,y,w,h,12);ctx.fillStyle=c.card;ctx.fill();ctx.strokeStyle=c.line;ctx.lineWidth=1;ctx.stroke();ctx.fillStyle=c.text;ctx.font="12px ui-monospace";ctx.textBaseline="middle";ctx.fillText(clip(ctx,text,w-20),x+10,y+h/2);ctx.textBaseline="alphabetic"; }
     drawVolume(ctx,v,i,c) { const b=this.volumeBox(i);this.drawPill(ctx,b.x,b.y,b.w,b.h,v,c); }
