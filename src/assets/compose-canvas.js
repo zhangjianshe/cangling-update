@@ -1,6 +1,7 @@
 (function (global) {
   "use strict";
   const SW = 164, SH = 54, VW = 148, VH = 34;
+  const LINK_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><path d="M3 2l14 13-7 .7-3.7 6.1z" fill="white" stroke="#24292f" stroke-width="1.5" stroke-linejoin="round"/><circle cx="19" cy="19" r="7" fill="#0d99ff" stroke="white" stroke-width="1.5"/><path d="M19 15v8m-4-4h8" stroke="white" stroke-width="1.6" stroke-linecap="round"/></svg>')}" ) 3 2, crosshair`;
   const indent = line => (line.match(/^\s*/) || [""])[0].replace(/\t/g, "  ").length;
   const clean = value => String(value || "").trim().replace(/^['"]/, "").replace(/['"]$/, "");
   const unique = values => [...new Set((values || []).map(v => String(v).trim()).filter(Boolean))];
@@ -169,7 +170,7 @@
       if (handle) {
         this.selected = handle.name; this.linkFrom = handle.name;
         this.drag = { type: "link", name: handle.name };
-        this.canvas.style.cursor = "crosshair";
+        this.canvas.style.cursor = LINK_CURSOR;
         this.canvas.setPointerCapture(e.pointerId); this.renderInspector(); this.onStatus(`拖到目标服务，为 ${handle.name} 添加依赖`); this.render(); return;
       }
       if (service && this.linkFrom) {
@@ -187,10 +188,10 @@
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
-        this.canvas.style.cursor = this.hitLinkHandle(p) ? "crosshair" : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
+        this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
         return;
       }
-      this.canvas.style.cursor = this.drag.type === "link" ? "crosshair" : "grabbing";
+      this.canvas.style.cursor = this.drag.type === "link" ? LINK_CURSOR : "grabbing";
       if (this.drag.type === "service") this.positions[this.drag.name] = { x: Math.max(190, p.x - this.drag.dx), y: Math.max(35, p.y - this.drag.dy) };
       this.render();
     }
@@ -204,7 +205,7 @@
         this.linkFrom = "";
       } else try { localStorage.setItem(this.storageKey, JSON.stringify(this.positions)); } catch (_) {}
       this.drag = null; this.render();
-      this.canvas.style.cursor = this.hitLinkHandle(p) ? "crosshair" : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
+      this.canvas.style.cursor = this.hitLinkHandle(p) ? LINK_CURSOR : (this.hitService(p) || this.hitVolume(p) ? "grab" : "default");
     }
     startLink() {
       if (!this.selected) { this.onStatus("请先点击作为依赖来源的服务"); return; }
