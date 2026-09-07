@@ -405,7 +405,14 @@
       display: flex; flex-direction: column;
     }
     #panel-files .repo-browse { gap: 0; }
-    #panel-files .repo-tree-panel, #panel-files .repo-file-panel { border-radius: 0; }
+    #panel-files .repo-browse,
+    #panel-files .repo-tree-panel,
+    #panel-files .repo-file-panel,
+    #panel-files .repo-tree-toolbar,
+    #panel-files .repo-tree-list,
+    #panel-files .repo-file-head,
+    #panel-files .repo-file-content,
+    #panel-files .project-file-editor { border-radius: 0; }
     #panel-files .repo-tree-panel { border-right: 0; }
     .project-file-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .project-file-editor { flex: 1; min-height: 0; width: 100%; background: var(--log-bg); }
