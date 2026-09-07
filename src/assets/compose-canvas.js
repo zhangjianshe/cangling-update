@@ -249,7 +249,7 @@
 
   class Editor {
     constructor(options) {
-      Object.assign(this, { selected: "", selectedVolume: "", selectedNetwork: "", selectedLink: null, envFileSelected: false, envFileTarget: "", envFileMenuService: "", resourceTarget: "", volumePanelService: "", portPanelService: "", networkPanelService: "", environmentPanelService: "", hoverLink: null, hoverServiceVolumeRow: null, hoverServicePortRow: null, hoverServiceNetworkRow: null, hoverServiceEnvironmentRow: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 }, panX: 0, panY: 0, zoom: 1 }, options);
+      Object.assign(this, { selected: "", selectedVolume: "", selectedNetwork: "", selectedLink: null, envFileSelected: false, envFileTarget: "", envFileMenuService: "", resourceTarget: "", volumePanelService: "", portPanelService: "", networkPanelService: "", environmentPanelService: "", hoverLink: null, hoverServiceVolumeRow: null, hoverServicePortRow: null, hoverServiceNetworkRow: null, hoverServiceEnvironmentRow: null, linkFrom: "", linkTarget: "", drag: null, pointer: { x: 0, y: 0 }, panX: 0, panY: 20, zoom: 1 }, options);
       this.yaml = String(options.yaml || ""); this.model = parse(this.yaml);
       this.positions = readLayout(this.yaml);
       if (!this.positions) {

@@ -409,7 +409,7 @@
     .project-file-editor { flex: 1; min-height: 0; width: 100%; background: var(--log-bg); }
     .project-file-editor .ace_editor, .project-file-editor .ace_editor * { border-radius: 0 !important; }
     #panel-edit:not([hidden]) {
-      flex: 1 1 auto; min-height: 0; margin-bottom: 0; padding: 20px 0 0; overflow: hidden;
+      flex: 1 1 auto; min-height: 0; margin-bottom: 0; padding: 0; overflow: hidden;
       display: flex; flex-direction: column; position: relative;
     }
     .tabs:has(#tab-edit.active) { margin-bottom: 0; }
@@ -957,7 +957,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-84"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
