@@ -588,8 +588,9 @@
       finally { Object.assign(this,saved);this.render(); }
     }
     drawMounts(ctx,c) {
-      if (!this.selectedVolume) return;
-      this.drawOrthogonalMountLinks(ctx,c,this.mountLinks().filter(link=>link.volume===this.selectedVolume));
+      if (!this.selectedVolume&&!this.selected) return;
+      const links=this.mountLinks().filter(link=>this.selectedVolume?link.volume===this.selectedVolume:link.service===this.selected);
+      this.drawOrthogonalMountLinks(ctx,c,links);
     }
     drawNetworkLinks(ctx,c) { if(!this.selectedNetwork)return;this.networkLinks().filter(link=>link.network===this.selectedNetwork).forEach(link=>{ctx.save();ctx.strokeStyle=c.muted;ctx.lineWidth=1.5;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(link.points[0].x,link.points[0].y);ctx.lineTo(link.points[1].x,link.points[1].y);ctx.stroke();ctx.restore();}); }
     drawEnvFileDrag(ctx,c) { if(!this.drag||this.drag.type!=="env-file")return;const b=this.envFileBox();ctx.save();ctx.strokeStyle="#0a7f83";ctx.lineWidth=1.5;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(b.x+b.w/2,b.y+b.h);ctx.lineTo(this.pointer.x,this.pointer.y);ctx.stroke();ctx.restore(); }
