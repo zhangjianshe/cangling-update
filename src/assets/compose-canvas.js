@@ -169,6 +169,7 @@
     const lines = String(yaml || "").split(/\r?\n/), range = locateService(lines, name);
     if (!range) throw new Error("未能在 Compose 源文件中定位服务 " + name);
     const block = lines.slice(range.start, range.end);
+    if (Object.prototype.hasOwnProperty.call(values, "name")) block[0] = "  " + quote(values.name) + ":";
     const fields = [
       ["image", "image", false], ["container_name", "containerName", false],
       ["command", "command", false], ["restart", "restart", false], ["user", "user", false],
@@ -515,6 +516,16 @@
       if(newName!==oldName)this.model.services.forEach(service=>{const mounts=service.volumes.map(mount=>{const parts=mount.split(":");if(parts[0]===oldName)parts[0]=newName;return parts.join(":");});if(JSON.stringify(mounts)!==JSON.stringify(service.volumes))yaml=updateServiceYaml(yaml,service.name,{volumes:mounts});});
       this.yaml=yaml;this.model=parse(yaml);this.selectedVolume=newName;this.onChange(yaml,`已更新命名卷 ${newName}`);this.onStatus(`已更新命名卷 ${newName}`);this.renderInspector();this.render();
     }
+    updateSelectedService(service, values) {
+      const oldName=service.name,newName=Object.prototype.hasOwnProperty.call(values,"name")?String(values.name||"").trim():oldName;
+      if(!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(newName)){this.onStatus("服务名称只能包含字母、数字、点、下划线和连字符");return;}
+      if(newName!==oldName&&this.model.services.some(item=>item.name===newName)){this.onStatus(`服务 ${newName} 已存在`);return;}
+      const renamed=newName!==oldName,hadLayout=readLayout(this.yaml)!==null;
+      let yaml=updateServiceYaml(this.yaml,oldName,{...values,name:newName});
+      if(renamed)this.model.services.forEach(item=>{const depends=item.depends.map(name=>name===oldName?newName:name);if(JSON.stringify(depends)!==JSON.stringify(item.depends))yaml=updateServiceYaml(yaml,item.name===oldName?newName:item.name,{depends});});
+      if(renamed){this.positions[newName]=this.positions[oldName];delete this.positions[oldName];try{localStorage.setItem(this.storageKey,JSON.stringify(this.positions));}catch(_){}if(hadLayout)yaml=writeLayout(yaml,this.positions);}
+      this.yaml=yaml;this.model=parse(yaml);this.selected=newName;this.onChange(yaml,renamed?`已将服务 ${oldName} 重命名为 ${newName}`:`已更新服务 ${newName} 的属性`);this.onStatus(renamed?`已将服务 ${oldName} 重命名为 ${newName}`:`已更新服务 ${newName} 的属性`);this.renderInspector();this.render();
+    }
     removeSelectedVolume() {
       const name=this.selectedVolume;if(!name)return;const affected=this.model.services.filter(service=>service.volumes.some(mount=>mount.split(":")[0]===name));
       const suffix=affected.length?`\n同时会移除以下服务的挂载：${affected.map(service=>service.name).join("、")}`:"";
@@ -546,7 +557,7 @@
       const restart=service.restart||"unless-stopped",restartField=`<label>重启策略<select data-field="restart"><option value="no" ${restart==="no"?"selected":""}>no</option><option value="always" ${restart==="always"?"selected":""}>always</option><option value="on-failure" ${restart==="on-failure"?"selected":""}>on-failure</option><option value="unless-stopped" ${restart==="unless-stopped"?"selected":""}>unless-stopped</option></select></label>`;
       const health=service.healthcheck,healthEnabled=!!health,test=health&&health.test||[],testMode=["CMD","CMD-SHELL","NONE"].includes(test[0])?test[0]:"CMD-SHELL",testCommand=testMode==="CMD"?test.slice(1).join("\n"):test.slice(1).join(" "),healthField=(label,key,value,placeholder,type="text")=>`<label>${label}<input data-health-${key} type="${type}" value="${html(value||"")}" placeholder="${placeholder}" /></label>`,healthEditor=`<section class="compose-health-editor"><label class="compose-check-row"><input data-health-enabled type="checkbox" ${healthEnabled?"checked":""} /> 启用 Healthcheck</label><div data-health-fields ${healthEnabled?"":"hidden"}><label>检测方式<select data-health-mode><option value="CMD-SHELL" ${testMode==="CMD-SHELL"?"selected":""}>CMD-SHELL</option><option value="CMD" ${testMode==="CMD"?"selected":""}>CMD</option><option value="NONE" ${testMode==="NONE"?"selected":""}>NONE</option></select></label><label>检测命令<textarea data-health-command rows="3" placeholder="CMD-SHELL：填写命令；CMD：每行一个参数">${html(testCommand)}</textarea></label>${healthField("检查间隔","interval",health&&health.interval,"30s")}${healthField("超时时间","timeout",health&&health.timeout,"10s")}${healthField("失败重试次数","retries",health&&health.retries,"3","number")}${healthField("启动宽限期","start-period",health&&health.startPeriod,"40s")}${healthField("启动期检查间隔","start-interval",health&&health.startInterval,"5s")}<label class="compose-check-row"><input data-health-disable type="checkbox" ${health&&health.disable?"checked":""} /> disable: true</label></div></section>`;
       const readOnlyList=(label,items)=>`<section class="compose-readonly-list"><div class="compose-readonly-title">${label}</div>${items.length?`<ul>${items.map(item=>`<li>${html(item)}</li>`).join("")}</ul>`:`<div class="compose-readonly-empty">无</div>`}</section>`,mounts=service.volumes.map(mount=>this.serviceVolumeLabel(mount)),ports=service.ports||[],networks=service.networks.map(name=>name+(service.networkIps[name]?` · ${service.networkIps[name]}`:""));
-      this.inspector.innerHTML = `<div class="compose-service-inspector"><div class="compose-service-inspector-content"><div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${field("运行用户（可选）","user",service.user)}${restartField}${healthEditor}${readOnlyList("数据卷",mounts)}${readOnlyList("端口",ports)}${readOnlyList("网络",networks)}${readOnlyList("环境变量",service.environment)}${readOnlyList("环境变量文件",service.envFiles)}</div><div class="compose-service-inspector-footer"><button type="button" class="btn primary" data-apply>应用到草稿</button></div></div>`;
+      this.inspector.innerHTML = `<div class="compose-service-inspector"><div class="compose-service-inspector-content"><div class="compose-inspector-title">${html(service.name)}</div>${field("服务名称","name",service.name)}${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${field("运行用户（可选）","user",service.user)}${restartField}${healthEditor}${readOnlyList("数据卷",mounts)}${readOnlyList("端口",ports)}${readOnlyList("网络",networks)}${readOnlyList("环境变量",service.environment)}${readOnlyList("环境变量文件",service.envFiles)}</div><div class="compose-service-inspector-footer"><button type="button" class="btn primary" data-apply>应用到草稿</button></div></div>`;
       this.inspector.querySelector("[data-health-enabled]").onchange=e=>{this.inspector.querySelector("[data-health-fields]").hidden=!e.target.checked;};
       this.inspector.querySelector("[data-apply]").onclick = () => {
         const patch = {};
@@ -556,7 +567,7 @@
         });
         const enabled=this.inspector.querySelector("[data-health-enabled]").checked;let nextHealth=null;if(enabled){const mode=this.inspector.querySelector("[data-health-mode]").value,command=this.inspector.querySelector("[data-health-command]").value.trim(),disable=this.inspector.querySelector("[data-health-disable]").checked;if(mode!=="NONE"&&!command&&!disable){this.onStatus("请填写 Healthcheck 检测命令，或启用 disable");return;}const retries=this.inspector.querySelector("[data-health-retries]").value.trim();if(retries&&(!/^\d+$/.test(retries)||Number(retries)<1)){this.onStatus("Healthcheck 失败重试次数必须是正整数");return;}nextHealth={test:mode==="NONE"?["NONE"]:(command?(mode==="CMD"?["CMD",...command.split(/\r?\n/).map(value=>value.trim()).filter(Boolean)]:["CMD-SHELL",command]):[]),interval:this.inspector.querySelector("[data-health-interval]").value.trim(),timeout:this.inspector.querySelector("[data-health-timeout]").value.trim(),retries,startPeriod:this.inspector.querySelector("[data-health-start-period]").value.trim(),startInterval:this.inspector.querySelector("[data-health-start-interval]").value.trim(),disable};}if(JSON.stringify(nextHealth)!==JSON.stringify(service.healthcheck))patch.healthcheck=nextHealth;
         if (!Object.keys(patch).length) { this.onStatus("服务属性没有变化"); return; }
-        this.commit(service, patch, `已更新服务 ${service.name} 的属性`);
+        this.updateSelectedService(service, patch);
       };
     }
     render() {
