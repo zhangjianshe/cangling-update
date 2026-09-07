@@ -23,6 +23,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
+use std::io::Read;
 use std::path::{Path as FsPath, PathBuf};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
@@ -74,6 +75,10 @@ pub fn router(state: AppState) -> Router {
             get(project_file_get).put(project_file_put),
         )
         .route("/api/projects/{id}/updates", post(create_update))
+        .route(
+            "/api/projects/{id}/np4-repo-update",
+            post(update_np4_from_repo),
+        )
         .route("/api/projects/{id}/replace", post(create_replace))
         .route("/api/projects/{id}/rollback", post(rollback))
         .route("/api/projects/{id}/compose", get(compose_status))
@@ -1358,6 +1363,193 @@ async fn list_versions(
         v.backup_bytes = backup_bytes.get(&v.id).copied().unwrap_or(0);
     }
     Ok(Json(versions))
+}
+
+fn is_np4_project(project: &Project) -> bool {
+    project.name.eq_ignore_ascii_case("cangling-np4")
+        || FsPath::new(&project.directory)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("cangling-np4"))
+}
+
+fn np4_repo_update_files(exe_dir: &FsPath) -> Result<Option<Vec<PathBuf>>, AppError> {
+    let dir = exe_dir
+        .join("repo")
+        .join("np4")
+        .join("np4-jars")
+        .join("latest")
+        .join("all")
+        .join("all");
+    if !dir.is_dir() {
+        return Ok(None);
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|e| AppError::internal(format!("读取 {} 失败：{e}", dir.display())))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        let name = name.to_ascii_lowercase();
+                        name.ends_with(".jar") || name.ends_with(".tar.gz")
+                    })
+        })
+        .collect();
+    files.sort();
+    if files.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(files))
+}
+
+fn files_equal(left: &FsPath, right: &FsPath) -> std::io::Result<bool> {
+    if !right.is_file() || std::fs::metadata(left)?.len() != std::fs::metadata(right)?.len() {
+        return Ok(false);
+    }
+    let mut left = std::fs::File::open(left)?;
+    let mut right = std::fs::File::open(right)?;
+    let mut a = [0_u8; 64 * 1024];
+    let mut b = [0_u8; 64 * 1024];
+    loop {
+        let an = left.read(&mut a)?;
+        let bn = right.read(&mut b)?;
+        if an != bn || a[..an] != b[..bn] {
+            return Ok(false);
+        }
+        if an == 0 {
+            return Ok(true);
+        }
+    }
+}
+
+fn np4_repo_files_unchanged(
+    files: &[PathBuf],
+    images_dir: &FsPath,
+    jars_dir: &FsPath,
+) -> std::io::Result<bool> {
+    for source in files {
+        let Some(name) = source.file_name() else {
+            return Ok(false);
+        };
+        let target = if source.extension().is_some_and(|ext| ext == "jar") {
+            jars_dir.join(name)
+        } else {
+            images_dir.join(name)
+        };
+        if !files_equal(source, &target)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+async fn update_np4_from_repo(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Np4RepoUpdateBody>,
+) -> Result<Json<Np4RepoUpdateResult>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    if !is_np4_project(&project) {
+        return Err(AppError::bad("该操作只适用于 cangling-np4 项目"));
+    }
+
+    let gate = state.lock_project(&id);
+    let _guard = gate
+        .try_lock()
+        .map_err(|_| AppError::conflict("正在恢复或升级中，请勿重复操作"))?;
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "check",
+        "正在检查 NP4 软件仓库…",
+        0,
+        0,
+    );
+
+    let exe_dir = state.paths.exe_dir.clone();
+    let files = tokio::task::spawn_blocking(move || np4_repo_update_files(&exe_dir))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
+    let Some(files) = files else {
+        let message = "软件仓库 np4/np4-jars/latest/all/all 中没有找到 JAR 或 tar.gz 更新包，无需更新";
+        job_ok(&state, body.job_id.as_deref(), message);
+        return Ok(Json(Np4RepoUpdateResult {
+            updated: false,
+            message: message.into(),
+            version: None,
+        }));
+    };
+    let unchanged = if let Some(version_id) = project.current_version_id.as_deref() {
+        let images = state.paths.version_images(&id, version_id);
+        let jars = state.paths.version_jars(&id, version_id);
+        let compare = files.clone();
+        tokio::task::spawn_blocking(move || np4_repo_files_unchanged(&compare, &images, &jars))
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))??
+    } else {
+        false
+    };
+    if unchanged {
+        job_ok(&state, body.job_id.as_deref(), "软件仓库中的 NP4 更新包没有变化");
+        return Ok(Json(Np4RepoUpdateResult {
+            updated: false,
+            message: "软件仓库中的 JAR 和镜像包没有变化，无需更新".into(),
+            version: None,
+        }));
+    }
+
+    let tmp = state
+        .paths
+        .uploads_dir
+        .join(format!("np4-repo-update-{}", Uuid::new_v4()));
+    tokio::fs::create_dir_all(&tmp).await?;
+    let mut staged = Vec::with_capacity(files.len());
+    for (index, source) in files.iter().enumerate() {
+        let name = source
+            .file_name()
+            .ok_or_else(|| AppError::bad("NP4 更新包文件名无效"))?;
+        job_set(
+            &state,
+            body.job_id.as_deref(),
+            "stage",
+            &format!("正在准备 {}", name.to_string_lossy()),
+            index as u64,
+            files.len() as u64,
+        );
+        let target = tmp.join(name);
+        if let Err(error) = tokio::fs::copy(source, &target).await {
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            return Err(error.into());
+        }
+        staged.push(target);
+    }
+
+    let Json(result) = apply_update(
+        state,
+        project,
+        IncomingUpload {
+            note: "从 NP4 软件仓库自动检查更新".into(),
+            restart: body.restart,
+            stop_compose: body.stop_compose,
+            files: staged,
+            tmp,
+            job_id: body.job_id,
+        },
+        "update",
+    )
+    .await?;
+    Ok(Json(Np4RepoUpdateResult {
+        updated: true,
+        message: format!("已将 {} 发布为最新版", result.version.label),
+        version: Some(result.version),
+    }))
 }
 
 async fn create_update(
@@ -3417,6 +3609,34 @@ mod tests {
             ]
         );
         assert!(dirs.iter().all(|dir| dir.is_dir()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn np4_repo_update_selects_jars_and_tar_gz_and_detects_changes() {
+        let root = temp_root();
+        let source = root
+            .join("repo/np4/np4-jars/latest/all/all");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("api.jar"), b"jar-v1").unwrap();
+        fs::write(source.join("broker.tar.gz"), b"image-v1").unwrap();
+        fs::write(source.join("ignore.txt"), b"ignore").unwrap();
+        let files = np4_repo_update_files(&root).unwrap().unwrap();
+        assert_eq!(files.len(), 2);
+
+        let images = root.join("images");
+        let jars = root.join("jars");
+        fs::create_dir_all(&images).unwrap();
+        fs::create_dir_all(&jars).unwrap();
+        fs::copy(source.join("api.jar"), jars.join("api.jar")).unwrap();
+        fs::copy(
+            source.join("broker.tar.gz"),
+            images.join("broker.tar.gz"),
+        )
+        .unwrap();
+        assert!(np4_repo_files_unchanged(&files, &images, &jars).unwrap());
+        fs::write(source.join("api.jar"), b"jar-v2").unwrap();
+        assert!(!np4_repo_files_unchanged(&files, &images, &jars).unwrap());
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -218,6 +218,26 @@ pub struct UpdateResult {
     pub jars: Vec<DeployedJar>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct Np4RepoUpdateBody {
+    pub job_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub restart: bool,
+    #[serde(default)]
+    pub stop_compose: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+pub struct Np4RepoUpdateResult {
+    pub updated: bool,
+    pub message: String,
+    pub version: Option<Version>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ReplaceResult {
     pub loaded: Vec<LoadedImage>,
