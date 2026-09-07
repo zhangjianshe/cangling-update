@@ -2678,9 +2678,6 @@ async fn save_env_content(
     validate_env_text(&content).map_err(|e| AppError::bad(e.to_string()))?;
     let dir = PathBuf::from(&project.directory);
     let (dest, _filename, exists) = env_live_path(&dir);
-    if !exists {
-        return Err(AppError::not_found("项目目录中没有 .env 文件"));
-    }
     let (_disk, disk_etag) = read_compose_disk(&dest, exists)?;
     if let Some(expected) = expected_etag {
         if expected != disk_etag {
@@ -2694,9 +2691,6 @@ async fn save_env_content(
     let _guard = gate.lock().await;
 
     let (dest, filename, exists) = env_live_path(&dir);
-    if !exists {
-        return Err(AppError::not_found("项目目录中没有 .env 文件"));
-    }
     let (disk, disk_etag) = read_compose_disk(&dest, exists)?;
     if let Some(expected) = expected_etag {
         if expected != disk_etag {
@@ -2706,7 +2700,7 @@ async fn save_env_content(
         }
     }
 
-    if content == disk {
+    if exists && content == disk {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         snapshot_env_disk_if_needed(&conn, &project.id, &filename, &disk, &disk_etag)?;
         let view = env_file_view(
@@ -2776,9 +2770,6 @@ async fn env_file_get(
     };
     let dir = PathBuf::from(&project.directory);
     let (path, filename, exists) = env_live_path(&dir);
-    if !exists {
-        return Err(AppError::not_found("项目目录中没有 .env 文件"));
-    }
     let (content, etag) = read_compose_disk(&path, exists)?;
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     Ok(Json(env_file_view(

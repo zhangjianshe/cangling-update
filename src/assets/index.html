@@ -939,7 +939,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-73"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-74"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3492,6 +3492,7 @@
           onEditPort: openServicePortDialog,
           onEditNetwork: openServiceNetworkDialog,
           onEditEnvironment: openServiceEnvironmentDialog,
+          onOpenEnvFile: openCanvasEnvFile,
         });
         const model = composeCanvas.editor.model;
         showComposeCanvasStatus(`${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`);
@@ -3542,6 +3543,17 @@
       $("#dialog").hidden=false;
       setDialogAction(editing?"保存变量":"添加变量",()=>{const key=$("#service-environment-name").value.trim(),value=$("#service-environment-value").value,error=$("#service-environment-error");if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)){error.textContent="变量名必须以字母或下划线开头，且只能包含字母、数字和下划线";error.hidden=false;return;}closeDialog();onSave(value===""?key:`${key}=${value}`);});
       $("#service-environment-name").focus();
+    }
+
+    async function openCanvasEnvFile() {
+      if(!state.current||!composeCanvas.editor)return;
+      const inspector=$("#compose-canvas-inspector");if(!inspector)return;
+      inspector.innerHTML=`<div class="compose-inspector-empty">正在读取 .env…</div>`;
+      try {
+        let file=await api("/api/projects/"+state.current.id+"/env/file");
+        if(!composeCanvas.editor||!composeCanvas.editor.envFileSelected)return;
+        const render=()=>{inspector.innerHTML=`<div class="compose-service-inspector"><div class="compose-service-inspector-content"><div class="compose-inspector-title">.env</div><label>环境变量（每行 KEY=VALUE）<textarea class="compose-env-file-input" data-env-file-content rows="16" spellcheck="false" placeholder="APP_ENV=production\nAPI_URL=https://example.com">${esc(file.content||"")}</textarea></label><div class="hint hint-soft">${file.exists?"编辑项目目录中的 .env 文件":"文件尚不存在，首次保存时将创建 .env"}</div></div><div class="compose-service-inspector-footer"><button type="button" class="btn primary" data-env-file-save>保存 .env</button></div></div>`;const button=inspector.querySelector("[data-env-file-save]");button.onclick=async()=>{button.disabled=true;showComposeCanvasStatus(file.exists?"正在保存 .env…":"正在创建 .env…");try{file=await api("/api/projects/"+state.current.id+"/env/file",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:inspector.querySelector("[data-env-file-content]").value,note:"Canvas 编辑",recreate:false,expected_etag:file.etag})});showComposeCanvasStatus(file.unchanged?".env 内容与磁盘一致":".env 已保存");render();}catch(e){showComposeCanvasStatus(".env 保存失败："+e.message);button.disabled=false;}};};render();
+      } catch(e) { if(composeCanvas.editor&&composeCanvas.editor.envFileSelected)inspector.innerHTML=`<div class="compose-inspector-empty">无法读取 .env：${esc(e.message)}</div>`; }
     }
 
     function openServiceNetworkDialog(serviceName, networks, initial, onSave) {
