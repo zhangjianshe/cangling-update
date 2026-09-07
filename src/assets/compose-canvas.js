@@ -245,17 +245,19 @@
       if (!this.positions) {
         try { this.positions = JSON.parse(localStorage.getItem(this.storageKey) || "{}"); } catch (_) { this.positions = {}; }
       }
-      this.down = e => this.pointerDown(e); this.move = e => this.pointerMove(e); this.up = e => this.pointerUp(e); this.key = e => this.keyDown(e);
+      this.down = e => this.pointerDown(e); this.move = e => this.pointerMove(e); this.up = e => this.pointerUp(e); this.key = e => this.keyDown(e);this.menu=e=>e.preventDefault();
       this.canvas.tabIndex = 0;
       this.canvas.addEventListener("pointerdown", this.down); this.canvas.addEventListener("pointermove", this.move);
       this.canvas.addEventListener("pointerup", this.up); this.canvas.addEventListener("pointercancel", this.up);
       this.canvas.addEventListener("keydown", this.key);
+      this.canvas.addEventListener("contextmenu",this.menu);
       this.renderInspector(); this.render();
     }
     destroy() {
       this.canvas.removeEventListener("pointerdown", this.down); this.canvas.removeEventListener("pointermove", this.move);
       this.canvas.removeEventListener("pointerup", this.up); this.canvas.removeEventListener("pointercancel", this.up);
       this.canvas.removeEventListener("keydown", this.key);
+      this.canvas.removeEventListener("contextmenu",this.menu);
     }
     ensurePositions() {
       const width = Math.max(720, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0);
@@ -347,6 +349,7 @@
     networkReferenceCount(network) { return this.model.services.reduce((count,service)=>count+(service.networks.includes(network)?1:0),0); }
     networkLinks() { const links=[];this.model.services.forEach(service=>service.networks.forEach(network=>{const index=this.model.networks.indexOf(network);if(index<0)return;const a=this.serviceBox(service),b=this.networkBox(index);links.push({network,points:[{x:a.x+a.w/2,y:a.y+a.h},{x:b.x+b.w/2,y:b.y}]});}));return links; }
     pointerDown(e) {
+      if(e.button===2){const viewport=this.canvas.parentElement;this.drag={type:"pan",x:e.clientX,y:e.clientY,left:viewport.scrollLeft,top:viewport.scrollTop};this.canvas.style.cursor="grabbing";this.canvas.setPointerCapture(e.pointerId);e.preventDefault();return;}
       const p = this.point(e), handle = this.hitLinkHandle(p), mountHandle=this.hitMountHandle(p), portHandle=this.hitPortHandle(p),networkHandle=this.hitNetworkHandle(p),service = this.hitService(p), volume = this.hitVolume(p),network=this.hitNetwork(p); this.pointer = p;
       const serviceNetworkAdd=this.hitServiceNetworkAdd(p);if(serviceNetworkAdd){this.editServiceNetwork({service:serviceNetworkAdd,network:"",index:-1});return;}const serviceNetworkDelete=this.hitServiceNetworkDelete(p);if(serviceNetworkDelete){this.removeServiceNetwork(serviceNetworkDelete);return;}const serviceNetworkRow=this.hitServiceNetworkRow(p);if(serviceNetworkRow){this.editServiceNetwork(serviceNetworkRow);return;}
       if(this.hitSectionAdd(p,"service")){this.addService();return;}if(this.hitSectionAdd(p,"volume")){this.addVolume();return;}if(this.hitSectionAdd(p,"network")){this.addNetwork();return;}
@@ -394,7 +397,8 @@
         return;
       }
       this.canvas.style.cursor = this.drag.type === "link" ? LINK_CURSOR : SELECT_CURSOR;
-      if (this.drag.type === "link") {
+      if(this.drag.type==="pan"){const viewport=this.canvas.parentElement;viewport.scrollLeft=this.drag.left-(e.clientX-this.drag.x);viewport.scrollTop=this.drag.top-(e.clientY-this.drag.y);this.canvas.style.cursor="grabbing";return;}
+      if(this.drag.type==="pan"){this.drag=null;this.canvas.style.cursor="grab";return;}if (this.drag.type === "link") {
         const target = this.hitService(p);
         this.linkTarget = target && target.name !== this.drag.name ? target.name : "";
       }
@@ -511,7 +515,7 @@
       };
     }
     render() {
-      this.ensurePositions(); let width = Math.max(820, this.canvas.parentElement ? this.canvas.parentElement.clientWidth : 0), height = 360;
+      this.ensurePositions(); const viewport=this.canvas.parentElement;let width=Math.max(820,viewport?viewport.clientWidth:0),height=Math.max(360,viewport?viewport.clientHeight:0);
       this.model.services.forEach(s => { const b = this.serviceBox(s); width = Math.max(width, b.x + b.w + 40); height = Math.max(height, b.y + b.h + 40); });
       this.model.volumes.forEach((v,i)=>{const b=this.volumeBox(i);height=Math.max(height,b.y+b.h+32);});
       this.model.networks.forEach((v,i)=>{const b=this.networkBox(i);height=Math.max(height,b.y+b.h+32);});
