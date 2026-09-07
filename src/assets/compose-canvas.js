@@ -385,14 +385,16 @@
       } else if(network){this.selected="";this.selectedVolume="";this.selectedNetwork=network;this.selectedLink=null;this.volumePanelService="";this.portPanelService="";this.renderInspector();this.render();
       } else {
         const link=this.hitDependency(p);this.selected="";this.selectedVolume="";this.selectedNetwork="";this.selectedLink=link;this.volumePanelService="";this.portPanelService="";this.networkPanelService="";this.hoverServiceVolumeRow=null;this.hoverServicePortRow=null;this.hoverServiceNetworkRow=null;this.canvas.focus();this.renderInspector();
-        this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : ""); this.render();
+        this.onStatus(link ? `已选择依赖 ${link.from} → ${link.to}，按 Delete 删除` : "");
+        if(!link){this.drag={type:"pan",x:e.clientX,y:e.clientY,panX:this.panX,panY:this.panY};this.canvas.style.cursor="grabbing";this.canvas.setPointerCapture(e.pointerId);}
+        this.render();
       }
     }
     pointerMove(e) {
       const p = this.point(e); this.pointer = p;
       if (!this.drag) {
         const previous=this.hoverLink,previousRow=this.hoverServiceVolumeRow,previousPortRow=this.hoverServicePortRow,handle=this.hitLinkHandle(p),mountHandle=this.hitMountHandle(p),portHandle=this.hitPortHandle(p),node=this.hitService(p),volume=this.hitVolume(p),network=this.hitNetwork(p),sectionAdd=this.hitSectionAdd(p,"service")||this.hitSectionAdd(p,"volume")||this.hitSectionAdd(p,"network"),serviceVolume=this.hitServiceVolumeIcon(p),serviceVolumeDelete=this.hitServiceVolumeDelete(p),serviceVolumeRow=this.hitServiceVolumeRow(p),serviceVolumeAdd=this.hitServiceVolumeAdd(p),servicePortAdd=this.hitServicePortAdd(p),servicePortDelete=this.hitServicePortDelete(p),servicePortRow=this.hitServicePortRow(p);this.hoverServiceVolumeRow=serviceVolumeRow;this.hoverServicePortRow=servicePortRow;this.hoverLink=handle||mountHandle||portHandle||node||volume||network||sectionAdd||serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow?null:this.hitDependency(p);
-        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow||mountHandle||portHandle||this.hitDelete(p)||this.hoverLink||volume||network||sectionAdd?"pointer":(handle?LINK_CURSOR:(node?SELECT_CURSOR:"default"));
+        this.canvas.style.cursor = serviceVolume||serviceVolumeDelete||serviceVolumeRow||serviceVolumeAdd||servicePortAdd||servicePortDelete||servicePortRow||mountHandle||portHandle||this.hitDelete(p)||this.hoverLink||volume||network||sectionAdd?"pointer":(handle?LINK_CURSOR:(node?SELECT_CURSOR:"grab"));
         if(!this.sameLink(previous,this.hoverLink)||(previousRow&&previousRow.index)!==(serviceVolumeRow&&serviceVolumeRow.index)||(previousPortRow&&previousPortRow.index)!==(servicePortRow&&servicePortRow.index))this.render();
         return;
       }
