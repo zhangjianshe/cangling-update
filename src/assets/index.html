@@ -206,7 +206,9 @@
     }
     .pitem:hover { background: var(--bg-3); }
     .pitem.active { background: var(--bg-active); }
-    .pitem .n { font-weight: 600; display: block; font-size: 14px; line-height: 1.4; }
+    .pitem .n-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .pitem .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; line-height: 1.4; }
+    .pitem-version { flex: 0 0 auto; padding: 1px 5px; border-radius: 5px; color: var(--on-emphasis); background: var(--success-emphasis); font-size: 10px; font-weight: 600; line-height: 1.5; }
     .pitem .d { color: var(--muted); margin-top: 1px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .project-list-item { position: relative; display: flex; align-items: stretch; margin-bottom: 2px; }
     .project-list-item .pitem { min-width: 0; margin-bottom: 0; padding-right: 34px; }
@@ -1293,7 +1295,7 @@
           const item=document.createElement("div");item.className="project-list-item";
           const b = document.createElement("button");
           b.className = "pitem" + (state.current && state.current.id === p.id ? " active" : "");
-          b.innerHTML = `<span class="n">${esc(p.name)}</span><span class="d">${esc((p.description || "").trim() || "（无说明）")}</span>`;
+          b.innerHTML = `<span class="n-row"><span class="n">${esc(p.name)}</span><span class="pitem-version">${p.current_version_no ? "v" + esc(p.current_version_no) : "无版本"}</span></span><span class="d">${esc((p.description || "").trim() || "（无说明）")}</span>`;
           b.onclick = () => { location.hash = "#/p/" + p.id; };
           const more=document.createElement("button");more.type="button";more.className="project-more";more.disabled=!!state.busy;more.setAttribute("aria-label",`${p.name} 更多操作`);more.setAttribute("aria-expanded","false");more.textContent="⋯";
           const menu=document.createElement("div");menu.className="project-item-menu";menu.hidden=true;menu.innerHTML=`<button type="button" data-project-delete="${esc(p.id)}" ${state.busy?"disabled":""}>删除项目</button>`;
