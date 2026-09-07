@@ -418,6 +418,8 @@
     .compose-canvas-inspector label { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
     .compose-canvas-inspector input, .compose-canvas-inspector textarea, .compose-canvas-inspector select { width: 100%; color: var(--text); background: var(--bg-2); }
     .compose-canvas-inspector textarea { min-height: 58px; resize: vertical; font-family: ui-monospace, monospace; }
+    .compose-inspector-actions { display: flex; flex-direction: column; gap: 8px; }
+    .compose-inspector-actions .btn { width: 100%; }
     .compose-service-inspector { box-sizing: border-box; display: flex; flex-direction: column; height: calc(100% + 28px); min-height: 0; margin: -14px; overflow: hidden; }
     .compose-service-inspector-content { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; }
     .compose-service-inspector-footer { flex: 0 0 auto; padding: 12px 14px 14px; border-top: 1px solid var(--line); background: var(--bg); }
@@ -943,7 +945,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-77"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-78"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3483,6 +3485,8 @@
           inspector,
           yaml: composeCanvas.yaml,
           storageKey: "cangling-compose-layout:" + composeCanvas.projectId,
+          exportTitle: `${state.current.name || file.filename || "Compose"} · Compose Graph`,
+          exportFilename: `${String(state.current.name || "compose").replace(/[^A-Za-z0-9_.-]+/g,"-")}-graph.png`,
           onChange: (yaml, message) => {
             composeCanvas.yaml = yaml;
             setComposeCanvasDirty(true, message);
