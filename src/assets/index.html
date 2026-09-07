@@ -415,8 +415,14 @@
     #panel-files .project-file-editor { border-radius: 0; }
     #panel-files .repo-tree-panel { border-right: 0; }
     .project-file-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .project-file-editor { flex: 1; min-height: 0; width: 100%; background: var(--log-bg); }
-    .project-file-editor .ace_editor, .project-file-editor .ace_editor * { border-radius: 0 !important; }
+    .project-file-editor { flex: 1; min-height: 0; width: 100%; }
+    .project-file-editor.ace_editor {
+      font-family: "Iosevka Term", "Iosevka Terminal", ui-monospace, monospace;
+      font-size: 16px; line-height: 1.5;
+      font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0;
+    }
+    .project-file-editor.ace_editor,
+    .project-file-editor.ace_editor * { border-radius: 0 !important; }
     #panel-edit:not([hidden]) {
       flex: 1 1 auto; min-height: 0; margin-bottom: 0; padding: 0; overflow: hidden;
       display: flex; flex-direction: column; position: relative;
@@ -3731,6 +3737,7 @@
         bindKey: { win: "Ctrl-S", mac: "Command-S" },
         exec: saveProjectFile,
       });
+      editor.focus();
       projectFiles.editor = editor;
       if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => { if (projectFiles.editor) projectFiles.editor.resize(); });
@@ -5024,6 +5031,7 @@
     function applyAceTheme() {
       if (composeEdit.editor) composeEdit.editor.setTheme(aceThemeName());
       if (dialog.sqlEditor) dialog.sqlEditor.setTheme(aceThemeName());
+      if (projectFiles.editor) projectFiles.editor.setTheme(aceThemeName());
     }
 
     function loadScriptOnce(src) {
