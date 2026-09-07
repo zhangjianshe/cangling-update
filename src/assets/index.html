@@ -410,7 +410,7 @@
     .compose-canvas-toolbar[hidden] { display: none !important; }
     .compose-canvas-toolbar .hint { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
     .compose-canvas-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; }
-    .compose-canvas-viewport { min-height: 0; overflow: auto; background: var(--bg-2); }
+    .compose-canvas-viewport { min-height: 0; overflow: hidden; background: var(--bg-2); }
     .compose-canvas-viewport canvas { display: block; cursor: default; touch-action: none; user-select: none; }
     .compose-canvas-inspector { min-height: 0; overflow: auto; padding: 14px; border-left: 1px solid var(--line); background: var(--bg); }
     .compose-inspector-empty { padding: 28px 8px; color: var(--muted); text-align: center; }
@@ -929,7 +929,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-65"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-66"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3486,12 +3486,12 @@
         showComposeCanvasStatus(`${file.filename || "Compose"} · ${model.services.length} 个服务 · ${model.volumes.length} 个命名卷`);
         const viewport = $("#compose-canvas-viewport");
         if (viewport && window.ResizeObserver) {
-          let lastWidth = viewport.clientWidth;
+          let lastWidth = viewport.clientWidth, lastHeight = viewport.clientHeight;
           const observer = new ResizeObserver(() => {
             if (currentProjectTab() !== "edit") return;
-            const width = viewport.clientWidth;
-            if (Math.abs(width - lastWidth) < 2) return;
-            lastWidth = width;
+            const width = viewport.clientWidth, height = viewport.clientHeight;
+            if (Math.abs(width - lastWidth) < 2 && Math.abs(height - lastHeight) < 2) return;
+            lastWidth = width; lastHeight = height;
             if (composeCanvas.editor) composeCanvas.editor.render();
           });
           observer.observe(viewport);
