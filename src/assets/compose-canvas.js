@@ -59,7 +59,7 @@
 
   function parse(yaml) {
     const model = { services: [], networks: [], volumes: [], volumeDetails: {}, networkDetails: {} };
-    let section = "", service = null, volumeDef = null, nested = "", volumeNested = "", serviceNetwork = "";
+    let section = "", service = null, volumeDef = null, nested = "", volumeNested = "", serviceNetwork = "", healthNested = "";
     for (const raw of String(yaml || "").split(/\r?\n/)) {
       const line = raw.replace(/\s+#.*$/, "");
       if (!line.trim()) continue;
@@ -68,7 +68,7 @@
         section = text.slice(0, -1); service = null; volumeDef = null; nested = ""; volumeNested = ""; continue;
       }
       if (section === "services" && n === 2 && /^[^:]+:\s*$/.test(text)) {
-        service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", depends: [], networks: [], networkIps: {}, volumes: [], ports: [], environment: [] };
+        service = { name: clean(text.slice(0, -1)), image: "", containerName: "", command: "", restart: "", user: "", healthcheck: null, depends: [], networks: [], networkIps: {}, volumes: [], ports: [], environment: [] };
         model.services.push(service); nested = ""; continue;
       }
       if (section === "services" && service) {
@@ -76,11 +76,13 @@
           const at = text.indexOf(":");
           if (at < 0) continue;
           const key = text.slice(0, at).trim(), value = clean(text.slice(at + 1));
-          nested = key;serviceNetwork="";
+          nested = key;serviceNetwork="";healthNested="";
           if (key === "image") service.image = value;
           else if (key === "container_name") service.containerName = value;
           else if (key === "command") service.command = value;
           else if (key === "restart") service.restart = value;
+          else if (key === "user") service.user = value;
+          else if (key === "healthcheck") service.healthcheck = { test: [], interval: "", timeout: "", retries: "", startPeriod: "", startInterval: "", disable: false };
           else if (key === "depends_on") service.depends.push(...inlineList(value));
           else if (key === "networks") service.networks.push(...inlineList(value));
           else if (key === "volumes") service.volumes.push(...inlineList(value));
@@ -95,7 +97,9 @@
           else if (nested === "volumes") service.volumes.push(value);
           else if (nested === "ports") service.ports.push(value);
           else if (nested === "environment") service.environment.push(value);
+          else if (nested === "healthcheck" && healthNested === "test" && service.healthcheck) service.healthcheck.test.push(value);
         } else if(n===6&&nested==="environment") { const at=text.indexOf(":");if(at>0){const key=clean(text.slice(0,at)),value=clean(text.slice(at+1));service.environment.push(key+(value?"="+value:""));}
+        } else if(n===6&&nested==="healthcheck"&&service.healthcheck) { const at=text.indexOf(":");if(at>0){const key=text.slice(0,at).trim(),value=clean(text.slice(at+1));healthNested=key;if(key==="test")service.healthcheck.test=inlineList(value).length?inlineList(value):(value?["CMD-SHELL",value]:[]);else if(key==="interval")service.healthcheck.interval=value;else if(key==="timeout")service.healthcheck.timeout=value;else if(key==="retries")service.healthcheck.retries=value;else if(key==="start_period")service.healthcheck.startPeriod=value;else if(key==="start_interval")service.healthcheck.startInterval=value;else if(key==="disable")service.healthcheck.disable=value.toLowerCase()==="true";}
         } else if (n === 6 && (nested === "depends_on" || nested === "networks")) {
           const key = clean(text.split(":", 1)[0]);
           if (key) { service[nested === "depends_on" ? "depends" : "networks"].push(key);if(nested==="networks")serviceNetwork=key; }
@@ -165,13 +169,14 @@
     const block = lines.slice(range.start, range.end);
     const fields = [
       ["image", "image", false], ["container_name", "containerName", false],
-      ["command", "command", false], ["restart", "restart", false],
+      ["command", "command", false], ["restart", "restart", false], ["user", "user", false],
       ["depends_on", "depends", true], ["ports", "ports", true],
       ["volumes", "volumes", true], ["networks", "networks", true], ["environment", "environment", true],
     ];
     fields.forEach(([yamlKey, field, list]) => {
       if (Object.prototype.hasOwnProperty.call(values, field)) replaceKey(block, yamlKey, values[field], list);
     });
+    if(Object.prototype.hasOwnProperty.call(values,"healthcheck")){let start=block.findIndex((line,index)=>index>0&&indent(line)===4&&line.trim().startsWith("healthcheck:")),end=start<0?start:block.length;if(start>=0)for(let i=start+1;i<block.length;i+=1){if(block[i].trim()&&indent(block[i])<=4){end=i;break;}}const health=values.healthcheck,next=[];if(health){next.push("    healthcheck:");const test=health.test||[];if(test.length)next.push("      test: ["+test.map(value=>JSON.stringify(String(value))).join(", ")+"]");if(health.interval)next.push("      interval: "+quote(health.interval));if(health.timeout)next.push("      timeout: "+quote(health.timeout));if(health.retries)next.push("      retries: "+String(health.retries));if(health.startPeriod)next.push("      start_period: "+quote(health.startPeriod));if(health.startInterval)next.push("      start_interval: "+quote(health.startInterval));if(health.disable)next.push("      disable: true");}if(start>=0)block.splice(start,end-start,...next);else if(next.length)block.splice(1,0,...next);}
     if(Object.prototype.hasOwnProperty.call(values,"networkIps")){let start=block.findIndex((line,index)=>index>0&&indent(line)===4&&line.trim().startsWith("networks:")),end=start<0?start:block.length;if(start>=0)for(let i=start+1;i<block.length;i+=1){if(block[i].trim()&&indent(block[i])<=4){end=i;break;}}const networks=unique(values.networks||[]),ips=values.networkIps||{},next=networks.length?["    networks:",...networks.flatMap(network=>ips[network]?[`      ${quote(network)}:`,`        ipv4_address: ${quote(ips[network])}`]:[`      ${quote(network)}:`])]:[];if(start>=0)block.splice(start,end-start,...next);else if(next.length)block.splice(1,0,...next);}
     lines.splice(range.start, range.end - range.start, ...block);
     let result = lines.join("\n");
@@ -527,14 +532,17 @@
       if (!service) { const note=readHeaderNote(this.yaml);this.inspector.innerHTML=`<div class="compose-inspector-title">Compose</div><label>文件头注释<textarea data-compose-note rows="5" placeholder="输入 Compose 文件说明">${html(note)}</textarea></label><button type="button" class="btn primary" data-compose-save>保存 Compose</button>`;this.inspector.querySelector("[data-compose-save]").onclick=()=>{const yaml=writeHeaderNote(this.yaml,this.inspector.querySelector("[data-compose-note]").value);if(yaml!==this.yaml){this.yaml=yaml;this.model=parse(yaml);this.onChange(yaml,"已更新 Compose 文件头注释");}if(typeof this.onSaveCompose==="function")this.onSaveCompose();};return; }
       const field = (label, key, value, area) => `<label>${label}${area ? `<textarea data-field="${key}" rows="3">${html((value || []).join("\n"))}</textarea>` : `<input data-field="${key}" type="text" value="${html(value || "")}" />`}</label>`;
       const restart=service.restart||"unless-stopped",restartField=`<label>重启策略<select data-field="restart"><option value="no" ${restart==="no"?"selected":""}>no</option><option value="always" ${restart==="always"?"selected":""}>always</option><option value="on-failure" ${restart==="on-failure"?"selected":""}>on-failure</option><option value="unless-stopped" ${restart==="unless-stopped"?"selected":""}>unless-stopped</option></select></label>`;
+      const health=service.healthcheck,healthEnabled=!!health,test=health&&health.test||[],testMode=["CMD","CMD-SHELL","NONE"].includes(test[0])?test[0]:"CMD-SHELL",testCommand=testMode==="CMD"?test.slice(1).join("\n"):test.slice(1).join(" "),healthField=(label,key,value,placeholder,type="text")=>`<label>${label}<input data-health-${key} type="${type}" value="${html(value||"")}" placeholder="${placeholder}" /></label>`,healthEditor=`<section class="compose-health-editor"><label class="compose-check-row"><input data-health-enabled type="checkbox" ${healthEnabled?"checked":""} /> 启用 Healthcheck</label><div data-health-fields ${healthEnabled?"":"hidden"}><label>检测方式<select data-health-mode><option value="CMD-SHELL" ${testMode==="CMD-SHELL"?"selected":""}>CMD-SHELL</option><option value="CMD" ${testMode==="CMD"?"selected":""}>CMD</option><option value="NONE" ${testMode==="NONE"?"selected":""}>NONE</option></select></label><label>检测命令<textarea data-health-command rows="3" placeholder="CMD-SHELL：填写命令；CMD：每行一个参数">${html(testCommand)}</textarea></label>${healthField("检查间隔","interval",health&&health.interval,"30s")}${healthField("超时时间","timeout",health&&health.timeout,"10s")}${healthField("失败重试次数","retries",health&&health.retries,"3","number")}${healthField("启动宽限期","start-period",health&&health.startPeriod,"40s")}${healthField("启动期检查间隔","start-interval",health&&health.startInterval,"5s")}<label class="compose-check-row"><input data-health-disable type="checkbox" ${health&&health.disable?"checked":""} /> disable: true</label></div></section>`;
       const readOnlyList=(label,items)=>`<section class="compose-readonly-list"><div class="compose-readonly-title">${label}</div>${items.length?`<ul>${items.map(item=>`<li>${html(item)}</li>`).join("")}</ul>`:`<div class="compose-readonly-empty">无</div>`}</section>`,mounts=service.volumes.map(mount=>this.serviceVolumeLabel(mount)),ports=service.ports||[],networks=service.networks.map(name=>name+(service.networkIps[name]?` · ${service.networkIps[name]}`:""));
-      this.inspector.innerHTML = `<div class="compose-service-inspector"><div class="compose-service-inspector-content"><div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${restartField}${readOnlyList("数据卷",mounts)}${readOnlyList("端口",ports)}${readOnlyList("网络",networks)}${readOnlyList("环境变量",service.environment)}</div><div class="compose-service-inspector-footer"><button type="button" class="btn primary" data-apply>应用到草稿</button></div></div>`;
+      this.inspector.innerHTML = `<div class="compose-service-inspector"><div class="compose-service-inspector-content"><div class="compose-inspector-title">${html(service.name)}</div>${field("镜像","image",service.image)}${field("容器名称","containerName",service.containerName)}${field("启动命令","command",service.command)}${field("运行用户（可选）","user",service.user)}${restartField}${healthEditor}${readOnlyList("数据卷",mounts)}${readOnlyList("端口",ports)}${readOnlyList("网络",networks)}${readOnlyList("环境变量",service.environment)}</div><div class="compose-service-inspector-footer"><button type="button" class="btn primary" data-apply>应用到草稿</button></div></div>`;
+      this.inspector.querySelector("[data-health-enabled]").onchange=e=>{this.inspector.querySelector("[data-health-fields]").hidden=!e.target.checked;};
       this.inspector.querySelector("[data-apply]").onclick = () => {
         const patch = {};
         this.inspector.querySelectorAll("[data-field]").forEach(input => {
           const key = input.dataset.field, value = input.tagName === "TEXTAREA" ? unique(input.value.split(/\r?\n/)) : input.value.trim();
           if (JSON.stringify(value) !== JSON.stringify(service[key])) patch[key] = value;
         });
+        const enabled=this.inspector.querySelector("[data-health-enabled]").checked;let nextHealth=null;if(enabled){const mode=this.inspector.querySelector("[data-health-mode]").value,command=this.inspector.querySelector("[data-health-command]").value.trim(),disable=this.inspector.querySelector("[data-health-disable]").checked;if(mode!=="NONE"&&!command&&!disable){this.onStatus("请填写 Healthcheck 检测命令，或启用 disable");return;}const retries=this.inspector.querySelector("[data-health-retries]").value.trim();if(retries&&(!/^\d+$/.test(retries)||Number(retries)<1)){this.onStatus("Healthcheck 失败重试次数必须是正整数");return;}nextHealth={test:mode==="NONE"?["NONE"]:(command?(mode==="CMD"?["CMD",...command.split(/\r?\n/).map(value=>value.trim()).filter(Boolean)]:["CMD-SHELL",command]):[]),interval:this.inspector.querySelector("[data-health-interval]").value.trim(),timeout:this.inspector.querySelector("[data-health-timeout]").value.trim(),retries,startPeriod:this.inspector.querySelector("[data-health-start-period]").value.trim(),startInterval:this.inspector.querySelector("[data-health-start-interval]").value.trim(),disable};}if(JSON.stringify(nextHealth)!==JSON.stringify(service.healthcheck))patch.healthcheck=nextHealth;
         if (!Object.keys(patch).length) { this.onStatus("服务属性没有变化"); return; }
         this.commit(service, patch, `已更新服务 ${service.name} 的属性`);
       };
