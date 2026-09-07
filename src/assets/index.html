@@ -945,7 +945,7 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-78"></script>
+  <script src="/vendor/compose-canvas.js?v=interactive-79"></script>
   <script>
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
     const PROJECT_TABS = [
@@ -3485,8 +3485,8 @@
           inspector,
           yaml: composeCanvas.yaml,
           storageKey: "cangling-compose-layout:" + composeCanvas.projectId,
-          exportTitle: `${state.current.name || file.filename || "Compose"} · Compose Graph`,
-          exportFilename: `${String(state.current.name || "compose").replace(/[^A-Za-z0-9_.-]+/g,"-")}-graph.png`,
+          exportTitle: String(state.current.name || file.filename || "Compose 服务拓扑"),
+          exportFilename: `${String(state.current.name || "compose").trim().replace(/[\\/:*?"<>|\u0000-\u001F]+/g,"-").replace(/[. ]+$/g,"") || "compose"}-graph.png`,
           onChange: (yaml, message) => {
             composeCanvas.yaml = yaml;
             setComposeCanvasDirty(true, message);
