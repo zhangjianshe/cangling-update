@@ -3023,6 +3023,11 @@
       let timer = setInterval(async () => {
         try {
           const job = await api("/api/jobs/" + id);
+          // Every caller renders a meaningful initial state before polling. During a
+          // multipart upload the server cannot update the job until it has parsed the
+          // job_id field, so its default "pending" response must not overwrite the
+          // browser's XMLHttpRequest upload progress on slow connections.
+          if (job.phase === "pending" && !job.done) return;
           renderProgress(prefix, job);
           if (job.done) {
             clearInterval(timer);
