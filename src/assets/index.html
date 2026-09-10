@@ -550,6 +550,8 @@
     .db-data { overflow: auto; min-width: 0; min-height: 0; flex: 1 1 auto; }
     .db-data table { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
     .db-data th, .db-data td { white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+    .db-data .db-select-cell { width: 38px; min-width: 38px; max-width: 38px; padding-left: 11px; padding-right: 7px; text-align: center; }
+    .db-data .db-select-cell input { width: 16px; height: 16px; margin: 0; vertical-align: middle; cursor: pointer; }
     .db-data th {
       background: var(--bg-3);
       color: var(--text);
@@ -1057,6 +1059,7 @@
       rows: [],
       pk: [],
       rowIndex: null,
+      selectedRows: new Set(),
       total: 0,
       offset: 0,
       limit: 50,
@@ -3138,6 +3141,7 @@
           dbAdmin.rows = [];
           dbAdmin.pk = [];
           dbAdmin.rowIndex = null;
+          dbAdmin.selectedRows.clear();
           dbAdmin.total = 0;
           dbAdmin.offset = 0;
           dbAdmin.sqlResult = null;
@@ -4203,6 +4207,7 @@
         dbAdmin.total = data.total || 0;
         dbAdmin.offset = data.offset || 0;
         dbAdmin.limit = data.limit || dbAdmin.limit;
+        dbAdmin.selectedRows.clear();
         if (dbAdmin.rowIndex != null && dbAdmin.rowIndex >= dbAdmin.rows.length) dbAdmin.rowIndex = null;
         dbShowErr("");
       } catch (e) {
@@ -4310,12 +4315,29 @@
       if (!cols.length) {
         box.innerHTML = `<div class="empty">${esc(dbAdmin.selected.name)} 无数据</div>`;
       } else {
-        box.innerHTML = `<table><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
-          rows.map((r, ri) => `<tr data-db-row="${ri}" class="${dbAdmin.rowIndex === ri ? "active" : ""}">${cols.map((_, i) => {
+        const editable = dbAdmin.selected.kind !== "view";
+        const selectedCount = dbAdmin.selectedRows.size;
+        const allSelected = editable && rows.length > 0 && selectedCount === rows.length;
+        box.innerHTML = `<table><thead><tr><th class="db-select-cell"><input id="db-select-all" type="checkbox" ${allSelected ? "checked" : ""} ${editable && rows.length ? "" : "disabled"} title="选择本页全部行" /></th>${cols.map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+          rows.map((r, ri) => `<tr data-db-row="${ri}" class="${dbAdmin.rowIndex === ri ? "active" : ""}"><td class="db-select-cell"><input type="checkbox" data-db-check="${ri}" ${dbAdmin.selectedRows.has(ri) ? "checked" : ""} ${editable ? "" : "disabled"} aria-label="选择第 ${ri + 1} 行" /></td>${cols.map((_, i) => {
             const t = dbCell(r[i]);
             return `<td title="${esc(t)}">${esc(t.length > 120 ? t.slice(0, 120) + "…" : t)}</td>`;
-          }).join("")}</tr>`).join("") || `<tr><td class="empty" colspan="${cols.length}">无行</td></tr>`
+          }).join("")}</tr>`).join("") || `<tr><td class="empty" colspan="${cols.length + 1}">无行</td></tr>`
         }</tbody></table>`;
+        const selectAll = $("#db-select-all");
+        if (selectAll) selectAll.onchange = () => {
+          dbAdmin.selectedRows = selectAll.checked ? new Set(rows.map((_, i) => i)) : new Set();
+          dbRenderRows();
+        };
+        for (const cb of box.querySelectorAll("[data-db-check]")) {
+          cb.onclick = (event) => event.stopPropagation();
+          cb.onchange = () => {
+            const index = Number(cb.getAttribute("data-db-check"));
+            if (cb.checked) dbAdmin.selectedRows.add(index);
+            else dbAdmin.selectedRows.delete(index);
+            dbRenderRows();
+          };
+        }
         for (const tr of box.querySelectorAll("[data-db-row]")) {
           tr.onclick = () => {
             dbAdmin.rowIndex = Number(tr.getAttribute("data-db-row"));
@@ -4331,12 +4353,14 @@
         const from = dbAdmin.total ? dbAdmin.offset + 1 : 0;
         const to = Math.min(dbAdmin.offset + (rows.length || 0), dbAdmin.total);
         const canEdit = dbAdmin.selected.kind !== "view" && dbAdmin.rowIndex != null;
-        const rowHint = dbAdmin.selected.kind === "view" ? "视图不能直接修改" : "选中一行后操作";
+        const canDelete = dbAdmin.selected.kind !== "view" && dbAdmin.selectedRows.size > 0;
+        const rowHint = dbAdmin.selected.kind === "view" ? "视图不能直接修改" : "点击一行后编辑";
+        const deleteHint = dbAdmin.selected.kind === "view" ? "视图不能直接删除" : "勾选一行或多行后删除";
         pager.innerHTML = `
           <button type="button" class="btn" id="db-prev" ${dbAdmin.offset <= 0 ? "disabled" : ""}>上一页</button>
           <span class="hint">${esc(dbAdmin.selected.name)} · ${from}-${to} / ${dbAdmin.total}${dbAdmin.pk && dbAdmin.pk.length ? " · 主键 " + esc(dbAdmin.pk.join(", ")) : ""}</span>
           <button type="button" class="btn" id="db-edit-row" ${canEdit ? "" : "disabled"} title="${esc(rowHint)}">编辑</button>
-          <button type="button" class="btn danger" id="db-del-row" ${canEdit ? "" : "disabled"} title="${esc(rowHint)}">删除</button>
+          <button type="button" class="btn danger" id="db-del-row" ${canDelete ? "" : "disabled"} title="${esc(deleteHint)}">删除${dbAdmin.selectedRows.size ? "（" + dbAdmin.selectedRows.size + "）" : ""}</button>
           <button type="button" class="btn" id="db-next" ${dbAdmin.offset + dbAdmin.limit >= dbAdmin.total ? "disabled" : ""}>下一页</button>`;
         const prev = $("#db-prev");
         const next = $("#db-next");
@@ -4409,9 +4433,7 @@
       }
     }
 
-    function dbSelectedRowKeys() {
-      if (!dbAdmin.selected || dbAdmin.rowIndex == null) return null;
-      const row = dbAdmin.rows[dbAdmin.rowIndex];
+    function dbRowKeys(row) {
       if (!row) return null;
       const cols = dbAdmin.columns || [];
       const pk = dbAdmin.pk || [];
@@ -4424,18 +4446,24 @@
       return keys;
     }
 
+    function dbSelectedRowKeys() {
+      if (!dbAdmin.selected || dbAdmin.rowIndex == null) return null;
+      return dbRowKeys(dbAdmin.rows[dbAdmin.rowIndex]);
+    }
+
     async function dbDeleteRow() {
-      if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) {
-        dbShowErr("请先选择一行");
+      if (!state.current || !dbAdmin.selected || dbAdmin.selectedRows.size === 0) {
+        dbShowErr("请先勾选要删除的行");
         return;
       }
       if (dbAdmin.selected.kind === "view") {
         dbShowErr("视图不能直接删除");
         return;
       }
-      const keys = dbSelectedRowKeys();
-      if (!keys) return;
-      if (!(await confirmDialog("确定删除 " + dbAdmin.selected.name + " 中选中的这一行？此操作不可恢复。", { danger: true }))) return;
+      const selected = [...dbAdmin.selectedRows].sort((a, b) => a - b);
+      const rows = selected.map((index) => dbRowKeys(dbAdmin.rows[index])).filter(Boolean);
+      if (!rows.length) return;
+      if (!(await confirmDialog("确定删除 " + dbAdmin.selected.name + " 中选中的 " + rows.length + " 行？此操作不可恢复。", { danger: true }))) return;
       const btn = $("#db-del-row");
       if (btn) btn.disabled = true;
       try {
@@ -4448,10 +4476,12 @@
             database: dbAdmin.database,
             schema: dbAdmin.schema,
             table: dbAdmin.selected.name,
-            keys,
+            keys: {},
+            rows,
           }),
         });
         dbAdmin.rowIndex = null;
+        dbAdmin.selectedRows.clear();
         dbShowErr("");
         await dbLoadRows();
         if ((dbAdmin.rows || []).length === 0 && dbAdmin.offset > 0) {

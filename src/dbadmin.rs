@@ -98,7 +98,12 @@ pub struct DeleteRowBody {
     pub database: String,
     pub schema: String,
     pub table: String,
+    /// Kept for compatibility with older clients that delete one row.
+    #[serde(default)]
     pub keys: serde_json::Map<String, serde_json::Value>,
+    /// Key sets for rows deleted together in one database statement.
+    #[serde(default)]
+    pub rows: Vec<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -568,15 +573,30 @@ fn row_where(keys: &serde_json::Map<String, serde_json::Value>) -> Result<String
     Ok(wheres.join(" AND "))
 }
 
-fn delete_row_sql(
+fn delete_rows_sql(
     schema: &str,
     table: &str,
-    keys: &serde_json::Map<String, serde_json::Value>,
+    rows: &[serde_json::Map<String, serde_json::Value>],
 ) -> Result<String, AppError> {
+    if rows.is_empty() {
+        return Err(AppError::bad("缺少要删除的行"));
+    }
+    if rows.len() > 500 {
+        return Err(AppError::bad("一次最多删除 500 行"));
+    }
     let fq = format!("{}.{}", quote_ident(schema)?, quote_ident(table)?);
-    let wheres = row_where(keys)?;
+    let targets = rows
+        .iter()
+        .map(|keys| {
+            Ok(format!(
+                "(SELECT ctid FROM {fq} WHERE {} LIMIT 1)",
+                row_where(keys)?
+            ))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
     Ok(format!(
-        "WITH d AS (DELETE FROM {fq} WHERE ctid = (SELECT ctid FROM {fq} WHERE {wheres} LIMIT 1) RETURNING 1) SELECT count(*)::bigint FROM d"
+        "WITH wanted AS ({}), d AS (DELETE FROM {fq} AS target USING wanted WHERE target.ctid = wanted.ctid RETURNING 1) SELECT count(*)::bigint FROM d",
+        targets.join(" UNION ALL ")
     ))
 }
 
@@ -588,7 +608,12 @@ pub async fn delete_row(
     crate::docker::validate_service_name(&body.service)
         .map_err(|e| AppError::bad(e.to_string()))?;
     let _ = quote_ident(&body.database)?;
-    let sql = delete_row_sql(&body.schema, &body.table, &body.keys)?;
+    let rows = if body.rows.is_empty() {
+        vec![body.keys.clone()]
+    } else {
+        body.rows.clone()
+    };
+    let sql = delete_rows_sql(&body.schema, &body.table, &rows)?;
     let conn = probe_conn(docker, dir, &body.service).await?;
     let raw = psql(docker, dir, &body.service, &conn, &body.database, &sql).await?;
     let deleted: u64 = raw.trim().parse().unwrap_or(0);
@@ -709,16 +734,21 @@ mod tests {
     }
 
     #[test]
-    fn delete_sql_matches_one_row() {
+    fn delete_sql_matches_selected_rows() {
         let mut keys = serde_json::Map::new();
         keys.insert("id".into(), serde_json::json!(12));
         keys.insert("name".into(), serde_json::Value::Null);
-        let sql = delete_row_sql("public", "lin_user", &keys).unwrap();
+        let mut second = serde_json::Map::new();
+        second.insert("id".into(), serde_json::json!(13));
+        let sql = delete_rows_sql("public", "lin_user", &[keys, second]).unwrap();
         assert!(sql.contains("DELETE FROM \"public\".\"lin_user\""));
         assert!(sql.contains("\"id\" IS NOT DISTINCT FROM 12"));
+        assert!(sql.contains("\"id\" IS NOT DISTINCT FROM 13"));
         assert!(sql.contains("\"name\" IS NULL"));
+        assert!(sql.contains("UNION ALL"));
         assert!(sql.contains("LIMIT 1"));
         assert!(row_where(&serde_json::Map::new()).is_err());
+        assert!(delete_rows_sql("public", "lin_user", &[]).is_err());
     }
 
     #[test]
