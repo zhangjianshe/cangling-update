@@ -1011,17 +1011,83 @@ pub fn parse_nvidia_smi_l(raw: &str) -> Vec<GpuInfo> {
     coalesce_gpus(gpus)
 }
 
+/// Parse the concise device listings printed by `hy-smi` / `rocm-smi`.
+/// Both tools have shipped several output formats, so prefer labelled product
+/// fields and fall back to the text following a GPU index.
+pub fn parse_dcu_smi(raw: &str, source: &str) -> Vec<GpuInfo> {
+    let mut gpus = Vec::new();
+    for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let lower = line.to_ascii_lowercase();
+        let name = ["card series:", "card model:", "product name:"]
+            .iter()
+            .find_map(|key| lower.find(key).map(|at| line[at + key.len()..].trim()))
+            .or_else(|| {
+                (lower.starts_with("gpu[") || lower.starts_with("gpu "))
+                    .then(|| line.split_once(':').map(|(_, value)| value.trim()))
+                    .flatten()
+            });
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            continue;
+        };
+        gpus.push(GpuInfo {
+            name: name.into(),
+            arch: "Hygon DCU".into(),
+            count: 1,
+            source: source.into(),
+        });
+    }
+    coalesce_gpus(gpus)
+}
+
+pub fn parse_ascend_smi(raw: &str) -> Vec<GpuInfo> {
+    let mut names = Vec::new();
+    for line in raw.lines().map(str::trim) {
+        let lower = line.to_ascii_lowercase();
+        for key in ["chip name", "product name", "npu name"] {
+            if lower.starts_with(key) {
+                if let Some((_, value)) = line.split_once(':') {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        names.push(GpuInfo {
+                            name: format!("Huawei Ascend {value}"),
+                            arch: "Ascend".into(),
+                            count: 1,
+                            source: "npu-smi".into(),
+                        });
+                    }
+                }
+                break;
+            }
+        }
+    }
+    coalesce_gpus(names)
+}
+
 pub fn parse_lspci_display(raw: &str) -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
     for line in raw.lines() {
         let lower = line.to_lowercase();
-        if !(lower.contains("vga") || lower.contains("3d controller") || lower.contains("display"))
+        let known_accelerator = lower.contains("nvidia")
+            || lower.contains("hygon")
+            || lower.contains("haiguang")
+            || lower.contains("dcu")
+            || lower.contains("huawei")
+            || lower.contains("ascend");
+        if !(lower.contains("vga")
+            || lower.contains("3d controller")
+            || lower.contains("display")
+            || lower.contains("processing accelerators")
+            || known_accelerator)
         {
             continue;
         }
         let name = line.split(": ").nth(1).unwrap_or(line).trim();
         let arch = if lower.contains("nvidia") {
             "NVIDIA"
+        } else if lower.contains("hygon") || lower.contains("haiguang") || lower.contains("dcu") {
+            "Hygon DCU"
+        } else if lower.contains("huawei") || lower.contains("ascend") {
+            "Ascend"
         } else if lower.contains("amd") || lower.contains("ati") {
             "AMD"
         } else if lower.contains("intel") {
@@ -1059,19 +1125,33 @@ fn coalesce_gpus(gpus: Vec<GpuInfo>) -> Vec<GpuInfo> {
 }
 
 fn collect_gpus() -> Vec<GpuInfo> {
+    let mut gpus = Vec::new();
     if let Some(raw) = cmd_out("nvidia-smi", &["-L"]) {
-        let g = parse_nvidia_smi_l(&raw);
-        if !g.is_empty() {
-            return g;
+        gpus.extend(parse_nvidia_smi_l(&raw));
+    }
+    for (bin, args) in [
+        ("hy-smi", &["-L"][..]),
+        ("hy-smi", &["--showproductname"][..]),
+        ("rocm-smi", &["--showproductname"][..]),
+    ] {
+        if gpus.iter().any(|gpu| gpu.arch == "Hygon DCU") {
+            break;
+        }
+        if let Some(raw) = cmd_out(bin, args) {
+            gpus.extend(parse_dcu_smi(&raw, bin));
         }
     }
-    if Path::new("/dev")
-        .read_dir()
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .any(|e| e.file_name().to_string_lossy().starts_with("davinci"))
+    if let Some(raw) = cmd_out("npu-smi", &["info", "-l"]) {
+        gpus.extend(parse_ascend_smi(&raw));
+    }
+    if !gpus.iter().any(|gpu| gpu.arch == "Ascend")
+        && Path::new("/dev")
+            .read_dir()
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| e.file_name().to_string_lossy().starts_with("davinci"))
     {
         let n = std::fs::read_dir("/dev")
             .ok()
@@ -1081,21 +1161,28 @@ fn collect_gpus() -> Vec<GpuInfo> {
             .filter(|e| e.file_name().to_string_lossy().starts_with("davinci"))
             .count() as u32;
         if n > 0 {
-            return vec![GpuInfo {
+            gpus.push(GpuInfo {
                 name: "Huawei Ascend NPU".into(),
                 arch: "Ascend".into(),
                 count: n,
                 source: "/dev/davinci*".into(),
-            }];
+            });
         }
     }
     if let Some(raw) = cmd_out("lspci", &[]) {
-        let g = parse_lspci_display(&raw);
-        if !g.is_empty() {
-            return g;
+        for gpu in parse_lspci_display(&raw) {
+            // Vendor tools provide a better model and count. PCI is a fallback
+            // for vendors that were not detected by their management utility.
+            if !gpus.iter().any(|known| known.arch == gpu.arch) {
+                gpus.push(gpu);
+            }
         }
     }
-    drm_gpus()
+    if gpus.is_empty() {
+        drm_gpus()
+    } else {
+        coalesce_gpus(gpus)
+    }
 }
 
 fn drm_gpus() -> Vec<GpuInfo> {
@@ -1309,6 +1396,27 @@ physical id\t: 1
             "00:02.0 VGA compatible controller: Device 1234:1111\n01:00.0 3D controller: NVIDIA Corporation GA102\n",
         );
         assert!(pci.iter().any(|g| g.arch == "NVIDIA"));
+
+        let dcu = parse_dcu_smi(
+            "GPU[0] : Card series: K100_AI\nGPU[1] : Card series: K100_AI\n",
+            "hy-smi",
+        );
+        assert_eq!(dcu.len(), 1);
+        assert_eq!(dcu[0].name, "K100_AI");
+        assert_eq!(dcu[0].arch, "Hygon DCU");
+        assert_eq!(dcu[0].count, 2);
+
+        let ascend =
+            parse_ascend_smi("NPU ID : 0\nChip Name : 910B\nNPU ID : 1\nChip Name : 910B\n");
+        assert_eq!(ascend.len(), 1);
+        assert_eq!(ascend[0].name, "Huawei Ascend 910B");
+        assert_eq!(ascend[0].count, 2);
+
+        let accelerators = parse_lspci_display(
+            "03:00.0 Processing accelerators: Hygon DCU K100\n04:00.0 Processing accelerators: Huawei Ascend 910\n",
+        );
+        assert!(accelerators.iter().any(|g| g.arch == "Hygon DCU"));
+        assert!(accelerators.iter().any(|g| g.arch == "Ascend"));
     }
 
     #[test]
