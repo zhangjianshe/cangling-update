@@ -127,12 +127,12 @@ fn note_path(paths: &AppPaths) -> PathBuf {
     paths.config_dir.join(NOTE_FILE)
 }
 
-fn save_note(paths: &AppPaths, note: &str) -> Result<()> {
+pub fn save_note(paths: &AppPaths, note: &str) -> Result<()> {
     let note = normalize_note(note);
     std::fs::write(note_path(paths), note).context("write hostinfo note")
 }
 
-fn load_note(paths: &AppPaths) -> String {
+pub fn load_note(paths: &AppPaths) -> String {
     std::fs::read_to_string(note_path(paths))
         .map(|text| normalize_note(&text))
         .unwrap_or_default()

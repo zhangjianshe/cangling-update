@@ -37,6 +37,10 @@ pub fn router(state: AppState) -> Router {
         .route("/console", get(index))
         .route("/hostinfo", get(hostinfo_term))
         .route("/hostinfo.md", get(hostinfo_markdown))
+        .route(
+            "/api/hostinfo/note",
+            get(hostinfo_note).put(save_hostinfo_note),
+        )
         .merge(crate::portal::routes())
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/setup", post(auth::setup))
@@ -189,6 +193,32 @@ pub fn router(state: AppState) -> Router {
 #[derive(Debug, Deserialize, Default)]
 struct HostinfoQuery {
     color: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct HostinfoNote {
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveHostinfoNote {
+    note: String,
+}
+
+async fn hostinfo_note(State(state): State<AppState>) -> Json<HostinfoNote> {
+    Json(HostinfoNote {
+        note: hostinfo::load_note(&state.paths),
+    })
+}
+
+async fn save_hostinfo_note(
+    State(state): State<AppState>,
+    Json(body): Json<SaveHostinfoNote>,
+) -> Result<Json<HostinfoNote>, AppError> {
+    hostinfo::save_note(&state.paths, &body.note).map_err(AppError::from)?;
+    Ok(Json(HostinfoNote {
+        note: hostinfo::load_note(&state.paths),
+    }))
 }
 
 async fn hostinfo_term(

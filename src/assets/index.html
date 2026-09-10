@@ -976,7 +976,7 @@
   </div>
   <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [] };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "" };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1437,6 +1437,12 @@
       state.current = null;
       renderList();
       $("#main").classList.remove("db-fill");
+      try {
+        const data = await api("/api/hostinfo/note");
+        state.hostinfoNote = data.note || "";
+      } catch (_) {
+        state.hostinfoNote = "";
+      }
       await loadCluster(true);
       startClusterPoll();
     }
@@ -1482,6 +1488,7 @@
       if (st.role === "standalone") {
         $("#main").innerHTML = `
           <div class="title-row"><div><h2>集群</h2><div class="path">多机部署与节点管理</div></div></div>
+          <div id="flash" hidden></div>
           <div class="card">
             <h3>当前为单机模式</h3>
             <p class="hint">本程序未启用集群。以不同角色启动即可组成集群：</p>
@@ -1490,7 +1497,9 @@
               工作节点：<code>./cangling-update --role worker --cluster-token 共享口令</code><br/>
               工作节点不填 <code>--master</code> 时，会通过 UDP 广播（端口 5401）自动发现主节点；也可用 <code>--master http://主节点:5400</code> 显式指定。
             </p>
-          </div>`;
+          </div>
+          ${hostinfoNoteCard()}`;
+        bindHostinfoNoteButton();
         return;
       }
       const workerNote = st.role === "worker"
@@ -1514,6 +1523,7 @@
         </div>
         <div id="flash" hidden></div>
         <div class="card"><h3>概览</h3><p class="hint" id="cluster-overview"></p><p class="hint" id="cluster-binaries-hint" hidden></p></div>
+        ${hostinfoNoteCard()}
         <div class="card"><h3>节点列表</h3><div id="nodes-body"></div></div>
         ${initCard}
         ${workerNote}`;
@@ -1521,6 +1531,59 @@
       if (initBtn) initBtn.onclick = startClusterInit;
       const checkBtn = $("#btn-check-cluster");
       if (checkBtn) checkBtn.onclick = startClusterCheck;
+      bindHostinfoNoteButton();
+    }
+
+    function hostinfoNoteCard() {
+      const note = state.hostinfoNote || "";
+      return `<div class="card">
+        <div class="title-row" style="margin-bottom:8px">
+          <div><h3 style="margin:0">主机备注</h3><p class="hint" style="margin:4px 0 0">显示在 <code>/hostinfo</code> 和 <code>/hostinfo.md</code> 的最后。</p></div>
+          <button type="button" class="btn" id="btn-hostinfo-note">${note ? "修改备注" : "添加备注"}</button>
+        </div>
+        <div class="hint" style="white-space:pre-wrap">${note ? esc(note) : "尚未填写备注。"}</div>
+      </div>`;
+    }
+
+    function bindHostinfoNoteButton() {
+      const button = $("#btn-hostinfo-note");
+      if (button) button.onclick = openHostinfoNoteDialog;
+    }
+
+    function openHostinfoNoteDialog() {
+      closeDialog();
+      $("#dialog-title").textContent = state.hostinfoNote ? "修改主机备注" : "添加主机备注";
+      setDialogAction("保存", saveHostinfoNote);
+      $("#dialog-body").innerHTML = `
+        <div class="field"><label>备注内容</label><textarea id="hostinfo-note-input" rows="8" maxlength="65536" placeholder="例如：机房位置、负责人、维护窗口等">${esc(state.hostinfoNote || "")}</textarea></div>
+        <p class="hint">留空保存会清除备注。</p>
+        <div class="flash err" id="hostinfo-note-error" hidden></div>`;
+      $("#dialog").hidden = false;
+      $("#hostinfo-note-input").focus();
+    }
+
+    async function saveHostinfoNote() {
+      const button = $("#dialog-extra");
+      const error = $("#hostinfo-note-error");
+      try {
+        button.disabled = true;
+        const data = await api("/api/hostinfo/note", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note: $("#hostinfo-note-input").value }),
+        });
+        state.hostinfoNote = data.note || "";
+        closeDialog();
+        renderClusterLayout(state.clusterStatus);
+        updateClusterOverview(state.clusterStatus);
+        updateNodeTable();
+        loadInitStatus();
+        flash("ok", state.hostinfoNote ? "主机备注已保存" : "主机备注已清除");
+      } catch (e) {
+        error.textContent = e.message;
+        error.hidden = false;
+        button.disabled = false;
+      }
     }
 
     function updateClusterOverview(st) {
