@@ -1557,12 +1557,19 @@
 
     function openHostinfoNoteDialog() {
       closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("form-modal");
       $("#dialog-title").textContent = state.hostinfoNote ? "修改主机备注" : "添加主机备注";
       setDialogAction("保存", saveHostinfoNote);
       $("#dialog-body").innerHTML = `
-        <div class="field"><label>备注内容</label><textarea id="hostinfo-note-input" rows="8" maxlength="65536" placeholder="例如：机房位置、负责人、维护窗口等">${esc(state.hostinfoNote || "")}</textarea></div>
-        <p class="hint">留空保存会清除备注。</p>
-        <div class="flash err" id="hostinfo-note-error" hidden></div>`;
+        <div class="storage-form">
+          <div class="field">
+            <label>备注内容</label>
+            <textarea id="hostinfo-note-input" rows="4" maxlength="65536" placeholder="例如：机房位置、负责人、维护窗口等">${esc(state.hostinfoNote || "")}</textarea>
+            <p class="hint">留空保存会清除备注。</p>
+          </div>
+          <div class="flash err" id="hostinfo-note-error" hidden></div>
+        </div>`;
       $("#dialog").hidden = false;
       $("#hostinfo-note-input").focus();
     }
