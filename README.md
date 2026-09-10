@@ -81,6 +81,8 @@ make arm64
 ./cangling-update hostinfo
 # 在程序目录写入 info.md（软件版本与路径、本机 IP、项目列表、磁盘、内存、CPU/GPU）
 # 指定路径：./cangling-update hostinfo -o /tmp/info.md
+# 保存一段备注，之后命令和 API 都在最后显示（空字符串清除）：
+./cangling-update hostinfo --note '机房：A3；负责人：张三'
 
 sudo ./cangling-update fix-k3s
 # 若已安装 k3s：在 /var/lib/rancher/k3s/server/manifests/ 写入 traefik-config.yaml

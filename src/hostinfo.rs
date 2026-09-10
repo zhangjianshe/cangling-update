@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const UNIT_PATH: &str = "/etc/systemd/system/cangling-update.service";
+const NOTE_FILE: &str = "hostinfo-note.txt";
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -71,9 +72,13 @@ pub struct HostSnapshot {
     pub gpus: Vec<GpuInfo>,
     pub exe_dir: String,
     pub config_dir: String,
+    pub note: String,
 }
 
-pub fn run(paths: &AppPaths, output: Option<PathBuf>) -> Result<()> {
+pub fn run(paths: &AppPaths, output: Option<PathBuf>, note: Option<String>) -> Result<()> {
+    if let Some(note) = note {
+        save_note(paths, &note)?;
+    }
     let snap = collect(paths)?;
     let md = render_markdown(&snap);
     let dest = output.unwrap_or_else(|| paths.exe_dir.join("info.md"));
@@ -114,7 +119,32 @@ pub fn collect_with_projects(paths: &AppPaths, projects: Vec<Project>) -> HostSn
         gpus: collect_gpus(),
         exe_dir: paths.exe_dir.display().to_string(),
         config_dir: paths.config_dir.display().to_string(),
+        note: load_note(paths),
     }
+}
+
+fn note_path(paths: &AppPaths) -> PathBuf {
+    paths.config_dir.join(NOTE_FILE)
+}
+
+fn save_note(paths: &AppPaths, note: &str) -> Result<()> {
+    let note = normalize_note(note);
+    std::fs::write(note_path(paths), note).context("write hostinfo note")
+}
+
+fn load_note(paths: &AppPaths) -> String {
+    std::fs::read_to_string(note_path(paths))
+        .map(|text| normalize_note(&text))
+        .unwrap_or_default()
+}
+
+fn normalize_note(note: &str) -> String {
+    note.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .take(64 * 1024)
+        .collect::<String>()
+        .trim()
+        .to_string()
 }
 
 /// `color` query: missing/`1`/`true`/`always` → ANSI; `0`/`false`/`never` → 纯文本。
@@ -312,6 +342,13 @@ pub fn render_ansi(s: &HostSnapshot, color: bool) -> String {
         }
     }
     out.push('\n');
+    if !s.note.is_empty() {
+        out.push_str(&format!("  {}\n  {}\n", p.head("备注"), p.rule()));
+        for line in s.note.lines() {
+            out.push_str(&format!("  {}\n", p.val(line)));
+        }
+        out.push('\n');
+    }
     out
 }
 
@@ -521,6 +558,11 @@ pub fn render_markdown(s: &HostSnapshot) -> String {
         }
     }
     out.push('\n');
+    if !s.note.is_empty() {
+        out.push_str("## 备注\n\n");
+        out.push_str(&s.note);
+        out.push_str("\n\n");
+    }
     out
 }
 
@@ -1322,6 +1364,7 @@ mod tests {
             gpus: vec![],
             exe_dir: "/root/update".into(),
             config_dir: "/root/update/config".into(),
+            note: "机房：A3\n负责人：张三".into(),
         };
         let md = render_markdown(&snap);
         assert!(md.contains("# 主机信息"));
@@ -1335,6 +1378,7 @@ mod tests {
         assert!(md.contains("未检测到 GPU"));
         assert!(md.contains("/root/update/cangling-update"));
         assert!(md.contains("0.0.0.0:80"));
+        assert!(md.ends_with("## 备注\n\n机房：A3\n负责人：张三\n\n"));
         assert!(md.contains("GiB") || md.contains("TiB"));
     }
 
@@ -1464,6 +1508,7 @@ physical id\t: 1
             gpus: vec![],
             exe_dir: "/root/update".into(),
             config_dir: "/root/update/config".into(),
+            note: "维护窗口：周日 02:00".into(),
         }
     }
 
@@ -1515,7 +1560,17 @@ SwapFree:          0 kB
         assert!(plain.contains("10.141.8.61"));
         assert!(plain.contains("Kunpeng-920"));
         assert!(plain.contains("暂无登记项目"));
+        assert!(plain.contains("备注"));
+        assert!(plain.contains("维护窗口：周日 02:00"));
         assert!(color.contains("█") || color.contains("░"));
+    }
+
+    #[test]
+    fn note_removes_terminal_control_characters() {
+        assert_eq!(
+            normalize_note("  first\n\x1b[31msecond\r\n  "),
+            "first\n[31msecond"
+        );
     }
 
     #[test]

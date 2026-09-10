@@ -134,6 +134,9 @@ enum Command {
         /// 输出路径（默认：程序所在目录/info.md）
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// 保存主机备注，并在 hostinfo 输出的最后显示；传空字符串可清除
+        #[arg(long)]
+        note: Option<String>,
     },
     /// 检测 k3s：写入 Traefik 入口端口配置（HTTP 8020 / HTTPS 8443），并确保 /root/.kube/config
     #[command(name = "fix-k3s")]
@@ -192,9 +195,9 @@ async fn main() -> anyhow::Result<()> {
             }
             return update::run(check, force, proxy);
         }
-        Some(Command::Hostinfo { output }) => {
+        Some(Command::Hostinfo { output, note }) => {
             let paths = AppPaths::resolve(cli.data_dir)?;
-            return hostinfo::run(&paths, output);
+            return hostinfo::run(&paths, output, note);
         }
         Some(Command::FixK3s) => {
             return k3s::fix();
