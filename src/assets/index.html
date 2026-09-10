@@ -976,7 +976,7 @@
   </div>
   <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "" };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1435,6 +1435,7 @@
 
     async function renderCluster() {
       state.current = null;
+      state.clusterOverviewOpen = false;
       renderList();
       $("#main").classList.remove("db-fill");
       try {
@@ -1457,7 +1458,7 @@
         ]);
         state.clusterNodes = nodes || [];
         state.clusterStatus = st;
-        if (first || !document.getElementById("cluster-overview")) {
+        if (first || !document.getElementById("cluster-overview-card")) {
           renderClusterLayout(st);
         }
         updateClusterOverview(st);
@@ -1489,17 +1490,20 @@
         $("#main").innerHTML = `
           <div class="title-row"><div><h2>集群</h2><div class="path">多机部署与节点管理</div></div></div>
           <div id="flash" hidden></div>
-          <div class="card">
-            <h3>概览</h3>
-            <p><strong>当前为单机模式</strong></p>
-            <p class="hint">本程序未启用集群。以不同角色启动即可组成集群：</p>
-            <p class="hint">
-              主节点：<code>./cangling-update --role master --cluster-token 共享口令</code><br/>
-              工作节点：<code>./cangling-update --role worker --cluster-token 共享口令</code><br/>
-              工作节点不填 <code>--master</code> 时，会通过 UDP 广播（端口 5401）自动发现主节点；也可用 <code>--master http://主节点:5400</code> 显式指定。
-            </p>
-            ${hostinfoNoteSection()}
+          <div class="card" id="cluster-overview-card">
+            ${clusterOverviewHeader()}
+            <div id="cluster-overview-body" ${state.clusterOverviewOpen ? "" : "hidden"}>
+              <p><strong>当前为单机模式</strong></p>
+              <p class="hint">本程序未启用集群。以不同角色启动即可组成集群：</p>
+              <p class="hint">
+                主节点：<code>./cangling-update --role master --cluster-token 共享口令</code><br/>
+                工作节点：<code>./cangling-update --role worker --cluster-token 共享口令</code><br/>
+                工作节点不填 <code>--master</code> 时，会通过 UDP 广播（端口 5401）自动发现主节点；也可用 <code>--master http://主节点:5400</code> 显式指定。
+              </p>
+              ${hostinfoNoteSection()}
+            </div>
           </div>`;
+        bindClusterOverviewButton();
         bindHostinfoNoteButton();
         return;
       }
@@ -1523,11 +1527,13 @@
           <div><h2>集群</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
         </div>
         <div id="flash" hidden></div>
-        <div class="card">
-          <h3>概览</h3>
-          <p class="hint" id="cluster-overview"></p>
-          <p class="hint" id="cluster-binaries-hint" hidden></p>
-          ${hostinfoNoteSection()}
+        <div class="card" id="cluster-overview-card">
+          ${clusterOverviewHeader()}
+          <div id="cluster-overview-body" ${state.clusterOverviewOpen ? "" : "hidden"}>
+            <p class="hint" id="cluster-overview"></p>
+            <p class="hint" id="cluster-binaries-hint" hidden></p>
+            ${hostinfoNoteSection()}
+          </div>
         </div>
         <div class="card"><h3>节点列表</h3><div id="nodes-body"></div></div>
         ${initCard}
@@ -1536,7 +1542,28 @@
       if (initBtn) initBtn.onclick = startClusterInit;
       const checkBtn = $("#btn-check-cluster");
       if (checkBtn) checkBtn.onclick = startClusterCheck;
+      bindClusterOverviewButton();
       bindHostinfoNoteButton();
+    }
+
+    function clusterOverviewHeader() {
+      return `<div class="title-row" style="margin-bottom:${state.clusterOverviewOpen ? "12px" : "0"}">
+        <h3 style="margin:0">概览</h3>
+        <button type="button" class="btn" id="btn-cluster-overview" aria-expanded="${state.clusterOverviewOpen}">${state.clusterOverviewOpen ? "收起" : "展开"}</button>
+      </div>`;
+    }
+
+    function bindClusterOverviewButton() {
+      const button = $("#btn-cluster-overview");
+      const body = $("#cluster-overview-body");
+      if (!button || !body) return;
+      button.onclick = () => {
+        state.clusterOverviewOpen = !state.clusterOverviewOpen;
+        body.hidden = !state.clusterOverviewOpen;
+        button.textContent = state.clusterOverviewOpen ? "收起" : "展开";
+        button.setAttribute("aria-expanded", String(state.clusterOverviewOpen));
+        button.parentElement.style.marginBottom = state.clusterOverviewOpen ? "12px" : "0";
+      };
     }
 
     function hostinfoNoteSection() {
