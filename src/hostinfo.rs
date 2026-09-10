@@ -1088,7 +1088,7 @@ pub fn parse_lspci_display(raw: &str) -> Vec<GpuInfo> {
             "Hygon DCU"
         } else if lower.contains("huawei") || lower.contains("ascend") {
             "Ascend"
-        } else if lower.contains("amd") || lower.contains("ati") {
+        } else if lower.contains("amd") || lower.contains("ati technologies") {
             "AMD"
         } else if lower.contains("intel") {
             "Intel"
@@ -1130,8 +1130,8 @@ fn collect_gpus() -> Vec<GpuInfo> {
         gpus.extend(parse_nvidia_smi_l(&raw));
     }
     for (bin, args) in [
-        ("hy-smi", &["-L"][..]),
         ("hy-smi", &["--showproductname"][..]),
+        ("hy-smi", &["-L"][..]),
         ("rocm-smi", &["--showproductname"][..]),
     ] {
         if gpus.iter().any(|gpu| gpu.arch == "Hygon DCU") {
@@ -1413,10 +1413,11 @@ physical id\t: 1
         assert_eq!(ascend[0].count, 2);
 
         let accelerators = parse_lspci_display(
-            "03:00.0 Processing accelerators: Hygon DCU K100\n04:00.0 Processing accelerators: Huawei Ascend 910\n",
+            "03:00.0 Processing accelerators: Hygon DCU K100\n04:00.0 Processing accelerators: Huawei Ascend 910\n05:00.0 VGA compatible controller: Inspur Electronic Information Industry Co., Ltd. Device 0750\n",
         );
         assert!(accelerators.iter().any(|g| g.arch == "Hygon DCU"));
         assert!(accelerators.iter().any(|g| g.arch == "Ascend"));
+        assert!(accelerators.iter().any(|g| g.arch == "PCI"));
     }
 
     #[test]
