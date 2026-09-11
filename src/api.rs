@@ -1482,6 +1482,91 @@ fn np4_repo_files_unchanged(
     Ok(true)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Np4RepoFileStamp {
+    name: String,
+    bytes: u64,
+    fingerprint: u64,
+}
+
+fn np4_repo_file_stamps(files: &[PathBuf]) -> std::io::Result<Vec<Np4RepoFileStamp>> {
+    let mut stamps = Vec::with_capacity(files.len());
+    for path in files {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let mut file = std::fs::File::open(path)?;
+        let mut bytes = 0_u64;
+        let mut fingerprint = 0xcbf29ce484222325_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            bytes += count as u64;
+            for byte in &buffer[..count] {
+                fingerprint ^= u64::from(*byte);
+                fingerprint = fingerprint.wrapping_mul(0x100000001b3);
+            }
+        }
+        stamps.push(Np4RepoFileStamp {
+            name,
+            bytes,
+            fingerprint,
+        });
+    }
+    stamps.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(stamps)
+}
+
+fn np4_repo_manifest_path(state: &AppState, project_id: &str) -> Result<PathBuf, AppError> {
+    let project_id = safe_filename(project_id).map_err(|e| AppError::bad(e.to_string()))?;
+    Ok(state
+        .paths
+        .config_dir
+        .join("np4-repo-updates")
+        .join(format!("{project_id}.json")))
+}
+
+fn np4_repo_manifest_matches(
+    path: &FsPath,
+    stamps: &[Np4RepoFileStamp],
+) -> Result<Option<bool>, AppError> {
+    let value = match std::fs::read(path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let saved: Vec<Np4RepoFileStamp> = match serde_json::from_slice(&value) {
+        Ok(saved) => saved,
+        Err(_) => return Ok(Some(false)),
+    };
+    Ok(Some(saved == stamps))
+}
+
+fn save_np4_repo_manifest(
+    path: &FsPath,
+    stamps: &[Np4RepoFileStamp],
+) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::internal("NP4 更新指纹目录无效"))?;
+    std::fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(".manifest-{}.tmp", Uuid::new_v4()));
+    let value = serde_json::to_vec(stamps).map_err(|e| AppError::internal(e.to_string()))?;
+    if let Err(error) = std::fs::write(&temporary, value) {
+        return Err(error.into());
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 async fn update_np4_from_repo(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1519,9 +1604,26 @@ async fn update_np4_from_repo(
             updated: false,
             message: message.into(),
             version: None,
+            files: Vec::new(),
         }));
     };
-    let unchanged = if let Some(version_id) = project.current_version_id.as_deref() {
+    let manifest_path = np4_repo_manifest_path(&state, &id)?;
+    let files_for_stamps = files.clone();
+    let stamps = tokio::task::spawn_blocking(move || np4_repo_file_stamps(&files_for_stamps))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
+    let saved_manifest = {
+        let manifest_path = manifest_path.clone();
+        let stamps_for_compare = stamps.clone();
+        tokio::task::spawn_blocking(move || {
+            np4_repo_manifest_matches(&manifest_path, &stamps_for_compare)
+        })
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??
+    };
+    let unchanged = if let Some(matches) = saved_manifest {
+        matches
+    } else if let Some(version_id) = project.current_version_id.as_deref() {
         let images = state.paths.version_images(&id, version_id);
         let jars = state.paths.version_jars(&id, version_id);
         let compare = files.clone();
@@ -1532,12 +1634,44 @@ async fn update_np4_from_repo(
         false
     };
     if unchanged {
+        if saved_manifest.is_none() {
+            let path = manifest_path.clone();
+            tokio::task::spawn_blocking(move || save_np4_repo_manifest(&path, &stamps))
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))??;
+        }
         job_ok(&state, body.job_id.as_deref(), "软件仓库中的 NP4 更新包没有变化");
         return Ok(Json(Np4RepoUpdateResult {
             updated: false,
             message: "软件仓库中的 JAR 和镜像包没有变化，无需更新".into(),
             version: None,
+            files: Vec::new(),
         }));
+    }
+
+    let available_files: Vec<Np4RepoUpdateFile> = stamps
+        .iter()
+        .map(|stamp| Np4RepoUpdateFile {
+            name: stamp.name.clone(),
+            bytes: stamp.bytes,
+        })
+        .collect();
+    let action = body.action.trim();
+    if action.is_empty() || action == "check" {
+        let message = format!(
+            "发现 {} 个更新文件，请选择“导入并发布”或“替换并重启”",
+            available_files.len()
+        );
+        job_ok(&state, body.job_id.as_deref(), &message);
+        return Ok(Json(Np4RepoUpdateResult {
+            updated: false,
+            message,
+            version: None,
+            files: available_files,
+        }));
+    }
+    if !matches!(action, "publish" | "replace") {
+        return Err(AppError::bad("无效的 NP4 更新操作"));
     }
 
     let tmp = state
@@ -1566,24 +1700,57 @@ async fn update_np4_from_repo(
         staged.push(target);
     }
 
-    let Json(result) = apply_update(
+    let job_id = body.job_id.clone();
+    if action == "publish" {
+        let Json(result) = apply_update(
+            state,
+            project,
+            IncomingUpload {
+                note: "从 NP4 软件仓库导入并发布".into(),
+                restart: body.restart,
+                stop_compose: body.stop_compose,
+                files: staged,
+                tmp,
+                job_id,
+            },
+            "update",
+        )
+        .await?;
+        let path = manifest_path;
+        tokio::task::spawn_blocking(move || save_np4_repo_manifest(&path, &stamps))
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))??;
+        return Ok(Json(Np4RepoUpdateResult {
+            updated: true,
+            message: format!("已将 {} 发布为最新版", result.version.label),
+            version: Some(result.version),
+            files: Vec::new(),
+        }));
+    }
+
+    let Json(result) = apply_replace(
         state,
         project,
         IncomingUpload {
-            note: "从 NP4 软件仓库自动检查更新".into(),
-            restart: body.restart,
-            stop_compose: body.stop_compose,
+            note: String::new(),
+            restart: true,
+            stop_compose: false,
             files: staged,
             tmp,
-            job_id: body.job_id,
+            job_id,
         },
-        "update",
     )
     .await?;
+    let path = manifest_path;
+    tokio::task::spawn_blocking(move || save_np4_repo_manifest(&path, &stamps))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
+    let file_count = result.loaded.len() + result.jars.len();
     Ok(Json(Np4RepoUpdateResult {
         updated: true,
-        message: format!("已将 {} 发布为最新版", result.version.label),
-        version: Some(result.version),
+        message: format!("已替换 {file_count} 个 NP4 更新文件并重启 Compose"),
+        version: None,
+        files: Vec::new(),
     }))
 }
 
@@ -3855,6 +4022,34 @@ mod tests {
         assert!(np4_repo_files_unchanged(&files, &images, &jars).unwrap());
         fs::write(source.join("api.jar"), b"jar-v2").unwrap();
         assert!(!np4_repo_files_unchanged(&files, &images, &jars).unwrap());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn np4_repo_manifest_detects_content_changes_without_copying_packages() {
+        let root = temp_root();
+        let jar = root.join("api.jar");
+        let image = root.join("broker.tar.gz");
+        let manifest = root.join("state/project.json");
+        fs::write(&jar, b"jar-v1").unwrap();
+        fs::write(&image, b"image-v1").unwrap();
+
+        let files = vec![image.clone(), jar.clone()];
+        let stamps = np4_repo_file_stamps(&files).unwrap();
+        assert_eq!(np4_repo_manifest_matches(&manifest, &stamps).unwrap(), None);
+        save_np4_repo_manifest(&manifest, &stamps).unwrap();
+        assert_eq!(
+            np4_repo_manifest_matches(&manifest, &stamps).unwrap(),
+            Some(true)
+        );
+
+        fs::write(&jar, b"jar-v2").unwrap();
+        let changed = np4_repo_file_stamps(&files).unwrap();
+        assert_eq!(
+            np4_repo_manifest_matches(&manifest, &changed).unwrap(),
+            Some(false)
+        );
+        assert_eq!(fs::read_dir(root.join("state")).unwrap().count(), 1);
         let _ = fs::remove_dir_all(&root);
     }
 

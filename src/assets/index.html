@@ -982,7 +982,7 @@
   </div>
   <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -3260,6 +3260,7 @@
         state.versions = versions;
         state.compose = compose;
         state.files = [];
+        state.np4RepoFiles = [];
         if (previousProjectId !== id) {
           projectFiles.path = "";
           projectFiles.selected = "";
@@ -3554,7 +3555,7 @@
         if (!state.busy) addFiles(e.dataTransfer.files);
       };
       file.onchange = () => addFiles(file.files);
-      if (state.files.length) addFiles([]);
+      if (state.files.length || state.np4RepoFiles.length) addFiles([]);
       const tempDrop = $("#temp-drop");
       const tempFile = $("#temp-file");
       tempDrop.onclick = () => { if (!state.busy) tempFile.click(); };
@@ -4774,9 +4775,13 @@
     }
 
     function addFiles(list) {
+      if (list.length) state.np4RepoFiles = [];
       for (const f of list) state.files.push(f);
       const ul = $("#filelist");
-      ul.innerHTML = state.files.map(f => `<li>${esc(f.name)} · ${(f.size / 1048576).toFixed(1)} MB</li>`).join("");
+      if (!ul) return;
+      const localFiles = state.files.map(f => `<li>${esc(f.name)} · ${fmtBytes(f.size)} · 本地文件</li>`);
+      const repoFiles = state.np4RepoFiles.map(f => `<li>${esc(f.name)} · ${fmtBytes(f.bytes)} · 软件仓库更新</li>`);
+      ul.innerHTML = localFiles.concat(repoFiles).join("");
     }
 
     function addTempFiles(list) {
@@ -4941,24 +4946,52 @@
         const data = await api("/api/projects/" + state.current.id + "/np4-repo-update", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: job.id, action: "check" }),
+        });
+        stop();
+        state.files = [];
+        state.np4RepoFiles = Array.isArray(data.files) ? data.files : [];
+        clearBusy();
+        renderProject();
+        flash("ok", data.message || "软件仓库没有变化，无需更新");
+      } catch (e) {
+        clearBusy();
+        if (state.current) renderProject();
+        flash("err", e.message);
+      } finally {
+        stop();
+      }
+    }
+
+    async function runNp4RepoAction(action, stopCompose, restart) {
+      let stop = () => {};
+      setBusy(action === "publish" ? "update" : "replace");
+      try {
+        const job = await api("/api/jobs", { method: "POST" });
+        showProgress("prog", true);
+        renderProgress("prog", {
+          message: action === "publish" ? "正在从软件仓库导入并发布…" : "正在从软件仓库替换文件…",
+          percent: 0,
+          current: 0,
+          total: state.np4RepoFiles.length,
+        });
+        stop = watchJob(job.id, "prog");
+        const data = await api("/api/projects/" + state.current.id + "/np4-repo-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             job_id: job.id,
-            stop_compose: $("#f-stop") ? $("#f-stop").checked : false,
-            restart: $("#restart") ? $("#restart").checked : false,
+            action,
+            stop_compose: !!stopCompose,
+            restart: !!restart,
           }),
         });
         stop();
-        if (!data.updated) {
-          clearBusy();
-          renderProject();
-          flash("ok", data.message || "软件仓库没有变化，无需更新");
-          return;
-        }
-        const message = data.message || "NP4 项目更新完成";
-        state.projectTab = "versions";
+        state.np4RepoFiles = [];
+        if (action === "publish" && data.version) state.projectTab = "versions";
         clearBusy();
         await openProject(state.current.id);
-        flash("ok", message);
+        flash("ok", data.message || (action === "publish" ? "已发布为最新版" : "已替换并重启"));
       } catch (e) {
         clearBusy();
         if (state.current) renderProject();
@@ -4973,7 +5006,8 @@
         flash("err", "正在处理中，请勿重复操作");
         return;
       }
-      if (!snapshotOnly && !state.files.length) {
+      const repoUpdateSelected = !snapshotOnly && !state.files.length && state.np4RepoFiles.length > 0;
+      if (!snapshotOnly && !state.files.length && !repoUpdateSelected) {
         flash("err", "请至少选择一个镜像包或 JAR，或使用「仅备份当前目录」。");
         return;
       }
@@ -4985,6 +5019,13 @@
       ))) {
         return;
       }
+      const restart = snapshotOnly
+        ? stopFirst
+        : !!($("#restart") && $("#restart").checked);
+      if (repoUpdateSelected) {
+        await runNp4RepoAction("publish", stopFirst, restart);
+        return;
+      }
       let stop = () => {};
       setBusy("update");
       try {
@@ -4992,9 +5033,7 @@
         const fd = new FormData();
         fd.append("note", $("#note").value || (snapshotOnly ? "目录快照" : ""));
         fd.append("stop_compose", stopFirst ? "true" : "false");
-        fd.append("restart", snapshotOnly
-          ? (stopFirst ? "true" : "false")
-          : ($("#restart") && $("#restart").checked ? "true" : "false"));
+        fd.append("restart", restart ? "true" : "false");
         fd.append("job_id", job.id);
         if (!snapshotOnly) for (const f of state.files) fd.append("files", f, f.name);
 
@@ -5054,7 +5093,8 @@
         flash("err", "正在处理中，请勿重复操作");
         return;
       }
-      if (!state.files.length) {
+      const repoUpdateSelected = !state.files.length && state.np4RepoFiles.length > 0;
+      if (!state.files.length && !repoUpdateSelected) {
         flash("err", "请至少选择一个镜像包或 JAR。");
         return;
       }
@@ -5064,6 +5104,10 @@
         "确定继续？",
         { danger: true }
       ))) {
+        return;
+      }
+      if (repoUpdateSelected) {
+        await runNp4RepoAction("replace", false, true);
         return;
       }
       let stop = () => {};

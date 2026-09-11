@@ -221,14 +221,18 @@ pub struct UpdateResult {
 #[derive(Debug, Deserialize)]
 pub struct Np4RepoUpdateBody {
     pub job_id: Option<String>,
-    #[serde(default = "default_true")]
+    #[serde(default)]
+    pub action: String,
+    #[serde(default)]
     pub restart: bool,
     #[serde(default)]
     pub stop_compose: bool,
 }
 
-fn default_true() -> bool {
-    true
+#[derive(Debug, Serialize)]
+pub struct Np4RepoUpdateFile {
+    pub name: String,
+    pub bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -236,6 +240,7 @@ pub struct Np4RepoUpdateResult {
     pub updated: bool,
     pub message: String,
     pub version: Option<Version>,
+    pub files: Vec<Np4RepoUpdateFile>,
 }
 
 #[derive(Debug, Serialize)]
