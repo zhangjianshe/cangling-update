@@ -16,6 +16,7 @@ use crate::paths::{
     safe_filename, validate_compose_text, validate_env_text, write_text_atomic, JarMount,
 };
 use crate::state::AppState;
+use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue};
 use axum::middleware;
@@ -79,6 +80,10 @@ pub fn router(state: AppState) -> Router {
             get(project_file_get).put(project_file_put),
         )
         .route("/api/projects/{id}/updates", post(create_update))
+        .route(
+            "/api/projects/{id}/temp-upload",
+            get(temp_upload_status).put(temp_upload_chunk),
+        )
         .route(
             "/api/projects/{id}/np4-repo-update",
             post(update_np4_from_repo),
@@ -1599,6 +1604,189 @@ async fn create_update(
     apply_update(state, project, upload, "update").await
 }
 
+const TEMP_UPLOAD_CHUNK_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+struct TempUploadQuery {
+    upload_id: String,
+    name: String,
+    total: u64,
+    offset: Option<u64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct TempUploadResult {
+    name: String,
+    path: String,
+    uploaded: u64,
+    total: u64,
+    complete: bool,
+}
+
+fn checked_temp_upload_id(value: &str) -> Result<String, AppError> {
+    Uuid::parse_str(value)
+        .map(|id| id.to_string())
+        .map_err(|_| AppError::bad("无效的上传任务 ID"))
+}
+
+async fn temp_upload_paths(
+    project: &Project,
+    query: &TempUploadQuery,
+) -> Result<(String, PathBuf, PathBuf, PathBuf), AppError> {
+    let upload_id = checked_temp_upload_id(&query.upload_id)?;
+    let filename = safe_filename(&query.name).map_err(|e| AppError::bad(e.to_string()))?;
+    let project_dir = PathBuf::from(&project.directory);
+    let metadata = tokio::fs::metadata(&project_dir)
+        .await
+        .map_err(|e| AppError::bad(format!("项目目录不可用：{e}")))?;
+    if !metadata.is_dir() {
+        return Err(AppError::bad("项目目录不是目录"));
+    }
+
+    let temp_dir = project_dir.join("temp");
+    tokio::fs::create_dir_all(&temp_dir).await?;
+    let temp_metadata = tokio::fs::symlink_metadata(&temp_dir).await?;
+    if temp_metadata.file_type().is_symlink() || !temp_metadata.is_dir() {
+        return Err(AppError::bad("项目 temp 路径必须是普通目录"));
+    }
+
+    let staging_dir = temp_dir.join(".uploads");
+    tokio::fs::create_dir_all(&staging_dir).await?;
+    let staging_metadata = tokio::fs::symlink_metadata(&staging_dir).await?;
+    if staging_metadata.file_type().is_symlink() || !staging_metadata.is_dir() {
+        return Err(AppError::bad("项目 temp/.uploads 路径必须是普通目录"));
+    }
+
+    Ok((
+        filename.clone(),
+        temp_dir.join(filename),
+        staging_dir.join(format!("{upload_id}.part")),
+        staging_dir.join(format!("{upload_id}.done")),
+    ))
+}
+
+fn temp_upload_done_value(filename: &str, total: u64) -> String {
+    format!("{filename}\n{total}")
+}
+
+async fn replace_temp_upload(part: &FsPath, target: &FsPath) -> Result<(), AppError> {
+    match tokio::fs::symlink_metadata(target).await {
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(AppError::bad("同名目标是目录，无法用上传文件替换"));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    // part 与 target 位于同一文件系统；Linux rename 会原子替换已有的同名文件。
+    tokio::fs::rename(part, target).await?;
+    Ok(())
+}
+
+async fn temp_upload_status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TempUploadQuery>,
+) -> Result<Json<TempUploadResult>, AppError> {
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    let gate = state.lock_project(&id);
+    let _guard = gate.lock().await;
+    let (filename, target, part, done) = temp_upload_paths(&project, &query).await?;
+    let done_value = temp_upload_done_value(&filename, query.total);
+    let complete = match tokio::fs::read_to_string(&done).await {
+        Ok(value) if value == done_value => tokio::fs::metadata(&target)
+            .await
+            .map(|meta| meta.is_file() && meta.len() == query.total)
+            .unwrap_or(false),
+        _ => false,
+    };
+    let uploaded = if complete {
+        query.total
+    } else {
+        match tokio::fs::symlink_metadata(&part).await {
+            Ok(meta) if meta.file_type().is_file() => meta.len(),
+            Ok(_) => return Err(AppError::bad("上传暂存路径不是普通文件")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    if uploaded > query.total {
+        return Err(AppError::bad(
+            "服务器暂存文件大于待上传文件，请重新选择文件",
+        ));
+    }
+    Ok(Json(TempUploadResult {
+        name: filename,
+        path: target.display().to_string(),
+        uploaded,
+        total: query.total,
+        complete,
+    }))
+}
+
+async fn temp_upload_chunk(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(query): Query<TempUploadQuery>,
+    body: Bytes,
+) -> Result<Json<TempUploadResult>, AppError> {
+    if body.len() > TEMP_UPLOAD_CHUNK_MAX_BYTES {
+        return Err(AppError::bad("上传分片不能超过 16 MiB"));
+    }
+    let offset = query
+        .offset
+        .ok_or_else(|| AppError::bad("缺少上传偏移量"))?;
+    let chunk_len = body.len() as u64;
+    if offset > query.total || chunk_len > query.total.saturating_sub(offset) {
+        return Err(AppError::bad("上传分片超出文件大小"));
+    }
+
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    let gate = state.lock_project(&id);
+    let _guard = gate.lock().await;
+    let (filename, target, part, done) = temp_upload_paths(&project, &query).await?;
+    let current = match tokio::fs::symlink_metadata(&part).await {
+        Ok(meta) if meta.file_type().is_file() => meta.len(),
+        Ok(_) => return Err(AppError::bad("上传暂存路径不是普通文件")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(error) => return Err(error.into()),
+    };
+    if current != offset {
+        return Err(AppError::bad(format!(
+            "上传偏移量不一致，服务器已接收 {current} 字节"
+        )));
+    }
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&part)
+        .await?;
+    file.write_all(&body).await?;
+    file.flush().await?;
+    file.sync_data().await?;
+    let uploaded = current + chunk_len;
+    let complete = uploaded == query.total;
+    if complete {
+        tokio::fs::write(&done, temp_upload_done_value(&filename, query.total)).await?;
+        replace_temp_upload(&part, &target).await?;
+    }
+
+    Ok(Json(TempUploadResult {
+        name: filename,
+        path: target.display().to_string(),
+        uploaded,
+        total: query.total,
+        complete,
+    }))
+}
+
 async fn create_replace(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1633,7 +1821,7 @@ async fn receive_upload(
     tokio::fs::create_dir_all(&tmp).await?;
 
     let mut note = String::new();
-    let mut restart = true;
+    let mut restart = false;
     let mut stop_compose = false;
     let mut files = Vec::new();
     let mut job_id = None;
@@ -3696,6 +3884,69 @@ mod tests {
         for invalid in ["", "..", "../escape", "nested/path", ".hidden"] {
             assert!(create_subdirectory(root.to_str().unwrap(), invalid).is_err(), "{invalid}");
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn temp_upload_id_must_be_a_uuid() {
+        let id = Uuid::new_v4();
+        assert_eq!(checked_temp_upload_id(&id.to_string()).unwrap(), id.to_string());
+        for invalid in ["", "../escape", "not-a-uuid"] {
+            assert!(checked_temp_upload_id(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn temp_upload_accepts_any_safe_filename_and_creates_temp_directory() {
+        let root = temp_root();
+        let project = Project {
+            id: "project-id".into(),
+            name: "project".into(),
+            description: String::new(),
+            directory: root.display().to_string(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            current_version_no: None,
+            current_version_id: None,
+            version_count: 0,
+        };
+        let upload_id = Uuid::new_v4().to_string();
+        let query = TempUploadQuery {
+            upload_id: upload_id.clone(),
+            name: "arbitrary-file.custom-extension".into(),
+            total: 4,
+            offset: None,
+        };
+
+        let (filename, target, part, done) = temp_upload_paths(&project, &query).await.unwrap();
+        assert_eq!(filename, "arbitrary-file.custom-extension");
+        assert_eq!(target, root.join("temp/arbitrary-file.custom-extension"));
+        assert_eq!(part, root.join(format!("temp/.uploads/{upload_id}.part")));
+        assert_eq!(done, root.join(format!("temp/.uploads/{upload_id}.done")));
+        assert!(root.join("temp/.uploads").is_dir());
+
+        let unsafe_query = TempUploadQuery {
+            name: "../escape".into(),
+            ..query
+        };
+        let (filename, target, _, _) = temp_upload_paths(&project, &unsafe_query).await.unwrap();
+        assert_eq!(filename, "escape");
+        assert_eq!(target, root.join("temp/escape"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn completed_temp_upload_replaces_same_named_file() {
+        let root = temp_root();
+        let target = root.join("same-name.bin");
+        let part = root.join("upload.part");
+        fs::write(&target, b"old content").unwrap();
+        fs::write(&part, b"new content").unwrap();
+
+        replace_temp_upload(&part, &target).await.unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"new content");
+        assert!(!part.exists());
         let _ = fs::remove_dir_all(&root);
     }
 }
