@@ -114,7 +114,22 @@ pub struct InstallResult {
 /// 本机所属平台。优先使用 `/etc/os-release` 判断 RPM / Debian 系，
 /// 在发行版信息不足时再根据本机可用的包管理器兜底。
 pub fn host_platform() -> &'static str {
-    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let mut os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    for release_file in ["/etc/kylin-release", "/etc/redhat-release"] {
+        if let Ok(value) = std::fs::read_to_string(release_file) {
+            os_release.push('\n');
+            os_release.push_str(&value);
+        }
+    }
+    let kernel_release = std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if std::path::Path::new("/etc/kylin-release").is_file()
+        || kernel_release.contains(".ky10")
+        || kernel_release.contains("kylin")
+    {
+        os_release.push_str("\nID=kylin\n");
+    }
     detect_host_platform(
         std::env::consts::ARCH,
         &os_release,
@@ -172,10 +187,19 @@ fn os_release_has_any(os_release: &str, ids: &[&str]) -> bool {
 }
 
 fn command_available(program: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+    const SYSTEM_PATHS: &[&str] = &[
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+        "/sbin",
+        "/bin",
+    ];
+    SYSTEM_PATHS
+        .iter()
+        .any(|dir| FsPath::new(dir).join(program).is_file())
+        || std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
 fn platform_name(id: &str) -> &str {
@@ -630,7 +654,10 @@ fn script_description(path: &FsPath) -> Option<String> {
 pub fn build_tarball(root: &FsPath, tab: &str, package: &str) -> Result<Vec<u8>, AppError> {
     let dir = package_dir(root, tab, package)?;
     if !dir.is_dir() {
-        return Err(AppError::not_found("软件包不存在"));
+        return Err(AppError::not_found(format!(
+            "软件包不存在：{}；当前节点需要平台目录 {tab}/",
+            dir.display()
+        )));
     }
 
     let enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
