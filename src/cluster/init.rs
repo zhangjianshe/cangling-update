@@ -157,6 +157,9 @@ pub async fn run_worker_init(
     State(state): State<AppState>,
     Json(body): Json<WorkerInitRequest>,
 ) -> Result<Json<WorkerInitResult>, AppError> {
+    if state.cluster.role != Role::Worker {
+        return Err(AppError::bad("只有工作节点可以执行工作节点初始化"));
+    }
     let mut packages = Vec::new();
     let mut ok = true;
     for pkg in &body.software {
@@ -280,7 +283,7 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
 
     // 1) 本机（master）软件，依次安装，任一失败即中止。
     for pkg in MASTER_SOFTWARE {
-        update_step(state, &me, pkg, "running", String::new(), 0);
+        update_step(state, &me, "master", pkg, "running", String::new(), 0);
         let envs = vec![("CANGLING_CLUSTER_NAME".to_string(), name.to_string())];
         let started = Instant::now();
         let res = repo::install_package(state, repo::host_platform(), pkg, &envs).await;
@@ -289,9 +292,9 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
             Ok(r) => {
                 let output = combined_output(&r);
                 if r.exit_code == Some(0) && !r.timed_out {
-                    update_step(state, &me, pkg, "ok", output, elapsed);
+                    update_step(state, &me, "master", pkg, "ok", output, elapsed);
                 } else {
-                    update_step(state, &me, pkg, "failed", output, elapsed);
+                    update_step(state, &me, "master", pkg, "failed", output, elapsed);
                     return Err(AppError::internal(format!(
                         "{pkg} 安装失败（退出码 {:?}）",
                         r.exit_code
@@ -299,21 +302,38 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
                 }
             }
             Err(e) => {
-                update_step(state, &me, pkg, "failed", format!("{e:#}"), elapsed);
+                update_step(
+                    state,
+                    &me,
+                    "master",
+                    pkg,
+                    "failed",
+                    format!("{e:#}"),
+                    elapsed,
+                );
                 return Err(e);
             }
         }
     }
 
     // 2) Traefik 端口覆盖（best-effort，k3s 未装好时仅告警）。
-    update_step(state, &me, TRAEFIK_STEP, "running", String::new(), 0);
+    update_step(
+        state,
+        &me,
+        "master",
+        TRAEFIK_STEP,
+        "running",
+        String::new(),
+        0,
+    );
     let started = Instant::now();
     let elapsed = started.elapsed().as_millis() as u64;
     match k3s::ensure_traefik_config() {
-        Ok(msg) => update_step(state, &me, TRAEFIK_STEP, "ok", msg, elapsed),
+        Ok(msg) => update_step(state, &me, "master", TRAEFIK_STEP, "ok", msg, elapsed),
         Err(e) => update_step(
             state,
             &me,
+            "master",
             TRAEFIK_STEP,
             "failed",
             format!("{e:#}"),
@@ -322,12 +342,21 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
     }
 
     // 2b) kubectl/k9s 默认 kubeconfig：检查 /root/.kube/config，缺失则从 k3s.yaml 拷贝。
-    update_step(state, &me, KUBECONFIG_STEP, "running", String::new(), 0);
+    update_step(
+        state,
+        &me,
+        "master",
+        KUBECONFIG_STEP,
+        "running",
+        String::new(),
+        0,
+    );
     let started = Instant::now();
     match k3s::ensure_kubeconfig() {
         Ok(msg) => update_step(
             state,
             &me,
+            "master",
             KUBECONFIG_STEP,
             "ok",
             msg,
@@ -336,6 +365,7 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
         Err(e) => update_step(
             state,
             &me,
+            "master",
             KUBECONFIG_STEP,
             "failed",
             format!("{e:#}"),
@@ -365,58 +395,73 @@ async fn init_worker(
 ) {
     let token = state.cluster.token.clone().unwrap_or_default();
     let url = format!("http://{waddr}/api/cluster/init/run");
-    let req = WorkerInitRequest {
-        cluster_name: name.to_string(),
-        k3s_url: k3s_url.to_string(),
-        k3s_token: k3s_token.to_string(),
-        software: WORKER_SOFTWARE.iter().map(|s| s.to_string()).collect(),
-    };
-    let body = serde_json::to_value(&req).unwrap_or(serde_json::Value::Null);
-
-    let result = crate::cluster::http::post_json(&url, &token, &body).await;
-    let packages = match result {
-        Ok((status, value)) if status.is_success() => {
-            match serde_json::from_value::<WorkerInitResult>(value) {
-                Ok(r) => r.packages,
-                Err(e) => {
-                    mark_worker_failed(state, wname, format!("解析 worker 返回失败：{e:#}"));
-                    return;
+    for (index, package) in WORKER_SOFTWARE.iter().enumerate() {
+        update_step(state, wname, "worker", package, "running", String::new(), 0);
+        let req = WorkerInitRequest {
+            cluster_name: name.to_string(),
+            k3s_url: k3s_url.to_string(),
+            k3s_token: k3s_token.to_string(),
+            software: vec![package.to_string()],
+        };
+        let body = serde_json::to_value(&req).unwrap_or(serde_json::Value::Null);
+        let result = crate::cluster::http::post_json(&url, &token, &body).await;
+        let package_result = match result {
+            Ok((status, value)) if status.is_success() => {
+                match serde_json::from_value::<WorkerInitResult>(value) {
+                    Ok(mut response) => response.packages.pop(),
+                    Err(error) => {
+                        mark_worker_remaining_failed(
+                            state,
+                            wname,
+                            index,
+                            format!("解析 worker 返回失败：{error:#}"),
+                        );
+                        return;
+                    }
                 }
             }
-        }
-        Ok((status, value)) => {
-            mark_worker_failed(
-                state,
-                wname,
-                format!("worker 初始化请求失败 {status}: {}", json_error(&value)),
-            );
+            Ok((status, value)) => {
+                mark_worker_remaining_failed(
+                    state,
+                    wname,
+                    index,
+                    format!("worker 初始化请求失败 {status}: {}", json_error(&value)),
+                );
+                return;
+            }
+            Err(error) => {
+                mark_worker_remaining_failed(state, wname, index, format!("{error:#}"));
+                return;
+            }
+        };
+        let Some(result) = package_result else {
+            mark_worker_remaining_failed(state, wname, index, "worker 未返回安装结果".into());
             return;
-        }
-        Err(e) => {
-            mark_worker_failed(state, wname, format!("{e:#}"));
-            return;
-        }
-    };
-
-    for pkg in packages {
-        let pkg_name = pkg.package.clone();
-        let output = combined_output(&pkg);
-        let good = pkg.exit_code == Some(0) && !pkg.timed_out;
+        };
+        let output = combined_output(&result);
+        let good = result.exit_code == Some(0) && !result.timed_out;
         update_step(
             state,
             wname,
-            &pkg_name,
+            "worker",
+            package,
             if good { "ok" } else { "failed" },
             output,
-            pkg.elapsed_ms,
+            result.elapsed_ms,
         );
     }
 }
 
-fn mark_worker_failed(state: &AppState, wname: &str, msg: String) {
+fn mark_worker_remaining_failed(state: &AppState, wname: &str, from: usize, msg: String) {
     if let Ok(mut st) = state.init.lock() {
         for s in st.steps.iter_mut() {
-            if s.node == wname {
+            if s.node == wname
+                && s.role == "worker"
+                && WORKER_SOFTWARE
+                    .iter()
+                    .skip(from)
+                    .any(|package| *package == s.package)
+            {
                 s.state = "failed".to_string();
                 s.output = msg.clone();
             }
@@ -427,6 +472,7 @@ fn mark_worker_failed(state: &AppState, wname: &str, msg: String) {
 fn update_step(
     state: &AppState,
     node: &str,
+    role: &str,
     package: &str,
     new_state: &str,
     output: String,
@@ -434,7 +480,7 @@ fn update_step(
 ) {
     if let Ok(mut st) = state.init.lock() {
         for s in st.steps.iter_mut() {
-            if s.node == node && s.package == package {
+            if s.node == node && s.role == role && s.package == package {
                 s.state = new_state.to_string();
                 s.output = output.clone();
                 s.elapsed_ms = elapsed_ms;
@@ -458,9 +504,11 @@ fn combined_output(r: &repo::InstallResult) -> String {
 }
 
 fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
+    let self_id = crate::cluster::load_or_create_node_id(&state.paths);
+    let self_ip = hostinfo::primary_ip().parse::<std::net::IpAddr>().ok();
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let mut stmt = conn
-        .prepare("SELECT name, addr, last_seen FROM cluster_nodes WHERE role = 'worker'")
+        .prepare("SELECT id, name, addr, last_seen FROM cluster_nodes WHERE role = 'worker'")
         .map_err(AppError::from)?;
     let rows = stmt
         .query_map([], |r| {
@@ -468,17 +516,38 @@ fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
             ))
         })
         .map_err(AppError::from)?;
     let mut out = Vec::new();
     for row in rows {
-        let (name, addr, last_seen) = row.map_err(AppError::from)?;
-        if is_online(&last_seen) {
+        let (id, name, addr, last_seen) = row.map_err(AppError::from)?;
+        let worker_ip = worker_addr_host(&addr);
+        if is_online(&last_seen) && !is_self_worker(&id, worker_ip, &self_id, self_ip) {
             out.push((name, addr));
         }
     }
     Ok(out)
+}
+
+fn is_self_worker(
+    id: &str,
+    worker_ip: Option<std::net::IpAddr>,
+    self_id: &str,
+    self_ip: Option<std::net::IpAddr>,
+) -> bool {
+    id == self_id
+        || (self_ip.is_some() && worker_ip == self_ip)
+        || worker_ip.is_some_and(|ip| ip.is_loopback())
+}
+
+fn worker_addr_host(addr: &str) -> Option<std::net::IpAddr> {
+    let addr = addr.trim().trim_start_matches("http://");
+    addr.parse::<std::net::SocketAddr>()
+        .map(|socket| socket.ip())
+        .or_else(|_| addr.parse::<std::net::IpAddr>())
+        .ok()
 }
 
 fn is_online(last_seen: &str) -> bool {
@@ -524,5 +593,41 @@ mod tests {
     fn kubeconfig_is_a_post_k3s_step() {
         assert!(!MASTER_SOFTWARE.contains(&KUBECONFIG_STEP));
         assert_eq!(KUBECONFIG_STEP, "~/.kube/config");
+    }
+
+    #[test]
+    fn worker_address_parser_supports_ipv4_and_ipv6() {
+        assert_eq!(
+            worker_addr_host("192.168.3.121:5400"),
+            Some("192.168.3.121".parse().unwrap())
+        );
+        assert_eq!(
+            worker_addr_host("http://[::1]:5400"),
+            Some("::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn stale_self_worker_is_excluded_by_id_or_address() {
+        let local: std::net::IpAddr = "192.168.3.215".parse().unwrap();
+        assert!(is_self_worker("same", Some(local), "same", Some(local)));
+        assert!(is_self_worker(
+            "old-worker-id",
+            Some(local),
+            "master-id",
+            Some(local)
+        ));
+        assert!(is_self_worker(
+            "other",
+            Some("127.0.0.1".parse().unwrap()),
+            "master-id",
+            Some(local)
+        ));
+        assert!(!is_self_worker(
+            "worker-id",
+            Some("192.168.3.216".parse().unwrap()),
+            "master-id",
+            Some(local)
+        ));
     }
 }
