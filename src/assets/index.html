@@ -1030,7 +1030,7 @@
     const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false, statusTimer: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
-    const initPoll = { timer: null, inflight: false };
+    const initPoll = { timer: null, inflight: false, selecting: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
@@ -1682,9 +1682,20 @@
       }
     }
 
+    function initStatusSelectionActive(body) {
+      if (initPoll.selecting) return true;
+      const selection = window.getSelection && window.getSelection();
+      if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
+      return body.contains(selection.anchorNode) || body.contains(selection.focusNode);
+    }
+
     function renderInitStatus(init) {
       const body = $("#cluster-init-body");
       if (!body) return;
+      // Replacing innerHTML destroys the browser's current text selection.
+      // Keep polling in the background, but defer painting while the user is
+      // dragging over or has selected initialization/check output.
+      if (initStatusSelectionActive(body)) return;
       if (!init.running && !init.started_at) {
         stopInitPoll();
         body.innerHTML = `<p class="hint">尚未初始化。填写集群名称后点击「初始化集群」。</p>`;
@@ -1710,6 +1721,12 @@
           <tbody>${rows || `<tr><td colspan="6" class="hint">暂无步骤</td></tr>`}</tbody>
         </table>`;
     }
+
+    document.addEventListener("pointerdown", (event) => {
+      initPoll.selecting = !!(event.target && event.target.closest && event.target.closest("#cluster-init-body"));
+    });
+    document.addEventListener("pointerup", () => { initPoll.selecting = false; });
+    document.addEventListener("pointercancel", () => { initPoll.selecting = false; });
 
     async function startClusterInit() {
       const nameEl = $("#cluster-name");
