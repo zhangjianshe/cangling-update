@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 pub const SERVICE_NAME: &str = "cangling-update";
 const UNIT_PATH: &str = "/etc/systemd/system/cangling-update.service";
 const BIN_LINK_DIR: &str = "/usr/local/bin";
+const HOSTINFO_BASHRC_MARKER: &str = "# cangling-update hostinfo";
 
 pub fn install(bind: &str, port: u16, data_dir: Option<&Path>) -> Result<()> {
     require_root()?;
@@ -65,6 +66,10 @@ WantedBy=multi-user.target
     eprintln!("  工作目录 {}", workdir.display());
     eprintln!("  单元文件 {UNIT_PATH}");
     install_bin_link(&exe)?;
+    let bashrc = root_home_dir().join(".bashrc");
+    install_hostinfo_bashrc(&bashrc, port)
+        .with_context(|| format!("更新 {} 失败", bashrc.display()))?;
+    eprintln!("  登录信息 curl -k http://localhost:{port}/hostinfo");
     eprintln!("  管理：systemctl status|restart|stop {SERVICE_NAME}");
     eprintln!();
     print_access_urls(bind, port);
@@ -74,8 +79,11 @@ WantedBy=multi-user.target
 pub fn uninstall() -> Result<()> {
     require_root()?;
     require_systemd()?;
+    let bashrc = root_home_dir().join(".bashrc");
 
     if !Path::new(UNIT_PATH).exists() {
+        remove_hostinfo_bashrc(&bashrc)
+            .with_context(|| format!("清理 {} 失败", bashrc.display()))?;
         eprintln!("服务未安装：{SERVICE_NAME}");
         return Ok(());
     }
@@ -89,6 +97,7 @@ pub fn uninstall() -> Result<()> {
     std::fs::remove_file(UNIT_PATH).with_context(|| format!("删除 {UNIT_PATH}"))?;
     systemctl_best_effort(&["daemon-reload"]);
     uninstall_bin_link();
+    remove_hostinfo_bashrc(&bashrc).with_context(|| format!("清理 {} 失败", bashrc.display()))?;
     eprintln!("已卸载 systemd 服务：{SERVICE_NAME}");
     Ok(())
 }
@@ -101,6 +110,9 @@ pub fn restart() -> Result<()> {
     systemctl(&["restart", SERVICE_NAME])?;
     eprintln!("已重启服务：{SERVICE_NAME}");
     let _ = systemctl(&["--no-pager", "--full", "status", SERVICE_NAME]);
+    // Some systemctl versions do not leave visual spacing after the final
+    // status line. Keep the returned shell prompt on its own line.
+    eprintln!();
     Ok(())
 }
 
@@ -451,6 +463,72 @@ fn running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
+fn root_home_dir() -> PathBuf {
+    std::fs::read_to_string("/etc/passwd")
+        .ok()
+        .and_then(|passwd| root_home_from_passwd(&passwd))
+        .unwrap_or_else(|| PathBuf::from("/root"))
+}
+
+fn root_home_from_passwd(passwd: &str) -> Option<PathBuf> {
+    passwd.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 7 && fields[2] == "0" && fields[5].starts_with('/') {
+            Some(PathBuf::from(fields[5]))
+        } else {
+            None
+        }
+    })
+}
+
+fn is_hostinfo_bashrc_line(line: &str) -> bool {
+    let line = line.trim();
+    let Some(port) = line
+        .strip_prefix("curl -k http://localhost:")
+        .and_then(|rest| rest.strip_suffix("/hostinfo"))
+    else {
+        return false;
+    };
+    port.parse::<u16>().is_ok_and(|port| port > 0)
+}
+
+fn bashrc_without_hostinfo(content: &str) -> String {
+    let mut kept: Vec<&str> = content
+        .lines()
+        .filter(|line| line.trim() != HOSTINFO_BASHRC_MARKER && !is_hostinfo_bashrc_line(line))
+        .collect();
+    while kept.last().is_some_and(|line| line.is_empty()) {
+        kept.pop();
+    }
+    let mut output = kept.join("\n");
+    if !output.is_empty() {
+        output.push('\n');
+    }
+    output
+}
+
+fn install_hostinfo_bashrc(path: &Path, port: u16) -> std::io::Result<()> {
+    let current = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut updated = bashrc_without_hostinfo(&current);
+    updated.push_str(HOSTINFO_BASHRC_MARKER);
+    updated.push('\n');
+    updated.push_str(&format!("curl -k http://localhost:{port}/hostinfo\n"));
+    std::fs::write(path, updated)
+}
+
+fn remove_hostinfo_bashrc(path: &Path) -> std::io::Result<()> {
+    let current = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    std::fs::write(path, bashrc_without_hostinfo(&current))
+}
+
 fn require_systemd() -> Result<()> {
     if !Path::new("/run/systemd/system").exists() && !Path::new("/usr/bin/systemctl").exists() {
         bail!("当前系统未检测到 systemd，无法安装 service");
@@ -605,5 +683,51 @@ mod tests {
         assert!(ensure_bin_link(&exe, &other).is_err());
         assert_eq!(std::fs::read(&other).unwrap(), b"b");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hostinfo_bashrc_is_appended_once_and_port_is_updated() {
+        let dir = temp_dir();
+        let bashrc = dir.join(".bashrc");
+        std::fs::write(&bashrc, "alias ll='ls -l'").unwrap();
+
+        install_hostinfo_bashrc(&bashrc, 5400).unwrap();
+        install_hostinfo_bashrc(&bashrc, 7600).unwrap();
+
+        let content = std::fs::read_to_string(&bashrc).unwrap();
+        assert_eq!(content.matches(HOSTINFO_BASHRC_MARKER).count(), 1);
+        assert_eq!(content.matches("curl -k http://localhost:").count(), 1);
+        assert!(content.ends_with("curl -k http://localhost:7600/hostinfo\n"));
+        assert!(!content.contains("localhost:5400"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn uninstall_removes_only_managed_hostinfo_lines() {
+        let dir = temp_dir();
+        let bashrc = dir.join(".bashrc");
+        std::fs::write(
+            &bashrc,
+            "export A=1\n# cangling-update hostinfo\ncurl -k http://localhost:5400/hostinfo\necho ready\n",
+        )
+        .unwrap();
+
+        remove_hostinfo_bashrc(&bashrc).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&bashrc).unwrap(),
+            "export A=1\necho ready\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn root_home_is_read_from_uid_zero_entry() {
+        assert_eq!(
+            root_home_from_passwd(
+                "user:x:1000:1000::/home/user:/bin/bash\nroot:x:0:0::/srv/root:/bin/bash\n"
+            ),
+            Some(PathBuf::from("/srv/root"))
+        );
     }
 }
