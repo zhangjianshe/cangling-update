@@ -55,7 +55,8 @@ WantedBy=multi-user.target
         exec = exec,
     );
 
-    std::fs::write(UNIT_PATH, unit).with_context(|| format!("写入 {UNIT_PATH}，需要 root 权限"))?;
+    std::fs::write(UNIT_PATH, unit)
+        .with_context(|| format!("写入 systemd 单元文件 {UNIT_PATH} 失败"))?;
     systemctl(&["daemon-reload"])?;
     systemctl(&["enable", "--now", SERVICE_NAME])?;
 
@@ -445,13 +446,9 @@ fn require_root() -> Result<()> {
 }
 
 fn running_as_root() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim() == "0")
-        .unwrap_or(false)
+    // Check the process credential directly. Calling `id -u` can report a
+    // false negative when a minimal root environment has no usable PATH.
+    unsafe { libc::geteuid() == 0 }
 }
 
 fn require_systemd() -> Result<()> {

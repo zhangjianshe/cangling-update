@@ -403,13 +403,7 @@ fn require_root() -> Result<()> {
 }
 
 fn running_as_root() -> bool {
-    Command::new("id")
-        .arg("-u")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim() == "0")
-        .unwrap_or(false)
+    unsafe { libc::geteuid() == 0 }
 }
 
 fn exe_name() -> String {
