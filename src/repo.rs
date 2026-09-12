@@ -5,8 +5,10 @@
 //! cangling-update
 //! repo/
 //!   cangling-repo/         # 离线安装包（原 repo-templates / git 仓库）
-//!     kylin-arm/<软件包>/     # 任意文件；install.sh 可选
-//!     linux-x86/<软件包>/...
+//!     kylin-arm/<软件包>/     # RPM 系 ARM64；install.sh 可选
+//!     kylin-x86/<软件包>/...  # RPM 系 x86_64
+//!     linux-arm/<软件包>/...  # Debian 系 ARM64
+//!     linux-x86/<软件包>/...  # Debian 系 x86_64
 //!     windows/<软件包>/...
 //!   np4/                   # 维护中心 Manifest 集
 //!     np4-update/latest/   # cangling-update 自我更新二进制
@@ -31,10 +33,13 @@ use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-/// 三个平台 Tab（目录名 → 展示名）。
+/// 平台 Tab（目录名 → 展示名）。Linux 必须同时区分包格式和 CPU 架构，
+/// 不能只按架构把麒麟 x86_64 误归到 Debian/Ubuntu 的 `.deb` 目录。
 pub const PLATFORMS: &[(&str, &str)] = &[
-    ("kylin-arm", "麒麟 OS (ARM)"),
-    ("linux-x86", "通用 Linux x86"),
+    ("kylin-arm", "麒麟/RPM Linux (ARM64)"),
+    ("kylin-x86", "麒麟/RPM Linux (x86_64)"),
+    ("linux-arm", "Debian/Ubuntu (ARM64)"),
+    ("linux-x86", "Debian/Ubuntu (x86_64)"),
     ("windows", "Windows"),
 ];
 
@@ -84,7 +89,7 @@ pub struct RepoIndex {
     /// worker 拉取 master 仓库时为 true。
     pub remote: bool,
     pub master: Option<String>,
-    /// 本机平台（kylin-arm / linux-x86）。
+    /// 本机平台（系统包格式 + CPU 架构）。
     pub host_platform: String,
     pub tabs: Vec<RepoTab>,
 }
@@ -106,12 +111,90 @@ pub struct InstallResult {
     pub elapsed_ms: u64,
 }
 
-/// 本机所属平台。本程序仅运行于 Linux，按架构归入 kylin-arm / linux-x86。
+/// 本机所属平台。优先使用 `/etc/os-release` 判断 RPM / Debian 系，
+/// 在发行版信息不足时再根据本机可用的包管理器兜底。
 pub fn host_platform() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" | "arm" => "kylin-arm",
-        _ => "linux-x86",
+    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    detect_host_platform(
+        std::env::consts::ARCH,
+        &os_release,
+        command_available("dpkg"),
+        command_available("rpm"),
+    )
+}
+
+fn detect_host_platform(
+    arch: &str,
+    os_release: &str,
+    has_dpkg: bool,
+    has_rpm: bool,
+) -> &'static str {
+    let arm = matches!(arch, "aarch64" | "arm" | "arm64");
+    let distro = os_release.to_ascii_lowercase();
+    let rpm_family = os_release_has_any(
+        &distro,
+        &[
+            "kylin",
+            "opencloudos",
+            "openeuler",
+            "centos",
+            "rhel",
+            "fedora",
+            "rocky",
+            "almalinux",
+            "anolis",
+            "alinux",
+            "suse",
+        ],
+    ) || (has_rpm && !has_dpkg);
+
+    match (rpm_family, arm) {
+        (true, true) => "kylin-arm",
+        (true, false) => "kylin-x86",
+        (false, true) => "linux-arm",
+        (false, false) => "linux-x86",
     }
+}
+
+fn os_release_has_any(os_release: &str, ids: &[&str]) -> bool {
+    os_release.lines().any(|line| {
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        if key != "id" && key != "id_like" {
+            return false;
+        }
+        let value = value.trim_matches(|c| c == '"' || c == '\'');
+        value
+            .split(|c: char| c.is_ascii_whitespace() || c == ',')
+            .any(|token| ids.contains(&token))
+    })
+}
+
+fn command_available(program: &str) -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|dir| dir.join(program).is_file())
+}
+
+fn platform_name(id: &str) -> &str {
+    PLATFORMS
+        .iter()
+        .find_map(|(platform, name)| (*platform == id).then_some(*name))
+        .unwrap_or(id)
+}
+
+fn ensure_install_platform(tab: &str) -> Result<(), AppError> {
+    let current = host_platform();
+    if PLATFORMS.iter().any(|(id, _)| *id == tab) && tab != current {
+        return Err(AppError::bad(format!(
+            "软件包平台“{}”与当前系统“{}”不匹配；请把对应架构和包格式的软件包同步到 {current}/ 目录",
+            platform_name(tab),
+            platform_name(current)
+        )));
+    }
+    Ok(())
 }
 
 pub fn repo_root(paths: &AppPaths) -> PathBuf {
@@ -183,6 +266,8 @@ pub async fn install_package(
     package: &str,
     envs: &[(String, String)],
 ) -> Result<InstallResult, AppError> {
+    ensure_install_platform(tab)?;
+
     let bytes = if state.cluster.role == Role::Worker {
         let (master, token) = require_master(state)?;
         let url = format!(
@@ -493,9 +578,8 @@ fn find_installer_in_dir(dir: &FsPath) -> Result<String, AppError> {
         }
     }
     files.sort();
-    find_installer(&files).ok_or_else(|| {
-        AppError::bad("该软件包没有安装脚本，仅可下载。安装脚本不是必须的。")
-    })
+    find_installer(&files)
+        .ok_or_else(|| AppError::bad("该软件包没有安装脚本，仅可下载。安装脚本不是必须的。"))
 }
 
 fn read_description(dir: &FsPath, install: Option<&str>) -> String {
@@ -826,7 +910,36 @@ mod tests {
     #[test]
     fn host_platform_is_known() {
         let p = host_platform();
-        assert!(p == "kylin-arm" || p == "linux-x86");
+        assert!(PLATFORMS.iter().any(|(id, _)| *id == p));
+    }
+
+    #[test]
+    fn detects_platform_by_distribution_and_architecture() {
+        assert_eq!(
+            detect_host_platform("x86_64", "ID=kylin\nID_LIKE=rhel", false, true),
+            "kylin-x86"
+        );
+        assert_eq!(
+            detect_host_platform("aarch64", "ID=kylin", false, true),
+            "kylin-arm"
+        );
+        assert_eq!(
+            detect_host_platform("x86_64", "ID=ubuntu\nID_LIKE=debian", true, false),
+            "linux-x86"
+        );
+        assert_eq!(
+            detect_host_platform("aarch64", "ID=debian", true, false),
+            "linux-arm"
+        );
+    }
+
+    #[test]
+    fn package_manager_is_used_when_os_release_is_unknown() {
+        assert_eq!(detect_host_platform("x86_64", "", false, true), "kylin-x86");
+        assert_eq!(
+            detect_host_platform("aarch64", "", true, false),
+            "linux-arm"
+        );
     }
 
     #[test]

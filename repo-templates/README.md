@@ -8,6 +8,8 @@
 | --- | --- | --- | --- |
 | `linux-x86` | 通用 Linux x86（Ubuntu/Debian） | `.deb` | apt / dpkg |
 | `kylin-arm` | 麒麟 ARM（银河麒麟高级服务器 V10，aarch64） | `.rpm`（docker 为静态二进制） | dnf / rpm（docker 为 tar 解包） |
+| `linux-arm` | Ubuntu/Debian ARM64 | `.deb` | apt / dpkg |
+| `kylin-x86` | 麒麟/RPM Linux x86_64 | `.rpm` | dnf / rpm |
 | `windows` | Windows | 脚本 | 手动 |
 
 > k3s 是「单二进制 + airgap 镜像」，与发行版无关，两个 Linux 平台通用（仅架构不同）。

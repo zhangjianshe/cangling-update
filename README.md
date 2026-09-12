@@ -178,8 +178,10 @@ updates/
 cangling-update
 repo/
   cangling-repo/                # 离线安装包（原 repo-templates / git 仓库）
-    kylin-arm/<软件包>/install.sh
-    linux-x86/<软件包>/...
+    kylin-arm/<软件包>/install.sh   # RPM，ARM64
+    kylin-x86/<软件包>/...          # RPM，x86_64
+    linux-arm/<软件包>/...          # DEB，ARM64
+    linux-x86/<软件包>/...          # DEB，x86_64
     windows/<软件包>/...
   np4/                          # 维护中心 Manifest 集
     np4-update/latest/          # cangling-update 自我更新程序
@@ -193,10 +195,10 @@ repo/
 
 控制台的「软件仓库」页可浏览整个 `repo/`（含 np4 与 cangling-repo）。目录为空时提示用维护中心同步，不再提供克隆按钮。
 
-- `repo/cangling-repo/` 下三个平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
+- `repo/cangling-repo/` 下按系统包格式和 CPU 架构划分平台目录，每个子目录是一个**软件包**（目录内容不限：脚本、镜像包、配置、数据等任意文件）。
 - 包内的**安装脚本**（按优先级识别 `install.sh` / `install.bat` / `install.ps1` / `setup.sh` / `setup.bat` / `setup.ps1`）用于「安装」。脚本首行 `#!`，随后连续 `##` 行会被读作包描述。
 - 主节点（或单机）控制台可对每个包「下载」（打包为 tar.gz）或「安装」（解压到临时目录后运行安装脚本）。
-- **工作节点**的「软件仓库」入口拉取的是**主节点的仓库**：可下载，也可「下载并安装」——先通过机器间接口从主节点取包，再在本机运行安装脚本。「安装」按钮只在包平台与本机平台（按架构归入 kylin-arm / linux-x86）匹配时可用。
+- **工作节点**的「软件仓库」入口拉取的是**主节点的仓库**：可下载，也可「下载并安装」——先通过机器间接口从主节点取包，再在本机运行安装脚本。「安装」按钮只在包平台与本机平台（按系统包格式和 CPU 架构归入 `kylin-arm` / `kylin-x86` / `linux-arm` / `linux-x86`）匹配时可用。
 
 ```bash
 mkdir -p repo/cangling-repo/linux-x86/demo

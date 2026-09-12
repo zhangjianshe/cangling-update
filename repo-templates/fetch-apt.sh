@@ -9,7 +9,7 @@ SRC_ROOT="$(cd "$(dirname "$0")" && pwd)"
 
 case "$(uname -m)" in
   x86_64) PLATFORM="linux-x86" ;;
-  aarch64) PLATFORM="kylin-arm" ;;
+  aarch64) PLATFORM="linux-arm" ;;
   *) echo "不支持的架构：$(uname -m)（本脚本需在目标架构上运行）" >&2; exit 1 ;;
 esac
 
