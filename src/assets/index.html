@@ -675,7 +675,13 @@
     .modal.dir-modal { width: min(760px, 100%); height: min(600px, 100%); }
     .modal.form-modal { width: min(600px, 100%); height: auto; max-height: calc(100vh - 96px); }
     .modal.network-modal { width: min(420px, 100%); height: auto; }
+    .modal.password-modal { width: min(440px, 100%); height: auto; max-height: calc(100vh - 96px); }
     .modal.form-modal .modal-body { overflow: auto; }
+    .modal.password-modal .modal-body { padding: 20px; overflow: auto; }
+    .modal.password-modal .modal-foot { padding: 12px 20px; }
+    .password-form .field { margin-bottom: 16px; }
+    .password-form .field:last-of-type { margin-bottom: 0; }
+    .password-form .flash { margin-top: 16px; }
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
@@ -1331,13 +1337,17 @@
 
     function openChangePassword() {
       closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("password-modal");
       $("#dialog-title").textContent = "修改密码";
       setDialogAction("确认修改", submitChangePassword);
       $("#dialog-body").innerHTML = `
-        <div class="field"><label>当前密码</label><input id="pw-old" type="password" autocomplete="current-password" /></div>
-        <div class="field"><label>新密码（至少 8 位）</label><input id="pw-new" type="password" autocomplete="new-password" /></div>
-        <div class="field"><label>确认新密码</label><input id="pw-new2" type="password" autocomplete="new-password" /></div>
-        <div id="pw-flash" hidden></div>`;
+        <div class="password-form">
+          <div class="field"><label>当前密码</label><input id="pw-old" type="password" autocomplete="current-password" /></div>
+          <div class="field"><label>新密码（至少 8 位）</label><input id="pw-new" type="password" autocomplete="new-password" /></div>
+          <div class="field"><label>确认新密码</label><input id="pw-new2" type="password" autocomplete="new-password" /></div>
+          <div id="pw-flash" hidden></div>
+        </div>`;
       $("#dialog").hidden = false;
       const first = $("#pw-old");
       if (first) first.focus();
@@ -5371,6 +5381,7 @@
         modal.classList.remove("dir-modal");
         modal.classList.remove("form-modal");
         modal.classList.remove("network-modal");
+        modal.classList.remove("password-modal");
       }
       const box = $("#dialog");
       if (box) box.hidden = true;
