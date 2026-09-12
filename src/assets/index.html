@@ -1030,7 +1030,7 @@
     const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false, statusTimer: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
-    const initPoll = { timer: null, inflight: false, selecting: false };
+    const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
@@ -1686,7 +1686,8 @@
       if (initPoll.selecting) return true;
       const selection = window.getSelection && window.getSelection();
       if (!selection || selection.isCollapsed || !selection.rangeCount) return false;
-      return body.contains(selection.anchorNode) || body.contains(selection.focusNode);
+      return !initPoll.selectionHandled
+        && (body.contains(selection.anchorNode) || body.contains(selection.focusNode));
     }
 
     function renderInitStatus(init) {
@@ -1723,10 +1724,22 @@
     }
 
     document.addEventListener("pointerdown", (event) => {
-      initPoll.selecting = !!(event.target && event.target.closest && event.target.closest("#cluster-init-body"));
+      const inside = !!(event.target && event.target.closest && event.target.closest("#cluster-init-body"));
+      initPoll.selecting = inside;
+      // A click outside the result area means the previous selection no longer
+      // needs protection (notably when starting another check).
+      initPoll.selectionHandled = !inside;
     });
     document.addEventListener("pointerup", () => { initPoll.selecting = false; });
     document.addEventListener("pointercancel", () => { initPoll.selecting = false; });
+    document.addEventListener("copy", () => {
+      const body = $("#cluster-init-body");
+      const selection = window.getSelection && window.getSelection();
+      if (body && selection && !selection.isCollapsed
+          && (body.contains(selection.anchorNode) || body.contains(selection.focusNode))) {
+        initPoll.selectionHandled = true;
+      }
+    });
 
     async function startClusterInit() {
       const nameEl = $("#cluster-name");
