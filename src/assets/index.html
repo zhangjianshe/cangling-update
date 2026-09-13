@@ -2595,10 +2595,10 @@
           <div class="field"><label>共享目录</label><input id="st-path-h" type="text" value="${v('path')}" placeholder="/data/share" /><p class="hint">主机上的绝对路径，将作为 samba 共享暴露。</p></div>
           <div class="field"><label>目标目录（挂载点）</label><input id="st-target-dir-h" type="text" value="${v('target_dir')}" placeholder="/mnt/storage" /><p class="hint">部署到其它主机时挂载到此目录，会自动创建。</p></div>
           <div class="form-grid">
-            <div class="field"><label>用户名（选填）</label><input id="st-username-h" type="text" value="${v('username')}" /></div>
-            <div class="field"><label>密码（选填）</label><input id="st-password-h" type="password" placeholder="${s && s.password ? '已设置，留空则不修改' : ''}" /></div>
+            <div class="field"><label>存储用户名</label><input id="st-username-h" type="text" value="${v('username')}" placeholder="cangling-storage" autocomplete="off" /></div>
+            <div class="field"><label>存储密码</label><input id="st-password-h" type="password" placeholder="${s ? '已设置时留空则不修改' : '请输入 Samba 密码'}" autocomplete="new-password" /></div>
           </div>
-          <p class="hint">不填用户名时使用匿名 guest 访问（适合集群内网）；填写则启用 samba 用户认证。</p>
+          <p class="hint">部署时会创建同名的受限 OS 用户和 Samba 用户，禁用 guest。目标主机通过权限为 600 的凭据文件挂载；容器 root 默认映射为 uid/gid 0。</p>
         </div>
         <div class="form-section">
           <div class="form-section-title">高级选项</div>

@@ -12,6 +12,7 @@ use axum::Json;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path as FsPath, PathBuf};
 use std::process::{Command, Stdio};
 use uuid::Uuid;
@@ -74,6 +75,12 @@ pub struct ClusterShareRequest {
     pub name: String,
     pub share: String,
     pub path: String,
+    #[serde(default)]
+    pub target_dir: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
     #[serde(default)]
     pub options: String,
 }
@@ -280,9 +287,9 @@ pub async fn cluster_start_share(
         server: String::new(),
         share: body.share,
         path: body.path,
-        target_dir: String::new(),
-        username: String::new(),
-        password: String::new(),
+        target_dir: body.target_dir,
+        username: body.username,
+        password: body.password,
         options: body.options,
         status: String::new(),
         message: String::new(),
@@ -473,6 +480,9 @@ fn normalize(
         Some(e) if body.password.is_empty() => e.password.clone(),
         _ => body.password.clone(),
     };
+    if password.contains('\n') || password.contains('\r') {
+        return Err(AppError::bad("密码不能包含换行符"));
+    }
 
     let mut s = Storage {
         id: existing
@@ -525,9 +535,10 @@ fn normalize(
         if s.target_dir.is_empty() {
             return Err(AppError::bad("请填写目标目录（挂载点）"));
         }
-        if !s.username.is_empty() && s.password.is_empty() {
-            return Err(AppError::bad("填写了用户名时，密码不能为空"));
+        if s.username.is_empty() || s.password.is_empty() {
+            return Err(AppError::bad("主机 CIFS 共享必须填写专用用户名和密码"));
         }
+        validate_storage_username(&s.username)?;
         if s.host_id.is_empty() {
             s.host_name = "本机".into();
         } else if s.host_name.is_empty() {
@@ -595,6 +606,9 @@ async fn forward_start_share(state: &AppState, s: &Storage) -> Result<String, Ap
         "name": s.name,
         "share": s.share,
         "path": s.path,
+        "target_dir": s.target_dir,
+        "username": s.username,
+        "password": s.password,
         "options": s.options,
     });
     let (status, value) = cluster::http::post_json(&url, &token, &body)
@@ -688,7 +702,8 @@ async fn deploy_host_share(
         target_dir: s.target_dir.clone(),
         username: s.username.clone(),
         password: s.password.clone(),
-        options: s.options.clone(),
+        // host_share 的 options 是 Samba 服务端配置行，不能作为 mount -o 参数透传。
+        options: String::new(),
     };
 
     if target_host.is_empty() || target_host == local_id {
@@ -882,8 +897,23 @@ fn mount_from_spec(
         return Ok(format!("已挂载（无需重复挂载）：{mnt}"));
     }
 
-    let (fstype, src, opts) = build_mount_spec_parts(protocol, server, share, username, password, options)?;
+    let credentials_file = if protocol.trim() == "nfs" || username.trim().is_empty() {
+        None
+    } else {
+        Some(credentials_file_path(mnt))
+    };
+    let (fstype, src, opts) = build_mount_spec_parts(
+        protocol,
+        server,
+        share,
+        username,
+        credentials_file.as_deref(),
+        options,
+    )?;
     ensure_mount_helper(&fstype)?;
+    if credentials_file.is_some() {
+        write_credentials_file(mnt, username, password)?;
+    }
     let mut cmd = Command::new("mount");
     cmd.arg("-t").arg(&fstype);
     if !opts.is_empty() {
@@ -894,6 +924,9 @@ fn mount_from_spec(
         .output()
         .map_err(|e| AppError::internal(format!("执行 mount 失败：{e}")))?;
     if !out.status.success() {
+        if let Some(path) = credentials_file {
+            let _ = std::fs::remove_file(path);
+        }
         let msg = cmd_message(&out);
         return Err(AppError::internal(if msg.is_empty() {
             "挂载失败".to_string()
@@ -946,6 +979,13 @@ fn unmount_dir(target_dir: &str) -> Result<String, AppError> {
         Ok(false) => {}
         Err(e) => note.push_str(&format!("；但清理 /etc/fstab 失败：{e}")),
     }
+    let credentials = credentials_file_path(mnt);
+    if credentials.exists() {
+        match std::fs::remove_file(&credentials) {
+            Ok(()) => note.push_str("，并已删除 CIFS 凭据文件"),
+            Err(e) => note.push_str(&format!("；但删除 CIFS 凭据文件失败：{e}")),
+        }
+    }
     Ok(note)
 }
 
@@ -954,7 +994,7 @@ fn build_mount_spec_parts(
     server: &str,
     share: &str,
     username: &str,
-    password: &str,
+    credentials_file: Option<&FsPath>,
     options: &str,
 ) -> Result<(String, String, String), AppError> {
     match protocol.trim() {
@@ -982,18 +1022,76 @@ fn build_mount_spec_parts(
                 }
                 opts.push_str("guest");
             } else {
-                // 设置了用户名/密码时自动带入挂载凭据。
+                let credentials_file = credentials_file
+                    .ok_or_else(|| AppError::internal("缺少 CIFS 凭据文件"))?;
                 if !opts.is_empty() {
                     opts.push(',');
                 }
-                opts.push_str(&format!("username={}", username));
-                if !password.is_empty() {
-                    opts.push_str(&format!(",password={}", password));
-                }
+                opts.push_str(&format!("credentials={}", credentials_file.display()));
             }
+            append_mount_default(&mut opts, "vers", "3.0");
+            append_mount_default(&mut opts, "uid", "0");
+            append_mount_default(&mut opts, "gid", "0");
+            append_mount_default(&mut opts, "file_mode", "0660");
+            append_mount_default(&mut opts, "dir_mode", "0770");
             Ok(("cifs".to_string(), src, opts))
         }
     }
+}
+
+fn append_mount_default(options: &mut String, key: &str, value: &str) {
+    let present = options.split(',').any(|part| {
+        part.trim()
+            .split_once('=')
+            .map(|(k, _)| k.trim().eq_ignore_ascii_case(key))
+            .unwrap_or_else(|| part.trim().eq_ignore_ascii_case(key))
+    });
+    if !present {
+        if !options.is_empty() {
+            options.push(',');
+        }
+        options.push_str(key);
+        options.push('=');
+        options.push_str(value);
+    }
+}
+
+fn credentials_file_path(mnt: &str) -> PathBuf {
+    // FNV-1a：相同挂载点在不同节点生成相同、短且不含特殊字符的文件名。
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in mnt.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    FsPath::new("/etc/cangling-update").join(format!("storage-{hash:016x}.credentials"))
+}
+
+fn write_credentials_file(mnt: &str, username: &str, password: &str) -> Result<PathBuf, AppError> {
+    if username.contains('\n')
+        || username.contains('\r')
+        || password.contains('\n')
+        || password.contains('\r')
+    {
+        return Err(AppError::bad("CIFS 用户名和密码不能包含换行符"));
+    }
+    let path = credentials_file_path(mnt);
+    let parent = path.parent().expect("credentials path has parent");
+    std::fs::create_dir_all(parent)
+        .map_err(|e| AppError::internal(format!("创建 CIFS 凭据目录失败：{e}")))?;
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| AppError::internal(format!("设置 CIFS 凭据目录权限失败：{e}")))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| AppError::internal(format!("创建 CIFS 凭据文件失败：{e}")))?;
+    writeln!(file, "username={username}\npassword={password}")
+        .map_err(|e| AppError::internal(format!("写入 CIFS 凭据文件失败：{e}")))?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| AppError::internal(format!("设置 CIFS 凭据文件权限失败：{e}")))?;
+    Ok(path)
 }
 
 fn is_mounted(mnt: &str) -> bool {
@@ -1019,18 +1117,36 @@ fn ensure_mount_helper(fstype: &str) -> Result<(), AppError> {
 fn persist_fstab(fstype: &str, src: &str, mnt: &str, opts: &str) -> Result<bool, String> {
     let fstab = FsPath::new("/etc/fstab");
     let existing = std::fs::read_to_string(fstab).map_err(|e| e.to_string())?;
-    if existing
-        .lines()
-        .any(|l| l.split_whitespace().nth(1) == Some(mnt))
-    {
-        return Ok(false);
+    let desired = format!("{src} {mnt} {fstype} {opts} 0 0");
+    let mut found = false;
+    let mut changed = false;
+    let mut rewritten = String::new();
+    for line in existing.lines() {
+        if line.split_whitespace().nth(1) == Some(mnt) {
+            found = true;
+            if line.trim() == desired {
+                rewritten.push_str(line);
+            } else {
+                rewritten.push_str(&desired);
+                changed = true;
+            }
+        } else {
+            rewritten.push_str(line);
+        }
+        rewritten.push('\n');
+    }
+    if found {
+        if changed {
+            std::fs::write(fstab, rewritten).map_err(|e| e.to_string())?;
+        }
+        return Ok(changed);
     }
     let mut f = std::fs::OpenOptions::new()
         .append(true)
         .open(fstab)
         .map_err(|e| e.to_string())?;
     writeln!(f, "\n# cangling-storage {}", mnt).map_err(|e| e.to_string())?;
-    writeln!(f, "{src} {mnt} {fstype} {opts} 0 0").map_err(|e| e.to_string())?;
+    writeln!(f, "{desired}").map_err(|e| e.to_string())?;
     Ok(true)
 }
 
@@ -1120,27 +1236,27 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
         ));
     }
 
+    if s.username.trim().is_empty() || s.password.is_empty() {
+        return Err(AppError::bad(
+            "主机 CIFS 共享必须填写专用用户名和密码，不再允许匿名 guest 部署",
+        ));
+    }
+    validate_storage_username(&s.username)?;
+    validate_samba_options(&s.options)?;
+    ensure_os_user(&s.username)?;
+    ensure_samba_user(&s.username, &s.password)?;
+    prepare_share_directory(dir, &s.username)?;
+
     let conf_dir = FsPath::new("/etc/samba");
     std::fs::create_dir_all(conf_dir)
         .map_err(|e| AppError::internal(format!("创建 {} 失败：{e}", conf_dir.display())))?;
 
-    // 认证：填写用户名/密码时使用用户认证；否则允许匿名 guest 访问（适合集群内网）。
-    let auth_note = if s.username.is_empty() {
-        "匿名 guest 访问".to_string()
-    } else {
-        ensure_samba_user(&s.username, &s.password)?;
-        format!("用户认证（{}）", s.username)
-    };
+    let auth_note = format!("专用 OS/Samba 用户认证（{}）", s.username);
 
     let conf_file = conf_dir.join(format!("cangling-{}.conf", s.id));
     let mut snippet = format!(
         "[{share_name}]\n   path = {dir}\n   browseable = yes\n   read only = no\n"
     );
-    if s.username.is_empty() {
-        snippet.push_str("   guest ok = yes\n");
-    } else {
-        snippet.push_str(&format!("   valid users = {}\n   guest ok = no\n", s.username));
-    }
     for line in s.options.lines() {
         let l = line.trim();
         if !l.is_empty() {
@@ -1149,6 +1265,11 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
             snippet.push('\n');
         }
     }
+    // 安全和身份映射选项由系统最后写入，不能被高级选项覆盖。
+    snippet.push_str(&format!(
+        "   valid users = {0}\n   force user = {0}\n   guest ok = no\n   create mask = 0660\n   directory mask = 0770\n   force create mode = 0660\n   force directory mode = 0770\n",
+        s.username
+    ));
     std::fs::write(&conf_file, snippet)
         .map_err(|e| AppError::internal(format!("写入 {} 失败：{e}", conf_file.display())))?;
 
@@ -1177,6 +1298,93 @@ fn sanitize_share_name(raw: &str) -> Result<String, AppError> {
         return Err(AppError::bad("共享名称包含非法字符"));
     }
     Ok(name.to_string())
+}
+
+fn validate_storage_username(username: &str) -> Result<(), AppError> {
+    let username = username.trim();
+    if username == "root" {
+        return Err(AppError::bad("存储账号不能使用 root，请使用专用账号"));
+    }
+    if username.is_empty()
+        || username.len() > 32
+        || !username
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(AppError::bad(
+            "存储用户名只能包含字母、数字、下划线或短横线，且最长 32 个字符",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_samba_options(options: &str) -> Result<(), AppError> {
+    const MANAGED: &[&str] = &[
+        "path",
+        "read only",
+        "guest ok",
+        "valid users",
+        "force user",
+        "create mask",
+        "directory mask",
+        "force create mode",
+        "force directory mode",
+    ];
+    for line in options.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.starts_with('[') {
+            return Err(AppError::bad("Samba 高级选项不能定义新的共享段"));
+        }
+        if let Some((key, _)) = line.split_once('=') {
+            if MANAGED.iter().any(|managed| key.trim().eq_ignore_ascii_case(managed)) {
+                return Err(AppError::bad(format!(
+                    "Samba 选项 {} 由系统管理，不能在高级选项中覆盖",
+                    key.trim()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_os_user(username: &str) -> Result<(), AppError> {
+    if Command::new("id")
+        .args(["-u", username])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    let shell = ["/usr/sbin/nologin", "/sbin/nologin", "/bin/false"]
+        .into_iter()
+        .find(|path| FsPath::new(path).exists())
+        .unwrap_or("/bin/false");
+    let out = Command::new("useradd")
+        .args(["--system", "--no-create-home", "--shell", shell, username])
+        .output()
+        .map_err(|e| AppError::internal(format!("创建存储 OS 用户失败：{e}")))?;
+    if !out.status.success() {
+        return Err(AppError::internal(format!(
+            "创建存储 OS 用户 {username} 失败：{}",
+            cmd_message(&out)
+        )));
+    }
+    Ok(())
+}
+
+fn prepare_share_directory(dir: &str, username: &str) -> Result<(), AppError> {
+    let out = Command::new("chown")
+        .args([username, dir])
+        .output()
+        .map_err(|e| AppError::internal(format!("设置共享目录所有者失败：{e}")))?;
+    if !out.status.success() {
+        return Err(AppError::internal(format!(
+            "设置共享目录所有者失败：{}",
+            cmd_message(&out)
+        )));
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o770))
+        .map_err(|e| AppError::internal(format!("设置共享目录权限失败：{e}")))
 }
 
 fn ensure_include(smb_conf: &FsPath, include_line: &str) -> Result<(), AppError> {
@@ -1347,24 +1555,50 @@ mod tests {
     }
 
     #[test]
+    fn storage_username_must_be_a_non_root_service_account() {
+        assert!(validate_storage_username("cangling-storage").is_ok());
+        assert!(validate_storage_username("storage_01").is_ok());
+        assert!(validate_storage_username("root").is_err());
+        assert!(validate_storage_username("bad user").is_err());
+        assert!(validate_storage_username("../bad").is_err());
+    }
+
+    #[test]
+    fn samba_security_options_cannot_be_overridden() {
+        assert!(validate_samba_options("hosts allow = 10.0.0.0/24").is_ok());
+        assert!(validate_samba_options("guest ok = yes").is_err());
+        assert!(validate_samba_options("force user = root").is_err());
+        assert!(validate_samba_options("[other]").is_err());
+    }
+
+    #[test]
     fn mount_spec_builds_cifs_and_nfs() {
         let (fstype, src, opts) =
-            build_mount_spec_parts("cifs", "10.0.0.2", "backup", "u", "p", "iocharset=utf8")
-                .unwrap();
+            build_mount_spec_parts(
+                "cifs",
+                "10.0.0.2",
+                "backup",
+                "u",
+                Some(FsPath::new("/etc/cangling-update/test.credentials")),
+                "iocharset=utf8",
+            )
+            .unwrap();
         assert_eq!(fstype, "cifs");
         assert_eq!(src, "//10.0.0.2/backup");
-        assert!(opts.contains("username=u"));
-        assert!(opts.contains("password=p"));
+        assert!(opts.contains("credentials=/etc/cangling-update/test.credentials"));
         assert!(opts.contains("iocharset=utf8"));
+        assert!(opts.contains("vers=3.0"));
+        assert!(opts.contains("uid=0"));
+        assert!(opts.contains("gid=0"));
 
         let (fstype, src, _) =
-            build_mount_spec_parts("nfs", "10.0.0.2", "/data", "", "", "").unwrap();
+            build_mount_spec_parts("nfs", "10.0.0.2", "/data", "", None, "").unwrap();
         assert_eq!(fstype, "nfs");
         assert_eq!(src, "10.0.0.2:/data");
 
         // 未设置用户名时自动带入 guest 选项。
         let (_, _, guest_opts) =
-            build_mount_spec_parts("cifs", "10.0.0.2", "backup", "", "", "").unwrap();
+            build_mount_spec_parts("cifs", "10.0.0.2", "backup", "", None, "").unwrap();
         assert!(guest_opts.contains("guest"));
     }
 
