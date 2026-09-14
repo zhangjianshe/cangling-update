@@ -394,10 +394,15 @@ impl Docker {
             cmd.stdout(Stdio::piped());
         }
         cmd.stderr(Stdio::piped());
-        let result = tokio::time::timeout(timeout, cmd.output())
+        // `Command::output()` captures stdout again. Spawning first preserves
+        // the file descriptor configured above for binary database dumps.
+        let child = cmd
+            .spawn()
+            .context("failed to spawn docker compose exec")?;
+        let result = tokio::time::timeout(timeout, child.wait_with_output())
             .await
             .map_err(|_| anyhow::anyhow!("数据库命令执行超时"))?
-            .context("failed to spawn docker compose exec")?;
+            .context("failed to wait for docker compose exec")?;
         let stdout = String::from_utf8_lossy(&result.stdout).to_string();
         let stderr = String::from_utf8_lossy(&result.stderr).to_string();
         if !result.status.success() {
@@ -429,6 +434,13 @@ impl Docker {
             .await;
         match result {
             Ok(message) => {
+                let bytes = std::fs::metadata(&part)
+                    .with_context(|| format!("无法读取临时文件 {}", part.display()))?
+                    .len();
+                if bytes == 0 {
+                    let _ = std::fs::remove_file(&part);
+                    bail!("数据库命令没有产生任何输出，已拒绝保存 0 字节备份");
+                }
                 std::fs::rename(&part, destination)
                     .with_context(|| format!("无法完成文件 {}", destination.display()))?;
                 Ok(message)

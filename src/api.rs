@@ -3815,9 +3815,13 @@ async fn db_backup_create(
     let lock = state.lock_project(&id);
     tokio::spawn(async move {
         let _guard = lock.lock().await;
-        run_state
-            .jobs
-            .set(&job_id, "backup", "正在生成 PostgreSQL 自定义格式备份…", 10, 100);
+        run_state.jobs.set(
+            &job_id,
+            "backup",
+            "正在导出 PostgreSQL 数据（数据库工具不提供准确百分比，大库需要等待）…",
+            0,
+            0,
+        );
         let result = crate::dbbackup::create(
             &run_state.docker,
             std::path::Path::new(&project.directory),
@@ -3882,7 +3886,13 @@ async fn db_backup_schedule_run(
                 &conn, &id, Some(&today), "running", "自动备份正在执行", false,
             );
         }
-        run_state.jobs.set(&job_id, "backup", "正在执行自动备份…", 10, 100);
+        run_state.jobs.set(
+            &job_id,
+            "backup",
+            "正在导出 PostgreSQL 数据（数据库工具不提供准确百分比，大库需要等待）…",
+            0,
+            0,
+        );
         let result = crate::dbbackup::run_schedule(&run_state, &project, &schedule).await;
         if let Ok(conn) = run_state.db.lock() {
             match &result {

@@ -45,6 +45,8 @@ pub struct BackupManifest {
     pub globals_bytes: u64,
     pub globals_sha256: String,
     pub objects: Vec<BackupObject>,
+    #[serde(default = "default_true")]
+    pub valid: bool,
 }
 
 fn default_backup_kind() -> String {
@@ -157,7 +159,13 @@ pub fn list(root: &Path, project_id: &str) -> Result<Vec<BackupManifest>, AppErr
     if let Ok(entries) = fs::read_dir(root.join(project_id)) {
         for entry in entries.flatten() {
             if entry.path().is_dir() {
-                if let Ok(manifest) = read_manifest(&entry.path()) {
+                if let Ok(mut manifest) = read_manifest(&entry.path()) {
+                    manifest.valid = manifest.dump_bytes > 0
+                        && manifest.globals_bytes > 0
+                        && entry.path().join("database.dump").metadata().map(|m| m.len()).ok()
+                            == Some(manifest.dump_bytes)
+                        && entry.path().join("globals.sql").metadata().map(|m| m.len()).ok()
+                            == Some(manifest.globals_bytes);
                     backups.push(manifest);
                 }
             }
@@ -332,6 +340,7 @@ pub async fn create(
         globals_bytes: globals.metadata().map(|meta| meta.len()).unwrap_or(0),
         globals_sha256: sha256_file(&globals)?,
         objects,
+        valid: true,
     };
     let data = serde_json::to_vec_pretty(&manifest)
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -441,6 +450,9 @@ pub async fn restore(
     }
     let source_dir = backup_dir(root, project_id, backup_id)?;
     let manifest = read_manifest(&source_dir)?;
+    if manifest.dump_bytes == 0 || manifest.globals_bytes == 0 {
+        return Err(AppError::bad("该备份是 0 字节无效备份，拒绝恢复"));
+    }
     if manifest.database != body.database {
         return Err(AppError::bad("备份数据库与目标数据库不一致"));
     }
@@ -847,6 +859,7 @@ mod tests {
                 name: "roads".into(),
                 kind: "table".into(),
             }],
+            valid: true,
         };
         let json = serde_json::to_vec(&manifest).unwrap();
         let decoded: BackupManifest = serde_json::from_slice(&json).unwrap();
