@@ -303,6 +303,7 @@ mod tests {
             config_dir: exe_dir.join("config"),
             db_path: exe_dir.join("config/cangling.db"),
             backups_dir: exe_dir.join("config/backups"),
+            db_backups_dir: exe_dir.join("config/db-backups"),
             uploads_dir: exe_dir.join("config/uploads"),
             portal_dir: exe_dir.join("config/portal"),
             logs_dir: exe_dir.join("logs"),

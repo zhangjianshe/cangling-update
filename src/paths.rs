@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 /// config/
 ///   cangling.db            # sqlite
 ///   backups/<project>/<version>/
+///   db-backups/<project>/<backup>/
 ///   uploads/               # in-flight multipart
 ///   portal/                # homepage background and item icons
 /// ```
@@ -18,6 +19,7 @@ pub struct AppPaths {
     pub config_dir: PathBuf,
     pub db_path: PathBuf,
     pub backups_dir: PathBuf,
+    pub db_backups_dir: PathBuf,
     pub uploads_dir: PathBuf,
     pub portal_dir: PathBuf,
     pub logs_dir: PathBuf,
@@ -44,10 +46,13 @@ impl AppPaths {
             .with_context(|| format!("create config dir {}", config_dir.display()))?;
 
         let backups_dir = config_dir.join("backups");
+        let db_backups_dir = config_dir.join("db-backups");
         let uploads_dir = config_dir.join("uploads");
         let portal_dir = config_dir.join("portal");
         std::fs::create_dir_all(&backups_dir)
             .with_context(|| format!("create backups dir {}", backups_dir.display()))?;
+        std::fs::create_dir_all(&db_backups_dir)
+            .with_context(|| format!("create database backups dir {}", db_backups_dir.display()))?;
         std::fs::create_dir_all(&uploads_dir)
             .with_context(|| format!("create uploads dir {}", uploads_dir.display()))?;
         std::fs::create_dir_all(&portal_dir)
@@ -65,6 +70,7 @@ impl AppPaths {
             exe_dir,
             config_dir,
             backups_dir,
+            db_backups_dir,
             uploads_dir,
             portal_dir,
             logs_dir,

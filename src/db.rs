@@ -138,6 +138,23 @@ CREATE TABLE IF NOT EXISTS storages (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS db_backup_schedules (
+    project_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    service TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    time_of_day TEXT NOT NULL DEFAULT '03:00',
+    retain_count INTEGER NOT NULL DEFAULT 7,
+    storage_id TEXT NOT NULL DEFAULT '',
+    backup_before_update INTEGER NOT NULL DEFAULT 1,
+    last_run_date TEXT NOT NULL DEFAULT '',
+    last_started_at TEXT NOT NULL DEFAULT '',
+    last_finished_at TEXT NOT NULL DEFAULT '',
+    last_status TEXT NOT NULL DEFAULT '',
+    last_message TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
 "#,
     )?;
     let _ = conn.execute(

@@ -474,6 +474,18 @@
     .db-toolbar label { margin-bottom: 4px; font-size: 13px; }
     .db-toolbar .db-filter-field { flex: 1 1 200px; min-width: 180px; }
     .db-toolbar > .field:last-child { flex: 0 0 auto; min-width: 0; }
+    .db-backup-actions { display: flex; gap: 8px; align-items: center; }
+    .db-backup-list { padding: 14px; overflow: auto; }
+    .db-backup-item { border: 1px solid var(--line); background: var(--bg-input); padding: 12px; margin-bottom: 10px; }
+    .db-backup-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+    .db-backup-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .db-backup-head .btn { margin-left: auto; flex: 0 0 auto; }
+    .db-backup-meta { color: var(--muted); font-size: 13px; line-height: 1.6; word-break: break-word; }
+    .db-restore-form { padding: 16px; overflow: auto; }
+    .db-restore-mode { display: flex; gap: 18px; margin-bottom: 14px; }
+    .db-restore-tables { border: 1px solid var(--line); background: var(--bg-input); max-height: 300px; overflow: auto; padding: 8px 12px; margin: 10px 0; }
+    .db-restore-tables label { display: flex; align-items: center; gap: 8px; min-height: 30px; cursor: pointer; }
+    .db-restore-schema { font-weight: 600; padding: 8px 0 4px; color: var(--muted); }
     .db-toolbar .db-filter-field input {
       width: 100%; height: 34px; padding: 7px 10px;
     }
@@ -3571,7 +3583,7 @@
             <div class="field"><label>数据库</label><div class="combo" id="db-database"></div></div>
             <div class="field"><label>Schema</label><div class="combo" id="db-schema"></div></div>
             <div class="field db-filter-field"><label>表和视图</label><input id="db-filter" type="text" placeholder="过滤表 / 视图" autocomplete="off" spellcheck="false" /></div>
-            <div class="field"><label>&nbsp;</label><button type="button" class="btn" id="btn-db-sql">执行 SQL</button></div>
+            <div class="field"><label>&nbsp;</label><div class="db-backup-actions"><button type="button" class="btn" id="btn-db-backup">备份数据库</button><button type="button" class="btn" id="btn-db-backups">备份历史</button><button type="button" class="btn" id="btn-db-auto-backup">自动备份</button><button type="button" class="btn" id="btn-db-sql">执行 SQL</button></div></div>
           </div>
           <div class="db-split">
             <div class="db-objects" id="db-objects"><div class="empty">请选择容器和 schema</div></div>
@@ -4204,6 +4216,12 @@
       });
       const sqlBtn = $("#btn-db-sql");
       if (sqlBtn) sqlBtn.onclick = openDbSqlDialog;
+      const backupBtn = $("#btn-db-backup");
+      if (backupBtn) backupBtn.onclick = dbCreateBackup;
+      const backupsBtn = $("#btn-db-backups");
+      if (backupsBtn) backupsBtn.onclick = openDbBackups;
+      const autoBackupBtn = $("#btn-db-auto-backup");
+      if (autoBackupBtn) autoBackupBtn.onclick = openDbBackupSchedule;
       const filter = $("#db-filter");
       if (filter) {
         if (filter.value !== (dbAdmin.filter || "")) filter.value = dbAdmin.filter || "";
@@ -4725,6 +4743,261 @@
         else dbShowErr(e.message);
       }
       if (extra) extra.disabled = false;
+    }
+
+    function dbBackupRequestBody() {
+      return {
+        service: dbAdmin.service,
+        engine: dbAdmin.engine || "postgres",
+        database: dbAdmin.database,
+      };
+    }
+
+    function dbRequireBackupTarget() {
+      if (!dbAdmin.service) {
+        dbShowErr("请先选择 PostgreSQL 容器");
+        return false;
+      }
+      if (!dbAdmin.database) {
+        dbShowErr("请先选择数据库");
+        return false;
+      }
+      return true;
+    }
+
+    function showDbJobDialog(title, job) {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("form-modal");
+      $("#dialog-title").textContent = title;
+      $("#dialog-body").innerHTML = `<div style="padding:20px">
+        <div class="progress-wrap" id="db-backup-job">
+          <div class="progress-meta"><span id="db-backup-job-msg">准备中</span><span id="db-backup-job-pct">0%</span></div>
+          <div class="progress" id="db-backup-job-bar"><span></span></div>
+          <div class="flash err" id="db-backup-job-error" hidden></div>
+        </div>
+      </div>`;
+      $("#dialog").dataset.dbJobId = job.id;
+      $("#dialog").hidden = false;
+      renderProgress("db-backup-job", job);
+    }
+
+    async function waitDbJob(job, done) {
+      let current = job;
+      while (current && !current.done) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        current = await api("/api/jobs/" + current.id);
+        if ($("#dialog").dataset.dbJobId === current.id) {
+          renderProgress("db-backup-job", current);
+        }
+      }
+      if (!current || $("#dialog").dataset.dbJobId !== current.id) return;
+      if (current && current.error) {
+        const error = $("#db-backup-job-error");
+        if (error) {
+          error.textContent = current.error;
+          error.hidden = false;
+        }
+        setDialogAction("返回备份历史", openDbBackups);
+        return;
+      }
+      if (done) await done(current);
+    }
+
+    async function dbCreateBackup() {
+      if (!dbRequireBackupTarget()) return;
+      if (!(await confirmDialog(`确定备份数据库 ${dbAdmin.database}？备份过程中数据库可以继续运行。`))) return;
+      try {
+        const job = await api("/api/projects/" + state.current.id + "/db/backups", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(dbBackupRequestBody()),
+        });
+        showDbJobDialog("备份数据库 · " + dbAdmin.database, job);
+        await waitDbJob(job, async () => {
+          setDialogAction("查看备份历史", openDbBackups);
+        });
+      } catch (e) {
+        dbShowErr(e.message);
+      }
+    }
+
+    function dbBackupCounts(backup) {
+      const objects = backup.objects || [];
+      const tables = objects.filter((object) => object.kind === "table").length;
+      const views = objects.filter((object) => object.kind === "view" || object.kind === "materialized-view").length;
+      const sequences = objects.filter((object) => object.kind === "sequence").length;
+      return `${tables} 张表 · ${views} 个视图 · ${sequences} 个序列`;
+    }
+
+    function dbBackupKind(kind) {
+      return ({ manual: "手工备份", scheduled: "自动备份", "pre-restore": "恢复前安全备份", "pre-update": "升级前备份" })[kind] || "手工备份";
+    }
+
+    async function openDbBackupSchedule() {
+      if (!dbRequireBackupTarget()) return;
+      closeDialog();
+      $("#dialog-title").textContent = "自动备份 · " + dbAdmin.database;
+      $("#dialog-body").innerHTML = `<div style="padding:20px"><div class="empty db-loading"><span class="spin"></span>加载中…</div></div>`;
+      $("#dialog").hidden = false;
+      try {
+        const [schedule, storages] = await Promise.all([
+          api("/api/projects/" + state.current.id + "/db/backup-schedule"),
+          api("/api/storages"),
+        ]);
+        const storageOptions = (storages || []).filter((item) => item.target_dir).map((item) =>
+          `<option value="${esc(item.id)}" ${item.id === schedule.storageId ? "selected" : ""}>${esc(item.name)} · ${esc(item.target_dir)}</option>`
+        ).join("");
+        const statusText = schedule.lastStatus
+          ? `${schedule.lastStatus === "success" ? "成功" : schedule.lastStatus === "failed" ? "失败" : "执行中"}${schedule.lastFinishedAt ? " · " + fmtDateTime(schedule.lastFinishedAt) : ""}<br />${esc(schedule.lastMessage || "")}`
+          : "尚未执行自动备份";
+        $("#dialog-body").innerHTML = `<div class="db-restore-form">
+          <p class="hint">每天按服务器本地时间执行。程序错过设定时间后，会在当天恢复运行时补执行一次。</p>
+          <label class="check"><input id="db-auto-enabled" type="checkbox" ${schedule.enabled ? "checked" : ""} /> 启用自动备份</label>
+          <div class="field"><label>执行时间</label><input id="db-auto-time" type="time" value="${esc(schedule.timeOfDay || "03:00")}" /></div>
+          <div class="field"><label>保留自动备份份数</label><input id="db-auto-retain" type="number" min="1" max="365" value="${schedule.retainCount || 7}" /></div>
+          <div class="field"><label>同时复制到存储</label><select id="db-auto-storage"><option value="">仅保存在本机</option>${storageOptions}</select></div>
+          <label class="check"><input id="db-auto-before-update" type="checkbox" ${schedule.backupBeforeUpdate !== false ? "checked" : ""} /> 项目升级前自动备份数据库</label>
+          <div class="flash" style="margin-top:14px">最近执行：${statusText}</div>
+          <div class="row" style="margin-top:14px"><button type="button" class="btn" id="db-auto-run">立即执行一次</button></div>
+          <div class="flash err" id="db-auto-error" hidden></div>
+        </div>`;
+        const payload = () => ({
+          enabled: $("#db-auto-enabled").checked,
+          service: dbAdmin.service,
+          database: dbAdmin.database,
+          timeOfDay: $("#db-auto-time").value || "03:00",
+          retainCount: Number($("#db-auto-retain").value || 7),
+          storageId: $("#db-auto-storage").value,
+          backupBeforeUpdate: $("#db-auto-before-update").checked,
+        });
+        const save = async () => api("/api/projects/" + state.current.id + "/db/backup-schedule", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload()),
+        });
+        setDialogAction("保存", async () => {
+          try { await save(); closeDialog(); flash("ok", "自动备份设置已保存"); }
+          catch (e) { const box = $("#db-auto-error"); box.textContent = e.message; box.hidden = false; }
+        });
+        $("#db-auto-run").onclick = async () => {
+          try {
+            await save();
+            const job = await api("/api/projects/" + state.current.id + "/db/backup-schedule/run", { method: "POST" });
+            showDbJobDialog("执行自动备份 · " + dbAdmin.database, job);
+            await waitDbJob(job, async () => setDialogAction("查看备份历史", openDbBackups));
+          } catch (e) { const box = $("#db-auto-error"); box.textContent = e.message; box.hidden = false; }
+        };
+      } catch (e) {
+        $("#dialog-body").innerHTML = `<div class="flash err" style="margin:20px">${esc(e.message)}</div>`;
+      }
+    }
+
+    async function openDbBackups() {
+      if (!dbRequireBackupTarget()) return;
+      closeDialog();
+      $("#dialog-title").textContent = "数据库备份历史 · " + dbAdmin.database;
+      $("#dialog-body").innerHTML = `<div class="db-backup-list"><div class="empty db-loading"><span class="spin"></span>加载中…</div></div>`;
+      $("#dialog").hidden = false;
+      try {
+        const items = await api(
+          "/api/projects/" + state.current.id + "/db/backups?" + dbQs(),
+        );
+        const box = $("#dialog-body .db-backup-list");
+        if (!items.length) {
+          box.innerHTML = `<div class="empty">当前数据库还没有逻辑备份</div>`;
+          setDialogAction("立即备份", dbCreateBackup);
+          return;
+        }
+        box.innerHTML = items.map((backup) => `<div class="db-backup-item">
+          <div class="db-backup-head"><strong>${esc(fmtDateTime(backup.createdAt))} · ${esc(backup.database)} · ${esc(dbBackupKind(backup.kind))}</strong><button type="button" class="btn danger" data-db-restore="${esc(backup.id)}">恢复</button></div>
+          <div class="db-backup-meta">PostgreSQL ${esc(backup.serverVersion || "未知")} ${backup.postgisVersion ? "· PostGIS " + esc(backup.postgisVersion) : ""}<br />${esc(dbBackupCounts(backup))} · ${fmtBytes(backup.dumpBytes || 0)}<br />SHA-256：<span class="mono">${esc(backup.dumpSha256 || "")}</span></div>
+        </div>`).join("");
+        for (const button of box.querySelectorAll("[data-db-restore]")) {
+          const backup = items.find((item) => item.id === button.getAttribute("data-db-restore"));
+          button.onclick = () => openDbRestore(backup);
+        }
+        setDialogAction("立即备份", dbCreateBackup);
+      } catch (e) {
+        $("#dialog-body .db-backup-list").innerHTML = `<div class="flash err">${esc(e.message)}</div>`;
+      }
+    }
+
+    function openDbRestore(backup) {
+      closeDialog();
+      const tables = (backup.objects || []).filter((object) => object.kind === "table");
+      const schemas = Array.from(new Set(tables.map((table) => table.schema)));
+      const initialSchema = schemas.includes(dbAdmin.schema) ? dbAdmin.schema : (schemas[0] || "");
+      $("#dialog-title").textContent = "恢复数据库备份 · " + fmtDateTime(backup.createdAt);
+      $("#dialog-body").innerHTML = `<div class="db-restore-form">
+        <div class="flash err" id="db-restore-error" hidden></div>
+        <p class="hint">执行任何覆盖前，系统会先自动备份当前数据库。序列值随整库恢复；单表恢复后会根据表中最大值自动校正。普通视图没有独立数据。</p>
+        <div class="db-restore-mode">
+          <label><input type="radio" name="db-restore-mode" value="tables" checked /> 恢复所选表的数据</label>
+          <label><input type="radio" name="db-restore-mode" value="full" /> 恢复整个数据库</label>
+        </div>
+        <div id="db-restore-table-options">
+          <div class="field"><label>Schema</label><select id="db-restore-schema">${schemas.map((schema) => `<option value="${esc(schema)}" ${schema === initialSchema ? "selected" : ""}>${esc(schema)}</option>`).join("")}</select></div>
+          <div class="row" style="margin:8px 0"><button type="button" class="btn" id="db-restore-all">全选</button><button type="button" class="btn" id="db-restore-none">清空</button></div>
+          <div class="db-restore-tables" id="db-restore-tables"></div>
+          <p class="hint">若未选择的表通过外键引用所选表，系统将拒绝执行，不会使用 CASCADE。</p>
+        </div>
+        <div class="field"><label>输入数据库名 <strong>${esc(backup.database)}</strong> 确认覆盖</label><input id="db-restore-confirm" type="text" autocomplete="off" spellcheck="false" /></div>
+      </div>`;
+      $("#dialog").hidden = false;
+      const renderTables = () => {
+        const schema = $("#db-restore-schema").value;
+        const items = tables.filter((table) => table.schema === schema);
+        $("#db-restore-tables").innerHTML = items.length
+          ? items.map((table) => `<label><input type="checkbox" value="${esc(table.name)}" /> <span>${esc(table.name)}</span></label>`).join("")
+          : `<div class="empty">此 schema 没有表</div>`;
+      };
+      renderTables();
+      $("#db-restore-schema").onchange = renderTables;
+      $("#db-restore-all").onclick = () => $("#db-restore-tables").querySelectorAll("input").forEach((input) => { input.checked = true; });
+      $("#db-restore-none").onclick = () => $("#db-restore-tables").querySelectorAll("input").forEach((input) => { input.checked = false; });
+      for (const radio of document.querySelectorAll('input[name="db-restore-mode"]')) {
+        radio.onchange = () => { $("#db-restore-table-options").hidden = radio.value === "full" && radio.checked; };
+      }
+      setDialogAction("确认恢复", () => submitDbRestore(backup));
+    }
+
+    async function submitDbRestore(backup) {
+      const mode = document.querySelector('input[name="db-restore-mode"]:checked').value;
+      const schema = $("#db-restore-schema").value;
+      const tables = Array.from($("#db-restore-tables").querySelectorAll("input:checked")).map((input) => input.value);
+      const confirmDatabase = $("#db-restore-confirm").value.trim();
+      const error = $("#db-restore-error");
+      if (mode === "tables" && !tables.length) {
+        error.textContent = "请至少选择一张表"; error.hidden = false; return;
+      }
+      if (confirmDatabase !== backup.database) {
+        error.textContent = "输入的数据库名不一致"; error.hidden = false; return;
+      }
+      const target = mode === "full" ? "整个数据库" : `${schema} 下 ${tables.length} 张表的数据`;
+      if (!(await confirmDialog(`将覆盖 ${backup.database} 的${target}。恢复前会自动生成安全备份，确定继续？`, { danger: true }))) return;
+      try {
+        const job = await api(
+          "/api/projects/" + state.current.id + "/db/backups/" + encodeURIComponent(backup.id) + "/restore",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              service: dbAdmin.service,
+              engine: dbAdmin.engine || "postgres",
+              database: dbAdmin.database,
+              mode,
+              schema,
+              tables,
+              confirm_database: confirmDatabase,
+            }),
+          },
+        );
+        showDbJobDialog("恢复数据库 · " + backup.database, job);
+        await waitDbJob(job, async () => {
+          setDialogAction("返回数据库管理", () => { closeDialog(); dbOnDatabase(dbAdmin.database); });
+        });
+      } catch (e) {
+        error.textContent = e.message; error.hidden = false;
+      }
     }
 
     async function openDbSqlDialog() {
@@ -5414,7 +5687,10 @@
         modal.classList.remove("password-modal");
       }
       const box = $("#dialog");
-      if (box) box.hidden = true;
+      if (box) {
+        box.hidden = true;
+        delete box.dataset.dbJobId;
+      }
       const body = $("#dialog-body");
       if (body) body.innerHTML = "";
     }

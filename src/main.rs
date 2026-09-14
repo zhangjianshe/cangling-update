@@ -5,6 +5,7 @@ mod binaries;
 mod cluster;
 mod db;
 mod dbadmin;
+mod dbbackup;
 mod docker;
 mod error;
 mod gitrepo;
@@ -260,6 +261,8 @@ async fn main() -> anyhow::Result<()> {
         cli.images_dir,
     );
     let app = api::router(state.clone());
+
+    tokio::spawn(dbbackup::scheduler(state.clone()));
 
     if cluster_cfg.role != cluster::Role::Worker {
         tokio::spawn(images::monitor(state.clone()));

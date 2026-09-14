@@ -139,6 +139,22 @@ pub fn router(state: AppState) -> Router {
         .route("/api/projects/{id}/db/rows", get(db_rows))
         .route("/api/projects/{id}/db/query", post(db_query))
         .route(
+            "/api/projects/{id}/db/backups",
+            get(db_backups).post(db_backup_create),
+        )
+        .route(
+            "/api/projects/{id}/db/backups/{backup_id}/restore",
+            post(db_backup_restore),
+        )
+        .route(
+            "/api/projects/{id}/db/backup-schedule",
+            get(db_backup_schedule_get).put(db_backup_schedule_save),
+        )
+        .route(
+            "/api/projects/{id}/db/backup-schedule/run",
+            post(db_backup_schedule_run),
+        )
+        .route(
             "/api/projects/{id}/db/row",
             post(db_update_row).delete(db_delete_row),
         )
@@ -2103,6 +2119,13 @@ async fn apply_update(
     let live = PathBuf::from(&project.directory);
     let version_dir = state.paths.version_dir(&project.id, &version_id);
 
+    job_set(&state, job_id.as_deref(), "database-backup", "正在执行升级前数据库备份…", 0, 0);
+    if let Err(err) = crate::dbbackup::create_before_update(&state, &project).await {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        job_err(&state, job_id.as_deref(), &err.to_string());
+        return Err(AppError::bad(format!("升级前数据库备份失败，已取消升级：{err}")));
+    }
+
     let stopped = compose_down_for_backup(&state, &live, job_id.as_deref(), stop_compose).await;
     let stopped = match stopped {
         Ok(v) => v,
@@ -2344,6 +2367,13 @@ async fn apply_replace(
     if archives.is_empty() && jar_files.is_empty() {
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Err(AppError::bad("请上传镜像包或 JAR"));
+    }
+
+    job_set(&state, job_id.as_deref(), "database-backup", "正在执行升级前数据库备份…", 0, 0);
+    if let Err(err) = crate::dbbackup::create_before_update(&state, &project).await {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        job_err(&state, job_id.as_deref(), &err.to_string());
+        return Err(AppError::bad(format!("升级前数据库备份失败，已取消替换：{err}")));
     }
 
     let mut loaded = Vec::new();
@@ -3747,6 +3777,175 @@ async fn db_query(
         )
         .await?,
     ))
+}
+
+async fn db_backups(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DbParams>,
+) -> Result<Json<Vec<crate::dbbackup::BackupManifest>>, AppError> {
+    let _ = db_project(&state, &id)?;
+    let mut backups = crate::dbbackup::list(&state.paths.db_backups_dir, &id)?;
+    if !q.service.is_empty() {
+        backups.retain(|backup| backup.service == q.service);
+    }
+    if let Some(database) = q.database.as_deref().filter(|value| !value.is_empty()) {
+        backups.retain(|backup| backup.database == database);
+    }
+    Ok(Json(backups))
+}
+
+async fn db_backup_create(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<crate::dbbackup::BackupBody>,
+) -> Result<Json<crate::progress::JobProgress>, AppError> {
+    crate::dbadmin::require_engine(body.engine.as_deref())?;
+    let project = db_project(&state, &id)?;
+    let job = if let Some(job_id) = body.job_id.as_deref() {
+        state
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| AppError::not_found("进度任务不存在"))?
+    } else {
+        state.jobs.create()
+    };
+    let job_id = job.id.clone();
+    let run_state = state.clone();
+    let lock = state.lock_project(&id);
+    tokio::spawn(async move {
+        let _guard = lock.lock().await;
+        run_state
+            .jobs
+            .set(&job_id, "backup", "正在生成 PostgreSQL 自定义格式备份…", 10, 100);
+        let result = crate::dbbackup::create(
+            &run_state.docker,
+            std::path::Path::new(&project.directory),
+            &run_state.paths.db_backups_dir,
+            &id,
+            &body.service,
+            &body.database,
+            "manual",
+        )
+        .await;
+        match result {
+            Ok(backup) => run_state.jobs.finish_ok(
+                &job_id,
+                &format!("数据库备份完成：{}（{} 字节）", backup.database, backup.dump_bytes),
+            ),
+            Err(error) => run_state.jobs.finish_err(&job_id, &error.to_string()),
+        }
+    });
+    Ok(Json(job))
+}
+
+async fn db_backup_schedule_get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::dbbackup::BackupSchedule>, AppError> {
+    let _ = db_project(&state, &id)?;
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    Ok(Json(crate::dbbackup::get_schedule(&conn, &id)?))
+}
+
+async fn db_backup_schedule_save(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<crate::dbbackup::BackupScheduleBody>,
+) -> Result<Json<crate::dbbackup::BackupSchedule>, AppError> {
+    let _ = db_project(&state, &id)?;
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    Ok(Json(crate::dbbackup::save_schedule(&conn, &id, &body)?))
+}
+
+async fn db_backup_schedule_run(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<crate::progress::JobProgress>, AppError> {
+    let project = db_project(&state, &id)?;
+    let schedule = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        crate::dbbackup::get_schedule(&conn, &id)?
+    };
+    if schedule.service.is_empty() || schedule.database.is_empty() {
+        return Err(AppError::bad("请先保存自动备份的容器和数据库"));
+    }
+    let job = state.jobs.create();
+    let job_id = job.id.clone();
+    let run_state = state.clone();
+    let lock = state.lock_project(&id);
+    tokio::spawn(async move {
+        let _guard = lock.lock().await;
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        if let Ok(conn) = run_state.db.lock() {
+            let _ = crate::dbbackup::set_run_status(
+                &conn, &id, Some(&today), "running", "自动备份正在执行", false,
+            );
+        }
+        run_state.jobs.set(&job_id, "backup", "正在执行自动备份…", 10, 100);
+        let result = crate::dbbackup::run_schedule(&run_state, &project, &schedule).await;
+        if let Ok(conn) = run_state.db.lock() {
+            match &result {
+                Ok(backup) => { let _ = crate::dbbackup::set_run_status(&conn, &id, None, "success", &format!("备份完成：{}", backup.id), true); }
+                Err(error) => { let _ = crate::dbbackup::set_run_status(&conn, &id, None, "failed", &error.to_string(), true); }
+            }
+        }
+        match result {
+            Ok(backup) => run_state.jobs.finish_ok(&job_id, &format!("自动备份完成：{}", backup.id)),
+            Err(error) => run_state.jobs.finish_err(&job_id, &error.to_string()),
+        }
+    });
+    Ok(Json(job))
+}
+
+async fn db_backup_restore(
+    State(state): State<AppState>,
+    Path((id, backup_id)): Path<(String, String)>,
+    Json(body): Json<crate::dbbackup::RestoreBody>,
+) -> Result<Json<crate::progress::JobProgress>, AppError> {
+    crate::dbadmin::require_engine(body.engine.as_deref())?;
+    let project = db_project(&state, &id)?;
+    let job = if let Some(job_id) = body.job_id.as_deref() {
+        state
+            .jobs
+            .get(job_id)
+            .ok_or_else(|| AppError::not_found("进度任务不存在"))?
+    } else {
+        state.jobs.create()
+    };
+    let job_id = job.id.clone();
+    let run_state = state.clone();
+    let lock = state.lock_project(&id);
+    tokio::spawn(async move {
+        let _guard = lock.lock().await;
+        run_state.jobs.set(
+            &job_id,
+            "safety-backup",
+            "恢复前正在自动备份当前数据库…",
+            5,
+            100,
+        );
+        let result = crate::dbbackup::restore(
+            &run_state.docker,
+            std::path::Path::new(&project.directory),
+            &run_state.paths.db_backups_dir,
+            &id,
+            &backup_id,
+            &body,
+        )
+        .await;
+        match result {
+            Ok(restored) => run_state.jobs.finish_ok(
+                &job_id,
+                &format!(
+                    "数据库恢复完成；恢复前安全备份：{}",
+                    restored.safety_backup_id
+                ),
+            ),
+            Err(error) => run_state.jobs.finish_err(&job_id, &error.to_string()),
+        }
+    });
+    Ok(Json(job))
 }
 
 async fn vendor_xterm_css() -> impl IntoResponse {

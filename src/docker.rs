@@ -332,6 +332,130 @@ impl Docker {
         }
     }
 
+    async fn compose_exec_file_io(
+        &self,
+        dir: &Path,
+        service: &str,
+        user: Option<&str>,
+        env: &[(&str, &str)],
+        command: &[String],
+        input: Option<&Path>,
+        output: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<String> {
+        self.ensure().await?;
+        validate_service_name(service)?;
+        if command.is_empty() {
+            bail!("exec 命令为空");
+        }
+        if user.is_some_and(|value| !is_safe_unix_user(value)) {
+            bail!("无效的容器用户");
+        }
+        let compose = self.inner.read().await.compose.clone();
+        let mut args = vec!["exec".to_string(), "-T".to_string()];
+        if let Some(user) = user {
+            args.extend(["-u".into(), user.into()]);
+        }
+        for (key, value) in env {
+            if !is_safe_env_key(key) {
+                bail!("无效的环境变量名");
+            }
+            args.extend(["-e".into(), format!("{key}={value}")]);
+        }
+        args.push(service.into());
+        args.extend(command.iter().cloned());
+        let mut cmd = match compose {
+            ComposeKind::Plugin => {
+                let mut cmd = Command::new("docker");
+                cmd.arg("compose");
+                cmd
+            }
+            ComposeKind::Standalone => Command::new("docker-compose"),
+            ComposeKind::Missing => bail!("本机未安装 docker compose"),
+        };
+        cmd.args(&args).current_dir(dir).kill_on_drop(true);
+        if let Some(path) = input {
+            cmd.stdin(Stdio::from(
+                std::fs::File::open(path)
+                    .with_context(|| format!("无法读取 {}", path.display()))?,
+            ));
+        } else {
+            cmd.stdin(Stdio::null());
+        }
+        if let Some(path) = output {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            cmd.stdout(Stdio::from(
+                std::fs::File::create(path)
+                    .with_context(|| format!("无法创建 {}", path.display()))?,
+            ));
+        } else {
+            cmd.stdout(Stdio::piped());
+        }
+        cmd.stderr(Stdio::piped());
+        let result = tokio::time::timeout(timeout, cmd.output())
+            .await
+            .map_err(|_| anyhow::anyhow!("数据库命令执行超时"))?
+            .context("failed to spawn docker compose exec")?;
+        let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+        if !result.status.success() {
+            bail!("容器数据库命令失败：{}", stderr.trim().if_empty(stdout.trim()));
+        }
+        Ok(if stdout.trim().is_empty() { stderr } else { stdout })
+    }
+
+    pub async fn compose_exec_to_file(
+        &self,
+        dir: &Path,
+        service: &str,
+        user: Option<&str>,
+        env: &[(&str, &str)],
+        command: &[String],
+        destination: &Path,
+        timeout: Duration,
+    ) -> Result<String> {
+        let extension = destination
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("dump");
+        let part = destination.with_extension(format!("{extension}.part"));
+        let _ = std::fs::remove_file(&part);
+        let result = self
+            .compose_exec_file_io(
+                dir, service, user, env, command, None, Some(&part), timeout,
+            )
+            .await;
+        match result {
+            Ok(message) => {
+                std::fs::rename(&part, destination)
+                    .with_context(|| format!("无法完成文件 {}", destination.display()))?;
+                Ok(message)
+            }
+            Err(error) => {
+                let _ = std::fs::remove_file(&part);
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn compose_exec_from_file(
+        &self,
+        dir: &Path,
+        service: &str,
+        user: Option<&str>,
+        env: &[(&str, &str)],
+        command: &[String],
+        source: &Path,
+        timeout: Duration,
+    ) -> Result<String> {
+        self.compose_exec_file_io(
+            dir, service, user, env, command, Some(source), None, timeout,
+        )
+        .await
+    }
+
     pub async fn compose_exec_argv(&self, service: &str) -> Result<(String, Vec<String>)> {
         self.ensure().await?;
         validate_service_name(service)?;

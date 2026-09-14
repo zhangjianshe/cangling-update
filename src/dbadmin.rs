@@ -11,12 +11,12 @@ const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 200;
 
 #[derive(Debug, Clone)]
-struct PgConn {
-    user: String,
-    password: Option<String>,
-    host: bool,
-    container_user: Option<String>,
-    default_database: String,
+pub(crate) struct PgConn {
+    pub(crate) user: String,
+    pub(crate) password: Option<String>,
+    pub(crate) host: bool,
+    pub(crate) container_user: Option<String>,
+    pub(crate) default_database: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -259,7 +259,11 @@ async fn try_psql(
         .await
 }
 
-async fn probe_conn(docker: &Docker, dir: &Path, service: &str) -> Result<PgConn, AppError> {
+pub(crate) async fn probe_conn(
+    docker: &Docker,
+    dir: &Path,
+    service: &str,
+) -> Result<PgConn, AppError> {
     let env = printenv(docker, dir, service).await.unwrap_or_default();
     let default_database = env_value(&env, "POSTGRES_DB").unwrap_or_else(|| "postgres".into());
     let user = env_value(&env, "POSTGRES_USER").unwrap_or_else(|| "postgres".into());
@@ -318,7 +322,7 @@ async fn probe_conn(docker: &Docker, dir: &Path, service: &str) -> Result<PgConn
     )))
 }
 
-async fn psql(
+pub(crate) async fn psql(
     docker: &Docker,
     dir: &Path,
     service: &str,
@@ -668,11 +672,11 @@ pub async fn query(
     })
 }
 
-fn sql_literal(s: &str) -> String {
+pub(crate) fn sql_literal(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-fn parse_json(raw: &str) -> Result<serde_json::Value, AppError> {
+pub(crate) fn parse_json(raw: &str) -> Result<serde_json::Value, AppError> {
     let s = raw.trim();
     if s.is_empty() || s == "null" {
         return Ok(serde_json::json!([]));
