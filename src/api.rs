@@ -1064,6 +1064,44 @@ fn unpack_harbor_template(archive: &FsPath, dest: &FsPath) -> anyhow::Result<()>
     result
 }
 
+fn update_harbor_project_from_template(archive: &FsPath, dest: &FsPath) -> anyhow::Result<()> {
+    if !dest.is_dir() {
+        anyhow::bail!("已部署目录不存在：{}", dest.display());
+    }
+    let parent = dest
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("部署目录没有父目录：{}", dest.display()))?;
+    let staged = parent.join(format!(".cangling-zot.update-{}", Uuid::new_v4()));
+    unpack_harbor_template(archive, &staged)?;
+
+    let result = (|| -> anyhow::Result<()> {
+        for entry in WalkDir::new(&staged).follow_links(false) {
+            let entry = entry?;
+            let relative = entry.path().strip_prefix(&staged)?;
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            let first = relative.components().next().and_then(|item| item.as_os_str().to_str());
+            if matches!(first, Some("data") | Some(".git")) {
+                continue;
+            }
+            let target = dest.join(relative);
+            if entry.file_type().is_dir() {
+                std::fs::create_dir_all(&target)?;
+            } else if entry.file_type().is_file() {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(entry.path(), &target)?;
+                std::fs::set_permissions(&target, entry.metadata()?.permissions())?;
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&staged);
+    result
+}
+
 async fn harbor_deploy_status(
     State(state): State<AppState>,
 ) -> Result<Json<HarborDeployStatus>, AppError> {
@@ -1423,6 +1461,43 @@ async fn check_zot_environment(
     if !is_harbor_project(&project) {
         return Err(AppError::bad("环境检查只适用于 cangling-zot 项目"));
     }
+    let template = harbor_template_archive(&state.paths.exe_dir).ok_or_else(|| {
+        AppError::bad(format!(
+            "本地软件仓库未找到 {HARBOR_TEMPLATE_REL}；请先同步 images 软件集"
+        ))
+    })?;
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "zot-update",
+        "正在从本地软件仓库更新已部署的 cangling-zot…",
+        0,
+        0,
+    );
+    let deployed = PathBuf::from(&project.directory);
+    let source = template.clone();
+    let target = deployed.clone();
+    tokio::task::spawn_blocking(move || {
+        update_harbor_project_from_template(&source, &target)?;
+        initialize_harbor_project(&target)
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
+    .map_err(|error| AppError::bad(format!("更新 cangling-zot 失败：{error}")))?;
+    let (_, image_filename) = harbor_arch()?;
+    let zot_image = harbor_image_archive(&deployed, image_filename).ok_or_else(|| {
+        AppError::bad(format!("更新后的 cangling-zot 缺少 {image_filename}"))
+    })?;
+    state
+        .docker
+        .load_archive(&zot_image)
+        .await
+        .map_err(|error| AppError::bad(format!("导入 Zot 镜像失败：{error}")))?;
+    state
+        .docker
+        .compose_up(&deployed)
+        .await
+        .map_err(|error| AppError::bad(format!("更新后启动 Zot 失败：{error}")))?;
     let master_ip = hostinfo::primary_ip();
     master_ip
         .parse::<std::net::IpAddr>()
@@ -1436,7 +1511,7 @@ async fn check_zot_environment(
         Vec::new()
     };
     let node_total = workers.len() as u64 + 1;
-    let total = node_total + 1;
+    let total = node_total + 2;
     let mut nodes = Vec::new();
 
     job_set(
@@ -1444,7 +1519,7 @@ async fn check_zot_environment(
         body.job_id.as_deref(),
         "zot-environment",
         "正在配置主节点 Zot 镜像仓库…",
-        0,
+        1,
         total,
     );
     let local_role = state.cluster.role;
@@ -1469,7 +1544,7 @@ async fn check_zot_environment(
             body.job_id.as_deref(),
             "zot-environment",
             &format!("正在配置节点 {name}…"),
-            index as u64 + 1,
+            index as u64 + 2,
             total,
         );
         if !online {
@@ -1521,7 +1596,7 @@ async fn check_zot_environment(
             body.job_id.as_deref(),
             "zot-test",
             "正在推送 hello-world 并验证所有 k3s 节点拉取…",
-            node_total,
+            node_total + 1,
             total,
         );
         let script = PathBuf::from(&project.directory).join("test-k3s.sh");
@@ -4754,6 +4829,25 @@ mod tests {
 
         assert_eq!(harbor_template_archive(&root), Some(archive));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn harbor_template_update_replaces_project_files_and_preserves_data() {
+        let root = temp_root();
+        let archive = root.join("cangling-zot.tar.gz");
+        write_project_template(&archive, Some("cangling-zot"));
+        let live = root.join("live");
+        fs::create_dir_all(live.join("data")).unwrap();
+        fs::write(live.join("docker-compose.yml"), "old compose").unwrap();
+        fs::write(live.join("data/blob"), "keep me").unwrap();
+
+        update_harbor_project_from_template(&archive, &live).unwrap();
+
+        assert!(fs::read_to_string(live.join("docker-compose.yml"))
+            .unwrap()
+            .contains("ghcr.io/project-zot/zot"));
+        assert_eq!(fs::read_to_string(live.join("data/blob")).unwrap(), "keep me");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

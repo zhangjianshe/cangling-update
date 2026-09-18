@@ -3234,7 +3234,9 @@
       if (fill && !unknown) fill.style.width = (job.percent || 0) + "%";
       if (sub) {
         const msg = job.message || "";
-        if (job.phase === "import") {
+        if (state.busy === "zot-environment") {
+          sub.textContent = job.total ? (job.current + " / " + job.total + " 步") : "";
+        } else if (job.phase === "import") {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
         } else if (job.phase === "zot-environment") {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
@@ -5326,7 +5328,7 @@
     async function runZotEnvironmentCheck() {
       if (!state.current || state.busy) return;
       if (!(await confirmDialog(
-        "将为本机及所有 k3s 工作节点设置 hub.cangling.cn 的 hosts、CA 和 registries.yaml，并重启 k3s/k3s-agent。\n\n离线节点会报告失败，确定继续？"
+        "将先从本地软件仓库更新并启动 cangling-zot，再为本机及所有 k3s 工作节点设置 hub.cangling.cn 的 hosts、CA 和 registries.yaml，重启 k3s/k3s-agent，最后执行 hello-world 全节点拉取测试。\n\n离线节点会报告失败，确定继续？"
       ))) return;
       let stop = () => {};
       setBusy("zot-environment");
