@@ -1435,7 +1435,8 @@ async fn check_zot_environment(
     } else {
         Vec::new()
     };
-    let total = workers.len() as u64 + 1;
+    let node_total = workers.len() as u64 + 1;
+    let total = node_total + 1;
     let mut nodes = Vec::new();
 
     job_set(
@@ -1513,9 +1514,51 @@ async fn check_zot_environment(
             }),
         }
     }
-    let ok = nodes.iter().all(|node| node.ok);
+    let environment_ok = nodes.iter().all(|node| node.ok);
+    let (image_test_ok, image_test_message) = if environment_ok {
+        job_set(
+            &state,
+            body.job_id.as_deref(),
+            "zot-test",
+            "正在推送 hello-world 并验证所有 k3s 节点拉取…",
+            node_total,
+            total,
+        );
+        let script = PathBuf::from(&project.directory).join("test-k3s.sh");
+        let script_display = script.display().to_string();
+        let test = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("bash")
+                .arg(&script)
+                .current_dir(script.parent().unwrap_or_else(|| FsPath::new("/")))
+                .output()
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+        match test {
+            Ok(output) if output.status.success() => (
+                true,
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .last()
+                    .unwrap_or("hello-world 集群测试通过")
+                    .to_string(),
+            ),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let detail = if stderr.is_empty() { stdout } else { stderr };
+                (false, format!("hello-world 集群测试失败：{detail}"))
+            }
+            Err(error) => (false, format!("无法执行 {script_display}：{error}")),
+        }
+    } else {
+        (false, "部分节点环境配置失败，已跳过 hello-world 集群测试".into())
+    };
+    let ok = environment_ok && image_test_ok;
     let message = if ok {
-        "所有节点 Zot 镜像仓库环境配置完成"
+        "Zot 环境配置及 hello-world 全节点拉取测试完成"
+    } else if environment_ok {
+        "Zot 环境配置完成，但 hello-world 全节点拉取测试失败"
     } else {
         "部分节点 Zot 镜像仓库环境配置失败"
     };
@@ -1528,6 +1571,8 @@ async fn check_zot_environment(
         ok,
         master_ip,
         nodes,
+        image_test_ok,
+        image_test_message,
     }))
 }
 

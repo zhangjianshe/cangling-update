@@ -3238,6 +3238,8 @@
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
         } else if (job.phase === "zot-environment") {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
+        } else if (job.phase === "zot-test") {
+          sub.textContent = "hello-world 双架构镜像全节点拉取测试";
         } else if (job.phase === "np4-images") {
           sub.textContent = job.total
             ? "第 " + Math.max(job.current - 1, 1) + " / " + Math.max(job.total - 2, 1) + " 个镜像"
@@ -5351,7 +5353,8 @@
         const details = (result.nodes || []).map(node =>
           `${node.ok ? "✓" : "✗"} ${node.node} (${node.address})：${node.message}`
         ).join("\n");
-        flash(result.ok ? "ok" : "err", `${result.ok ? "环境检查完成" : "部分节点配置失败"}；hub.cangling.cn → ${result.master_ip}${details ? "\n" + details : ""}`);
+        const testDetail = result.image_test_message ? `\n${result.image_test_ok ? "✓" : "✗"} hello-world：${result.image_test_message}` : "";
+        flash(result.ok ? "ok" : "err", `${result.ok ? "环境和镜像拉取测试完成" : "环境或镜像拉取测试失败"}；hub.cangling.cn → ${result.master_ip}${details ? "\n" + details : ""}${testDetail}`);
       } catch (error) {
         flash("err", error.message);
       } finally {

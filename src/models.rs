@@ -56,6 +56,8 @@ pub struct ZotEnvironmentResult {
     pub ok: bool,
     pub master_ip: String,
     pub nodes: Vec<ZotNodeEnvironmentResult>,
+    pub image_test_ok: bool,
+    pub image_test_message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
