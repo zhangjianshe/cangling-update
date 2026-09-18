@@ -3236,6 +3236,8 @@
         const msg = job.message || "";
         if (job.phase === "import") {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
+        } else if (job.phase === "zot-environment") {
+          sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
         } else if (job.phase === "np4-images") {
           sub.textContent = job.total
             ? "第 " + Math.max(job.current - 1, 1) + " / " + Math.max(job.total - 2, 1) + " 个镜像"
@@ -5337,6 +5339,15 @@
           body: JSON.stringify({ job_id: job.id }),
         });
         stop();
+        const nodeCount = (result.nodes || []).length;
+        renderProgress("op-prog", {
+          phase: "zot-environment",
+          message: result.ok ? "所有节点环境配置完成" : "部分节点环境配置失败",
+          percent: 100,
+          current: nodeCount,
+          total: nodeCount,
+          done: true,
+        });
         const details = (result.nodes || []).map(node =>
           `${node.ok ? "✓" : "✗"} ${node.node} (${node.address})：${node.message}`
         ).join("\n");
