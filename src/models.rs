@@ -17,6 +17,21 @@ pub struct DeployNp4Body {
     pub job_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct HarborDeployStatus {
+    pub can_deploy: bool,
+    pub project_dir: String,
+    pub exists: bool,
+    pub registered: bool,
+    pub template_archive: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeployHarborBody {
+    pub job_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,

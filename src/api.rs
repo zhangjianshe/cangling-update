@@ -24,13 +24,15 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Path as FsPath, PathBuf};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
 const NP4_PROJECT_DIR: &str = "/opt/cangling-np4";
+const HARBOR_PROJECT_DIR: &str = "/opt/cangling/cangling-zot";
+const HARBOR_TEMPLATE_REL: &str = "images/base-images/latest/linux/all/cangling-zot.tar.gz";
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -68,6 +70,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
         .route("/api/np4/deploy/status", get(np4_deploy_status))
         .route("/api/np4/deploy", post(deploy_np4))
+        .route("/api/harbor/deploy/status", get(harbor_deploy_status))
+        .route("/api/harbor/deploy", post(deploy_harbor))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/{id}",
@@ -913,6 +917,308 @@ async fn deploy_np4(
         return Err(err);
     }
     job_ok(&state, body.job_id.as_deref(), "NP4 项目已部署并启动");
+    Ok(project)
+}
+
+fn harbor_template_archive(exe_dir: &FsPath) -> Option<PathBuf> {
+    let archive = exe_dir.join("repo").join(HARBOR_TEMPLATE_REL);
+    archive.is_file().then_some(archive)
+}
+
+fn is_harbor_project(project: &Project) -> bool {
+    project.directory == HARBOR_PROJECT_DIR
+        || project.name.eq_ignore_ascii_case("harbor")
+        || project.name.eq_ignore_ascii_case("cangling-zot")
+}
+
+fn harbor_arch() -> Result<(&'static str, &'static str), AppError> {
+    match std::env::consts::ARCH {
+        "x86_64" => Ok(("amd64", "zot-image-amd64.tar.gz")),
+        "aarch64" => Ok(("arm64", "zot-image-arm64.tar.gz")),
+        arch => Err(AppError::bad(format!(
+            "Harbor 部署暂不支持本机架构 {arch}"
+        ))),
+    }
+}
+
+fn harbor_image_archive(project_dir: &FsPath, filename: &str) -> Option<PathBuf> {
+    let archive = project_dir.join(filename);
+    archive.is_file().then_some(archive)
+}
+
+fn initialize_harbor_project(project_dir: &FsPath) -> anyhow::Result<()> {
+    let init = project_dir.join("init-auth.sh");
+    if !init.is_file() {
+        anyhow::bail!("项目模板未包含 {}", init.display());
+    }
+    std::fs::create_dir_all(project_dir.join("data"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for name in ["init-auth.sh", "pack.sh", "bundle.sh"] {
+            let path = project_dir.join(name);
+            if path.is_file() {
+                let mut permissions = std::fs::metadata(&path)?.permissions();
+                permissions.set_mode(permissions.mode() | 0o111);
+                std::fs::set_permissions(path, permissions)?;
+            }
+        }
+    }
+
+    let output = std::process::Command::new("bash")
+        .arg("init-auth.sh")
+        .current_dir(project_dir)
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        anyhow::bail!("运行 init-auth.sh 失败：{detail}");
+    }
+    let htpasswd = project_dir.join("config/htpasswd");
+    if !htpasswd.is_file() {
+        anyhow::bail!("init-auth.sh 未生成 {}", htpasswd.display());
+    }
+    Ok(())
+}
+
+fn unsafe_archive_path(path: &FsPath) -> bool {
+    path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+fn unpack_harbor_template(archive: &FsPath, dest: &FsPath) -> anyhow::Result<()> {
+    if dest.exists() {
+        anyhow::bail!("目标目录 {} 已存在", dest.display());
+    }
+    let parent = dest
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("部署目录没有父目录：{}", dest.display()))?;
+    std::fs::create_dir_all(parent)?;
+    let staging = parent.join(format!(".cangling-zot.deploy-{}", Uuid::new_v4()));
+    std::fs::create_dir(&staging)?;
+
+    let result = (|| -> anyhow::Result<()> {
+        let file = std::fs::File::open(archive)?;
+        let decoder = flate2::read::GzDecoder::new(BufReader::new(file));
+        let mut tar = tar::Archive::new(decoder);
+        tar.set_overwrite(false);
+        tar.set_preserve_permissions(true);
+        for entry in tar.entries()? {
+            let mut entry = entry?;
+            let relative = entry.path()?.into_owned();
+            if relative.as_os_str().is_empty() || unsafe_archive_path(&relative) {
+                anyhow::bail!("模板包含不安全路径：{}", relative.display());
+            }
+            if !entry.unpack_in(&staging)? {
+                anyhow::bail!("模板文件无法安全解压：{}", relative.display());
+            }
+        }
+
+        let source = if find_compose_file(&staging).is_some() {
+            staging.clone()
+        } else {
+            let candidates: Vec<_> = WalkDir::new(&staging)
+                .min_depth(1)
+                .max_depth(2)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_dir())
+                .map(|entry| entry.into_path())
+                .filter(|dir| find_compose_file(dir).is_some())
+                .collect();
+            match candidates.as_slice() {
+                [only] => only.clone(),
+                [] => anyhow::bail!("cangling-zot 模板中未找到 Compose 文件"),
+                _ => anyhow::bail!("cangling-zot 模板中包含多个 Compose 项目，无法确定项目根目录"),
+            }
+        };
+
+        std::fs::rename(&source, dest)?;
+        if source != staging {
+            std::fs::remove_dir_all(&staging)?;
+        }
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+        let _ = std::fs::remove_dir_all(dest);
+    }
+    result
+}
+
+async fn harbor_deploy_status(
+    State(state): State<AppState>,
+) -> Result<Json<HarborDeployStatus>, AppError> {
+    let can_deploy = state.cluster.role != Role::Worker;
+    let project_dir = PathBuf::from(HARBOR_PROJECT_DIR);
+    let registered = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::list_projects(&conn)?.iter().any(is_harbor_project)
+    };
+    let template = harbor_template_archive(&state.paths.exe_dir);
+    let message = if !can_deploy {
+        Some("工作节点不提供 Harbor 项目部署，请在主节点操作。".into())
+    } else if registered {
+        None
+    } else if project_dir.exists() {
+        Some(format!(
+            "{} 已存在；为避免覆盖，未自动部署。可通过“新建项目”登记该目录。",
+            project_dir.display()
+        ))
+    } else if template.is_none() {
+        Some(format!(
+            "本地软件仓库未找到 {HARBOR_TEMPLATE_REL}；请先通过维护中心同步 images 软件集。"
+        ))
+    } else {
+        None
+    };
+    Ok(Json(HarborDeployStatus {
+        can_deploy,
+        project_dir: HARBOR_PROJECT_DIR.into(),
+        exists: project_dir.exists(),
+        registered,
+        template_archive: template.map(|path| path.display().to_string()),
+        message,
+    }))
+}
+
+async fn deploy_harbor(
+    State(state): State<AppState>,
+    Json(body): Json<DeployHarborBody>,
+) -> Result<Json<Project>, AppError> {
+    if state.cluster.role == Role::Worker {
+        return Err(AppError::bad("工作节点不能部署 Harbor 项目，请在主节点操作"));
+    }
+    let (arch, image_filename) = harbor_arch()?;
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        if db::list_projects(&conn)?.iter().any(is_harbor_project) {
+            return Err(AppError::Conflict("Harbor 项目已经存在".into()));
+        }
+    }
+    let dest = PathBuf::from(HARBOR_PROJECT_DIR);
+    if dest.exists() {
+        return Err(AppError::Conflict(format!(
+            "{} 已存在，已取消部署",
+            dest.display()
+        )));
+    }
+    let archive = harbor_template_archive(&state.paths.exe_dir).ok_or_else(|| {
+        AppError::bad(format!(
+            "本地软件仓库未找到 {HARBOR_TEMPLATE_REL}；请先通过维护中心同步 images 软件集"
+        ))
+    })?;
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "harbor-template",
+        "正在解压 cangling-zot 项目模板…",
+        0,
+        5,
+    );
+    let source = archive.clone();
+    let target = dest.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || unpack_harbor_template(&source, &target))
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
+        .and_then(|result| result.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err);
+    }
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "harbor-init",
+        "正在初始化 Zot 证书、帐号和数据目录…",
+        1,
+        5,
+    );
+    let target = dest.clone();
+    if let Err(err) = tokio::task::spawn_blocking(move || initialize_harbor_project(&target))
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
+        .and_then(|result| result.map_err(AppError::from))
+    {
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err);
+    }
+
+    let Some(image) = harbor_image_archive(&dest, image_filename) else {
+        let err = AppError::bad(format!(
+            "cangling-zot 模板中未找到 {arch} 架构镜像 {image_filename}"
+        ));
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err);
+    };
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "harbor-images",
+        &format!("正在导入 {arch} 镜像：{image_filename}"),
+        2,
+        5,
+    );
+    if let Err(error) = state.docker.load_archive(&image).await {
+        let err = AppError::bad(format!("导入 {} 失败：{error}", image.display()));
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        let _ = std::fs::remove_dir_all(&dest);
+        return Err(err);
+    }
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "harbor-project",
+        "正在登记 Harbor 项目并建立基线快照…",
+        3,
+        5,
+    );
+    let project = create_project(
+        State(state.clone()),
+        Json(CreateProject {
+            name: "cangling-zot".into(),
+            description: Some("苍灵统一镜像仓库（Zot），由本地软件仓库模板部署".into()),
+            directory: HARBOR_PROJECT_DIR.into(),
+            job_id: body.job_id.clone(),
+            stop_compose: false,
+        }),
+    )
+    .await?;
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "harbor-start",
+        "基线已建立，正在启动 Harbor…",
+        4,
+        5,
+    );
+    if let Err(err) = state.docker.compose_up(&dest).await {
+        let err = AppError::bad(format!("Harbor 项目已部署，但启动失败：{err}"));
+        job_err(&state, body.job_id.as_deref(), &err.to_string());
+        return Err(err);
+    }
+    job_ok(&state, body.job_id.as_deref(), "Harbor 项目已部署并启动");
     Ok(project)
 }
 
@@ -4067,6 +4373,105 @@ mod tests {
         ));
         fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    fn write_project_template(archive: &FsPath, prefix: Option<&str>) {
+        let file = fs::File::create(archive).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut tar = tar::Builder::new(encoder);
+        let name = prefix
+            .map(|value| format!("{value}/docker-compose.yml"))
+            .unwrap_or_else(|| "docker-compose.yml".into());
+        let content = b"services:\n  zot:\n    image: ghcr.io/project-zot/zot:latest\n";
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, name, &content[..]).unwrap();
+        tar.finish().unwrap();
+    }
+
+    #[test]
+    fn harbor_template_uses_images_software_set_layout() {
+        let root = temp_root();
+        let archive = root.join("repo").join(HARBOR_TEMPLATE_REL);
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        fs::write(&archive, b"template").unwrap();
+
+        assert_eq!(harbor_template_archive(&root), Some(archive));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn harbor_template_unpacks_wrapped_project_into_fixed_directory() {
+        let root = temp_root();
+        let archive = root.join("cangling-zot.tar.gz");
+        let dest = root.join("opt/cangling/cangling-zot");
+        write_project_template(&archive, Some("cangling-zot"));
+
+        unpack_harbor_template(&archive, &dest).unwrap();
+
+        assert!(dest.join("docker-compose.yml").is_file());
+        assert!(!dest.join("cangling-zot").exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn harbor_template_rejects_unsafe_archive_paths() {
+        assert!(unsafe_archive_path(FsPath::new("../outside")));
+        assert!(unsafe_archive_path(FsPath::new("/absolute")));
+        assert!(!unsafe_archive_path(FsPath::new("cangling-zot/compose.yaml")));
+    }
+
+    #[test]
+    fn harbor_images_select_the_readme_defined_architecture_file() {
+        let root = temp_root();
+        let amd64 = root.join("zot-image-amd64.tar.gz");
+        let arm64 = root.join("zot-image-arm64.tar.gz");
+        fs::write(&amd64, b"amd64 image").unwrap();
+        fs::write(&arm64, b"arm64 image").unwrap();
+
+        assert_eq!(
+            harbor_image_archive(&root, "zot-image-amd64.tar.gz"),
+            Some(amd64)
+        );
+        assert_eq!(
+            harbor_image_archive(&root, "zot-image-arm64.tar.gz"),
+            Some(arm64)
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn harbor_initialization_runs_readme_script_and_creates_data() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("config")).unwrap();
+        fs::write(
+            root.join("init-auth.sh"),
+            "#!/usr/bin/env bash\nset -e\nprintf 'user:hash\\n' > config/htpasswd\n",
+        )
+        .unwrap();
+
+        initialize_harbor_project(&root).unwrap();
+
+        assert!(root.join("data").is_dir());
+        assert_eq!(
+            fs::read_to_string(root.join("config/htpasswd")).unwrap(),
+            "user:hash\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                fs::metadata(root.join("init-auth.sh"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

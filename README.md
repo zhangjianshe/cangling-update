@@ -193,9 +193,13 @@ repo/
     windows/<软件包>/...
   np4/                          # 维护中心 Manifest 集
     np4-update/latest/          # cangling-update 自我更新程序
+  images/                       # 维护中心镜像/项目模板集
+    base-images/latest/linux/all/cangling-zot.tar.gz
 ```
 
 控制台软件包 Tab 仍按平台展示 `cangling-repo` 下的安装包，并额外列出 `np4`。工作节点升级时优先使用 `np4/np4-update/latest/` 里对应架构的二进制，找不到再回退到 `updates/`。
+
+主节点项目面板没有 Harbor 项目时，会检测 `images/base-images/latest/linux/all/cangling-zot.tar.gz`。模板就绪后可一键安全解压到 `/opt/cangling/cangling-zot`，按本机 `amd64` / `arm64` 架构选择模板内对应的镜像 tar 包执行 `docker load`，然后创建基线快照并启动 Compose；另一架构镜像不会导入，目标目录已经存在时不会覆盖。
 
 > 离线安装集独立维护在 `git@git.cangling.cn:operation/cangling-repo.git`。由维护中心「软件同步」写入 `repo/cangling-repo/`，本程序不再克隆或拉取。
 >
