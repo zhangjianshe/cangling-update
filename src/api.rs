@@ -92,6 +92,10 @@ pub fn router(state: AppState) -> Router {
             "/api/projects/{id}/np4-repo-update",
             post(update_np4_from_repo),
         )
+        .route(
+            "/api/projects/{id}/zot/environment",
+            post(check_zot_environment),
+        )
         .route("/api/projects/{id}/replace", post(create_replace))
         .route("/api/projects/{id}/rollback", post(rollback))
         .route("/api/projects/{id}/compose", get(compose_status))
@@ -1220,6 +1224,311 @@ async fn deploy_harbor(
     }
     job_ok(&state, body.job_id.as_deref(), "Harbor 项目已部署并启动");
     Ok(project)
+}
+
+fn ensure_yaml_mapping<'a>(
+    mapping: &'a mut serde_yaml::Mapping,
+    key: &str,
+) -> &'a mut serde_yaml::Mapping {
+    let value = mapping
+        .entry(serde_yaml::Value::String(key.to_string()))
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    if !value.is_mapping() {
+        *value = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    value.as_mapping_mut().expect("value was set to mapping")
+}
+
+fn update_zot_hosts(content: &str, master_ip: &str) -> String {
+    let mut lines: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            let active = line.split('#').next().unwrap_or_default();
+            !active.split_whitespace().skip(1).any(|host| host == "hub.cangling.cn")
+        })
+        .collect();
+    while lines.last().is_some_and(|line| line.trim().is_empty()) {
+        lines.pop();
+    }
+    let mut result = lines.join("\n");
+    if !result.is_empty() {
+        result.push('\n');
+    }
+    result.push_str(&format!("{master_ip}\thub.cangling.cn\n"));
+    result
+}
+
+fn update_zot_registries(content: &str, ca_path: &FsPath) -> anyhow::Result<String> {
+    let mut root = if content.trim().is_empty() {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    } else {
+        serde_yaml::from_str::<serde_yaml::Value>(content)?
+    };
+    if !root.is_mapping() {
+        anyhow::bail!("registries.yaml 根节点必须是 YAML mapping");
+    }
+    let root = root.as_mapping_mut().expect("root is mapping");
+    let hub = serde_yaml::Value::String("hub.cangling.cn".into());
+
+    let mirrors = ensure_yaml_mapping(root, "mirrors");
+    let mirror = mirrors
+        .entry(hub.clone())
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    if !mirror.is_mapping() {
+        *mirror = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    mirror.as_mapping_mut().expect("mirror is mapping").insert(
+        serde_yaml::Value::String("endpoint".into()),
+        serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(
+            "https://hub.cangling.cn".into(),
+        )]),
+    );
+
+    let configs = ensure_yaml_mapping(root, "configs");
+    let config = configs
+        .entry(hub)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    if !config.is_mapping() {
+        *config = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    let tls = ensure_yaml_mapping(config.as_mapping_mut().expect("config is mapping"), "tls");
+    tls.insert(
+        serde_yaml::Value::String("ca_file".into()),
+        serde_yaml::Value::String(ca_path.display().to_string()),
+    );
+    Ok(serde_yaml::to_string(&root)?)
+}
+
+fn write_system_text(path: &FsPath, content: &str) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} 没有父目录", path.display()))?;
+    std::fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(".cangling-update-{}.tmp", Uuid::new_v4()));
+    std::fs::write(&temp, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o644))?;
+    }
+    std::fs::rename(temp, path)?;
+    Ok(())
+}
+
+fn configure_zot_environment_files(
+    hosts_path: &FsPath,
+    registries_path: &FsPath,
+    ca_path: &FsPath,
+    master_ip: &str,
+    ca_pem: &str,
+) -> anyhow::Result<()> {
+    master_ip
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| anyhow::anyhow!("Master IP 无效：{master_ip}"))?;
+    if ca_pem.trim().is_empty() {
+        anyhow::bail!("Zot CA 证书为空");
+    }
+    let hosts = std::fs::read_to_string(hosts_path).unwrap_or_default();
+    let registries = std::fs::read_to_string(registries_path).unwrap_or_default();
+    write_system_text(hosts_path, &update_zot_hosts(&hosts, master_ip))?;
+    write_system_text(ca_path, ca_pem)?;
+    write_system_text(
+        registries_path,
+        &update_zot_registries(&registries, ca_path)?,
+    )?;
+    Ok(())
+}
+
+fn restart_k3s_for_role(role: Role) -> anyhow::Result<String> {
+    let candidates: &[&str] = if role == Role::Worker {
+        &["k3s-agent"]
+    } else {
+        &["k3s", "k3s-agent"]
+    };
+    for service in candidates {
+        let known = std::path::Path::new(&format!("/etc/systemd/system/{service}.service")).exists()
+            || std::process::Command::new("systemctl")
+                .args(["is-active", "--quiet", service])
+                .status()
+                .is_ok_and(|status| status.success());
+        if !known {
+            continue;
+        }
+        let output = std::process::Command::new("systemctl")
+            .args(["restart", service])
+            .output()?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "重启 {service} 失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        return Ok(format!("已更新 hosts/registry 配置并重启 {service}"));
+    }
+    anyhow::bail!("未找到 k3s 或 k3s-agent 服务")
+}
+
+fn apply_zot_environment_local(
+    role: Role,
+    master_ip: &str,
+    ca_pem: &str,
+) -> anyhow::Result<String> {
+    configure_zot_environment_files(
+        FsPath::new("/etc/hosts"),
+        FsPath::new("/etc/rancher/k3s/registries.yaml"),
+        FsPath::new("/etc/rancher/k3s/cangling-ca.crt"),
+        master_ip,
+        ca_pem,
+    )?;
+    restart_k3s_for_role(role)
+}
+
+pub(crate) async fn apply_zot_environment_on_node(
+    State(state): State<AppState>,
+    Json(body): Json<ZotEnvironmentRequest>,
+) -> Result<Json<ZotNodeEnvironmentResult>, AppError> {
+    let node = hostinfo::hostname();
+    let address = hostinfo::primary_ip();
+    let role = state.cluster.role;
+    let master_ip = body.master_ip;
+    let ca_pem = body.ca_pem;
+    let result = tokio::task::spawn_blocking(move || {
+        apply_zot_environment_local(role, &master_ip, &ca_pem)
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    match result {
+        Ok(message) => Ok(Json(ZotNodeEnvironmentResult {
+            node,
+            address,
+            ok: true,
+            message,
+        })),
+        Err(error) => Err(AppError::internal(error.to_string())),
+    }
+}
+
+async fn check_zot_environment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<CheckZotEnvironmentBody>,
+) -> Result<Json<ZotEnvironmentResult>, AppError> {
+    if state.cluster.role == Role::Worker {
+        return Err(AppError::bad("请在主节点执行 Zot 集群环境检查"));
+    }
+    let project = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_project(&conn, &id)?.ok_or_else(|| AppError::not_found("项目不存在"))?
+    };
+    if !is_harbor_project(&project) {
+        return Err(AppError::bad("环境检查只适用于 cangling-zot 项目"));
+    }
+    let master_ip = hostinfo::primary_ip();
+    master_ip
+        .parse::<std::net::IpAddr>()
+        .map_err(|_| AppError::bad("无法识别 Master IP"))?;
+    let ca_path = PathBuf::from(&project.directory).join("ca/cangling-ca.crt");
+    let ca_pem = std::fs::read_to_string(&ca_path)
+        .map_err(|error| AppError::bad(format!("无法读取 {}：{error}", ca_path.display())))?;
+    let workers = if state.cluster.role == Role::Master {
+        crate::cluster::server::workers(&state)?
+    } else {
+        Vec::new()
+    };
+    let total = workers.len() as u64 + 1;
+    let mut nodes = Vec::new();
+
+    job_set(
+        &state,
+        body.job_id.as_deref(),
+        "zot-environment",
+        "正在配置主节点 Zot 镜像仓库…",
+        0,
+        total,
+    );
+    let local_role = state.cluster.role;
+    let local_ip = master_ip.clone();
+    let local_ca = ca_pem.clone();
+    let local = tokio::task::spawn_blocking(move || {
+        apply_zot_environment_local(local_role, &local_ip, &local_ca)
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    nodes.push(ZotNodeEnvironmentResult {
+        node: hostinfo::hostname(),
+        address: master_ip.clone(),
+        ok: local.is_ok(),
+        message: local.unwrap_or_else(|error| error.to_string()),
+    });
+
+    let token = state.cluster.token.clone().unwrap_or_default();
+    for (index, (name, address, online)) in workers.into_iter().enumerate() {
+        job_set(
+            &state,
+            body.job_id.as_deref(),
+            "zot-environment",
+            &format!("正在配置节点 {name}…"),
+            index as u64 + 1,
+            total,
+        );
+        if !online {
+            nodes.push(ZotNodeEnvironmentResult {
+                node: name,
+                address,
+                ok: false,
+                message: "节点离线，未能配置".into(),
+            });
+            continue;
+        }
+        let url = format!("http://{address}/api/cluster/zot/environment");
+        let request = serde_json::to_value(ZotEnvironmentRequest {
+            master_ip: master_ip.clone(),
+            ca_pem: ca_pem.clone(),
+        })
+        .map_err(|error| AppError::internal(error.to_string()))?;
+        let result = crate::cluster::http::post_json(&url, &token, &request).await;
+        match result {
+            Ok((status, value)) if status.is_success() => {
+                match serde_json::from_value::<ZotNodeEnvironmentResult>(value) {
+                    Ok(result) => nodes.push(result),
+                    Err(error) => nodes.push(ZotNodeEnvironmentResult {
+                        node: name,
+                        address,
+                        ok: false,
+                        message: format!("解析节点响应失败：{error}"),
+                    }),
+                }
+            }
+            Ok((status, value)) => nodes.push(ZotNodeEnvironmentResult {
+                node: name,
+                address,
+                ok: false,
+                message: format!("节点返回 {status}: {value}"),
+            }),
+            Err(error) => nodes.push(ZotNodeEnvironmentResult {
+                node: name,
+                address,
+                ok: false,
+                message: error.to_string(),
+            }),
+        }
+    }
+    let ok = nodes.iter().all(|node| node.ok);
+    let message = if ok {
+        "所有节点 Zot 镜像仓库环境配置完成"
+    } else {
+        "部分节点 Zot 镜像仓库环境配置失败"
+    };
+    if ok {
+        job_ok(&state, body.job_id.as_deref(), message);
+    } else {
+        job_err(&state, body.job_id.as_deref(), message);
+    }
+    Ok(Json(ZotEnvironmentResult {
+        ok,
+        master_ip,
+        nodes,
+    }))
 }
 
 async fn get_project(
@@ -4472,6 +4781,77 @@ mod tests {
             );
         }
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn zot_hosts_replaces_old_mapping_idempotently() {
+        let original = "127.0.0.1 localhost\n10.0.0.1 hub.cangling.cn old-alias\n# keep me\n";
+        let first = update_zot_hosts(original, "10.0.0.9");
+        let second = update_zot_hosts(&first, "10.0.0.9");
+        assert_eq!(first, second);
+        assert!(first.contains("127.0.0.1 localhost"));
+        assert!(first.contains("# keep me"));
+        assert!(first.contains("10.0.0.9\thub.cangling.cn"));
+        assert!(!first.contains("10.0.0.1 hub.cangling.cn"));
+    }
+
+    #[test]
+    fn zot_registry_injection_preserves_other_registries() {
+        let existing = "mirrors:\n  registry.local:\n    endpoint:\n      - http://registry.local\nconfigs:\n  registry.local:\n    tls:\n      insecure_skip_verify: true\n  hub.cangling.cn:\n    auth:\n      username: existing-user\n";
+        let rendered = update_zot_registries(
+            existing,
+            FsPath::new("/etc/rancher/k3s/cangling-ca.crt"),
+        )
+        .unwrap();
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
+        assert_eq!(
+            yaml["mirrors"]["hub.cangling.cn"]["endpoint"][0],
+            "https://hub.cangling.cn"
+        );
+        assert_eq!(
+            yaml["configs"]["hub.cangling.cn"]["tls"]["ca_file"],
+            "/etc/rancher/k3s/cangling-ca.crt"
+        );
+        assert_eq!(
+            yaml["mirrors"]["registry.local"]["endpoint"][0],
+            "http://registry.local"
+        );
+        assert_eq!(
+            yaml["configs"]["registry.local"]["tls"]["insecure_skip_verify"],
+            true
+        );
+        assert_eq!(
+            yaml["configs"]["hub.cangling.cn"]["auth"]["username"],
+            "existing-user"
+        );
+    }
+
+    #[test]
+    fn zot_environment_files_write_hosts_ca_and_registry() {
+        let root = temp_root();
+        let hosts = root.join("etc/hosts");
+        let registries = root.join("etc/rancher/k3s/registries.yaml");
+        let ca = root.join("etc/rancher/k3s/cangling-ca.crt");
+        fs::create_dir_all(hosts.parent().unwrap()).unwrap();
+        fs::write(&hosts, "127.0.0.1 localhost\n").unwrap();
+
+        configure_zot_environment_files(
+            &hosts,
+            &registries,
+            &ca,
+            "192.168.3.10",
+            "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
+        )
+        .unwrap();
+
+        assert!(fs::read_to_string(hosts)
+            .unwrap()
+            .contains("192.168.3.10\thub.cangling.cn"));
+        assert!(fs::read_to_string(registries)
+            .unwrap()
+            .contains("hub.cangling.cn"));
+        assert!(fs::read_to_string(ca).unwrap().contains("BEGIN CERTIFICATE"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

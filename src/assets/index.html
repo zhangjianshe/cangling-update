@@ -3528,6 +3528,7 @@
           (state.versions[0].repo_bytes ? ` · 共享 Git 仓库 ${fmtBytes(state.versions[0].repo_bytes)}` : "")
         : "";
       const isNp4Project = String(p.name || "").toLowerCase() === "cangling-np4" || /\/cangling-np4\/?$/i.test(String(p.directory || ""));
+      const isZotProject = ["harbor", "cangling-zot"].includes(String(p.name || "").toLowerCase()) || /\/cangling-zot\/?$/i.test(String(p.directory || ""));
 
       $("#main").innerHTML = `
         <div id="flash" hidden></div>
@@ -3540,7 +3541,7 @@
           ${PROJECT_TAB_ORDER.map(id => PROJECT_TABS.find(t => t.id === id)).map(t => `<button type="button" class="tab" role="tab" id="tab-${t.id}" data-tab="${t.id}" aria-controls="panel-${t.id}">${t.icon}<span>${t.label}</span></button>`).join("")}
         </div>
         <div class="card tab-panel" id="panel-import" data-panel="import" role="tabpanel" aria-labelledby="tab-import">
-          <div class="project-upgrade-summary"><div><h2><span>${esc(p.name)}</span><span class="pill latest">${p.current_version_no ? "v" + esc(p.current_version_no) + " 当前" : "无版本"}</span></h2><div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}${sizeHint ? " · " + sizeHint : ""}</div></div><div class="row">${isNp4Project ? `<button class="btn primary" id="btn-np4-check-update" ${state.busy ? "disabled" : ""}>检查更新</button>` : ""}<button class="btn" id="btn-refresh" ${state.busy ? "disabled" : ""}>刷新</button></div></div>
+          <div class="project-upgrade-summary"><div><h2><span>${esc(p.name)}</span><span class="pill latest">${p.current_version_no ? "v" + esc(p.current_version_no) + " 当前" : "无版本"}</span></h2><div class="path">${esc(p.directory)} · ${esc(c.compose_file || "未找到 Compose 文件")}${sizeHint ? " · " + sizeHint : ""}</div></div><div class="row">${isNp4Project ? `<button class="btn primary" id="btn-np4-check-update" ${state.busy ? "disabled" : ""}>检查更新</button>` : ""}${isZotProject ? `<button class="btn primary" id="btn-zot-check-env" ${state.busy ? "disabled" : ""}>检查环境</button>` : ""}<button class="btn" id="btn-refresh" ${state.busy ? "disabled" : ""}>刷新</button></div></div>
           <div class="upgrade-upload-grid">
             <section class="upgrade-upload-pane">
               <h3>系统升级文件</h3>
@@ -3698,6 +3699,7 @@
       $("#btn-temp-upload").onclick = runTempUpload;
       $("#btn-refresh").onclick = () => openProject(p.id);
       if ($("#btn-np4-check-update")) $("#btn-np4-check-update").onclick = runNp4RepoUpdate;
+      if ($("#btn-zot-check-env")) $("#btn-zot-check-env").onclick = runZotEnvironmentCheck;
       $("#btn-up").onclick = () => compose("up");
       $("#btn-down").onclick = () => compose("down");
       $("#btn-restart").onclick = () => compose("restart");
@@ -5298,7 +5300,7 @@
 
     function setBusy(kind) {
       state.busy = kind;
-      const ids = ["btn-update", "btn-replace", "btn-snap", "btn-temp-upload", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-refresh", "btn-np4-check-update", "compose-canvas-refresh", "compose-canvas-add-volume", "compose-canvas-link", "compose-canvas-source", "compose-canvas-save"];
+      const ids = ["btn-update", "btn-replace", "btn-snap", "btn-temp-upload", "btn-up", "btn-down", "btn-restart", "btn-edit-compose", "btn-edit-env", "btn-refresh", "btn-np4-check-update", "btn-zot-check-env", "compose-canvas-refresh", "compose-canvas-add-volume", "compose-canvas-link", "compose-canvas-source", "compose-canvas-save"];
       for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.disabled = true;
@@ -5315,6 +5317,38 @@
 
     function clearBusy() {
       state.busy = null;
+    }
+
+    async function runZotEnvironmentCheck() {
+      if (!state.current || state.busy) return;
+      if (!(await confirmDialog(
+        "将为本机及所有 k3s 工作节点设置 hub.cangling.cn 的 hosts、CA 和 registries.yaml，并重启 k3s/k3s-agent。\n\n离线节点会报告失败，确定继续？"
+      ))) return;
+      let stop = () => {};
+      setBusy("zot-environment");
+      try {
+        const job = await api("/api/jobs", { method: "POST" });
+        showProgress("op-prog", true);
+        renderProgress("op-prog", { message: "正在检查 Zot 集群环境…", percent: 0, current: 0, total: 0 });
+        stop = watchJob(job.id, "op-prog");
+        const result = await api("/api/projects/" + state.current.id + "/zot/environment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: job.id }),
+        });
+        stop();
+        const details = (result.nodes || []).map(node =>
+          `${node.ok ? "✓" : "✗"} ${node.node} (${node.address})：${node.message}`
+        ).join("\n");
+        flash(result.ok ? "ok" : "err", `${result.ok ? "环境检查完成" : "部分节点配置失败"}；hub.cangling.cn → ${result.master_ip}${details ? "\n" + details : ""}`);
+      } catch (error) {
+        flash("err", error.message);
+      } finally {
+        stop();
+        clearBusy();
+        const button = $("#btn-zot-check-env");
+        if (button) button.disabled = false;
+      }
     }
 
     async function runNp4RepoUpdate() {

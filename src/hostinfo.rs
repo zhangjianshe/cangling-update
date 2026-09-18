@@ -789,7 +789,7 @@ fn first_line(s: &str) -> String {
         .to_string()
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     cmd_out("hostname", &[])
         .or_else(|| {
             std::fs::read_to_string("/etc/hostname")

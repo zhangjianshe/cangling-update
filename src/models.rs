@@ -33,6 +33,32 @@ pub struct DeployHarborBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZotEnvironmentRequest {
+    pub master_ip: String,
+    pub ca_pem: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckZotEnvironmentBody {
+    pub job_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZotNodeEnvironmentResult {
+    pub node: String,
+    pub address: String,
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZotEnvironmentResult {
+    pub ok: bool,
+    pub master_ip: String,
+    pub nodes: Vec<ZotNodeEnvironmentResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
     pub name: String,

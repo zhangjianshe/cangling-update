@@ -201,6 +201,8 @@ repo/
 
 主节点项目面板没有 Harbor 项目时，会检测 `images/base-images/latest/linux/all/cangling-zot.tar.gz`。模板就绪后可一键安全解压到 `/opt/cangling/cangling-zot`，按本机 `amd64` / `arm64` 架构选择模板内对应的镜像 tar 包执行 `docker load`，然后创建基线快照并启动 Compose；另一架构镜像不会导入，目标目录已经存在时不会覆盖。
 
+`cangling-zot` 项目升级面板提供“检查环境”按钮。该操作以主节点 IP 为 `hub.cangling.cn` 地址，幂等更新本机及所有 k3s 工作节点的 `/etc/hosts`，把项目中的 `ca/cangling-ca.crt` 写入 `/etc/rancher/k3s/cangling-ca.crt`，并在保留其它仓库配置的前提下向 `/etc/rancher/k3s/registries.yaml` 注入 `hub.cangling.cn` mirror 与 CA 配置，随后重启 `k3s` / `k3s-agent`。离线或执行失败的节点会在操作结果中单独列出。
+
 > 离线安装集独立维护在 `git@git.cangling.cn:operation/cangling-repo.git`。由维护中心「软件同步」写入 `repo/cangling-repo/`，本程序不再克隆或拉取。
 >
 > 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。仍兼容旧布局（平台目录直接放在 `repo/` 下）。

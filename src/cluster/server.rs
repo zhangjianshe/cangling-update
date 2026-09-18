@@ -135,6 +135,10 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
         )
         .route("/api/cluster/auth/sync", post(auth_sync))
         .route(
+            "/api/cluster/zot/environment",
+            post(crate::api::apply_zot_environment_on_node),
+        )
+        .route(
             "/api/cluster/storage/start-share",
             post(crate::storage::cluster_start_share),
         )
@@ -523,6 +527,26 @@ pub fn online_workers_in(conn: &Connection) -> rusqlite::Result<Vec<(String, Str
 pub fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     online_workers_in(&conn).map_err(AppError::from)
+}
+
+pub fn workers(state: &AppState) -> Result<Vec<(String, String, bool)>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let mut stmt = conn.prepare(
+        "SELECT name, addr, last_seen FROM cluster_nodes WHERE role = 'worker' ORDER BY name",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut workers = Vec::new();
+    for row in rows {
+        let (name, addr, last_seen) = row?;
+        workers.push((name, addr, is_online(&last_seen)));
+    }
+    Ok(workers)
 }
 
 fn list_cluster_nodes(conn: &Connection) -> rusqlite::Result<Vec<ClusterNode>> {
