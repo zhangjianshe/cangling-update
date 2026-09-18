@@ -1109,18 +1109,20 @@ pub fn parse_lspci_display(raw: &str) -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
     for line in raw.lines() {
         let lower = line.to_lowercase();
-        let known_accelerator = lower.contains("nvidia")
-            || lower.contains("hygon")
-            || lower.contains("haiguang")
-            || lower.contains("dcu")
-            || lower.contains("huawei")
-            || lower.contains("ascend");
+        // A vendor name alone is not enough to identify an accelerator.  For
+        // example, Hygon/Haiguang CPUs expose many PCI host bridges under the
+        // same vendor name; treating those as DCUs can report one fake GPU per
+        // CPU root complex.  Only accept PCI display/accelerator classes here.
         if !(lower.contains("vga")
             || lower.contains("3d controller")
             || lower.contains("display")
-            || lower.contains("processing accelerators")
-            || known_accelerator)
+            || lower.contains("processing accelerators"))
         {
+            continue;
+        }
+        // ASPEED VGA devices are BMC/remote-console adapters rather than
+        // compute GPUs and should not be advertised as algorithm resources.
+        if lower.contains("aspeed") {
             continue;
         }
         let name = line.split(": ").nth(1).unwrap_or(line).trim();
@@ -1462,6 +1464,15 @@ physical id\t: 1
         assert!(accelerators.iter().any(|g| g.arch == "Hygon DCU"));
         assert!(accelerators.iter().any(|g| g.arch == "Ascend"));
         assert!(accelerators.iter().any(|g| g.arch == "PCI"));
+
+        let server_pci = parse_lspci_display(
+            "00:00.0 Host bridge: Chengdu Haiguang IC Design Co., Ltd. Device 1480\n\
+             05:00.0 3D controller: NVIDIA Corporation GA100 [A100 PCIe 80GB] (rev a1)\n\
+             14:00.0 VGA compatible controller: ASPEED Technology, Inc. ASPEED Graphics Family (rev 52)\n",
+        );
+        assert_eq!(server_pci.len(), 1);
+        assert_eq!(server_pci[0].arch, "NVIDIA");
+        assert_eq!(server_pci[0].count, 1);
     }
 
     #[test]
