@@ -40,6 +40,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         || path == "/api/cluster/storage/start-share"
         || path == "/api/cluster/storage/mount"
         || path == "/api/cluster/storage/unmount"
+        || path == "/api/cluster/zot/environment"
         || path == "/api/cluster/self-update"
         || path.starts_with("/api/cluster/self-update/")
         || path == "/api/cluster/images"
@@ -508,6 +509,10 @@ mod tests {
         assert!(is_public(&Method::POST, "/api/cluster/storage/start-share"));
         assert!(is_public(&Method::POST, "/api/cluster/storage/mount"));
         assert!(is_public(&Method::POST, "/api/cluster/storage/unmount"));
+        assert!(is_public(
+            &Method::POST,
+            "/api/cluster/zot/environment"
+        ));
         assert!(is_public(&Method::GET, "/api/cluster/self-update"));
         assert!(is_public(
             &Method::GET,
