@@ -112,7 +112,7 @@
       margin: 0; height: 100%; background: var(--bg); color: var(--text); font-size: 16px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", "PingFang SC", "Noto Sans CJK SC", Helvetica, Arial, sans-serif;
     }
-    button, input, textarea { font: inherit; }
+    button, input, textarea, select { font: inherit; }
     button { cursor: pointer; }
     a { color: var(--accent); }
     a.brand { text-decoration: none; color: inherit; }
@@ -482,11 +482,38 @@
     .db-backup-head .btn { margin-left: auto; flex: 0 0 auto; }
     .db-backup-meta { color: var(--muted); font-size: 13px; line-height: 1.6; word-break: break-word; }
     .db-restore-form { padding: 16px; overflow: auto; }
-    .db-auto-form { padding: 12px 16px; overflow: auto; }
-    .db-auto-form > .hint { margin: 0 0 10px; line-height: 1.4; }
-    .db-auto-form .field { margin-bottom: 9px; }
-    .db-auto-form .check { display: flex; align-items: center; gap: 7px; margin: 8px 0 10px; }
-    .db-auto-form .flash { margin-top: 10px !important; padding: 8px 10px; }
+    .db-auto-form { padding: 18px 20px 20px; overflow: auto; }
+    .db-auto-form > .hint { margin: 0 0 16px; line-height: 1.5; }
+    .db-auto-settings {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px 16px; margin: 14px 0;
+    }
+    .db-auto-form .field { min-width: 0; margin: 0; }
+    .db-auto-form .field-wide { grid-column: 1 / -1; }
+    .db-auto-form .field > label { margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+    .db-auto-form input[type="time"],
+    .db-auto-form input[type="number"],
+    .db-auto-form select {
+      width: 100%; min-width: 0; height: 38px; padding: 7px 10px;
+      border: 1px solid var(--line); border-radius: 6px;
+      background: var(--bg-input); color: var(--text); outline: none;
+    }
+    .db-auto-form input[type="time"]:focus,
+    .db-auto-form input[type="number"]:focus,
+    .db-auto-form select:focus {
+      border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active);
+    }
+    .db-auto-form .check {
+      display: flex; align-items: center; gap: 8px; min-height: 24px;
+      margin: 0; color: var(--text); cursor: pointer;
+    }
+    .db-auto-form .check input { width: 16px; height: 16px; margin: 0; flex: 0 0 auto; }
+    .db-auto-form .flash { margin-top: 14px !important; padding: 9px 11px; line-height: 1.45; }
+    .db-auto-actions { display: flex; margin-top: 14px; }
+    @media (max-width: 540px) {
+      .db-auto-settings { grid-template-columns: minmax(0, 1fr); }
+      .db-auto-form .field-wide { grid-column: auto; }
+    }
     .db-restore-mode { display: flex; gap: 18px; margin-bottom: 14px; }
     .db-restore-tables { border: 1px solid var(--line); background: var(--bg-input); max-height: 300px; overflow: auto; padding: 8px 12px; margin: 10px 0; }
     .db-restore-tables label { display: flex; align-items: center; gap: 8px; min-height: 30px; cursor: pointer; }
@@ -691,7 +718,7 @@
     .modal.narrow { width: min(1200px, 100%); }
     .modal.dir-modal { width: min(760px, 100%); height: min(600px, 100%); }
     .modal.form-modal { width: min(600px, 100%); height: auto; max-height: calc(100vh - 96px); }
-    .modal.db-auto-modal { width: min(480px, 100%); height: auto; max-height: calc(100vh - 64px); }
+    .modal.db-auto-modal { width: min(520px, 100%); height: auto; max-height: calc(100vh - 64px); }
     .modal.network-modal { width: min(420px, 100%); height: auto; }
     .modal.password-modal { width: min(440px, 100%); height: auto; max-height: calc(100vh - 96px); }
     .modal.form-modal .modal-body { overflow: auto; }
@@ -4933,12 +4960,14 @@
         $("#dialog-body").innerHTML = `<div class="db-auto-form">
           <p class="hint">每天按服务器本地时间执行。程序错过设定时间后，会在当天恢复运行时补执行一次。</p>
           <label class="check"><input id="db-auto-enabled" type="checkbox" ${schedule.enabled ? "checked" : ""} /> 启用自动备份</label>
-          <div class="field"><label>执行时间</label><input id="db-auto-time" type="time" value="${esc(schedule.timeOfDay || "03:00")}" /></div>
-          <div class="field"><label>保留自动备份份数</label><input id="db-auto-retain" type="number" min="1" max="365" value="${schedule.retainCount || 7}" /></div>
-          <div class="field"><label>同时复制到存储</label><select id="db-auto-storage"><option value="">仅保存在本机</option>${storageOptions}</select></div>
+          <div class="db-auto-settings">
+            <div class="field"><label for="db-auto-time">执行时间</label><input id="db-auto-time" type="time" value="${esc(schedule.timeOfDay || "03:00")}" /></div>
+            <div class="field"><label for="db-auto-retain">保留份数</label><input id="db-auto-retain" type="number" min="1" max="365" value="${schedule.retainCount || 7}" /></div>
+            <div class="field field-wide"><label for="db-auto-storage">同时复制到存储</label><select id="db-auto-storage"><option value="">仅保存在本机</option>${storageOptions}</select></div>
+          </div>
           <label class="check"><input id="db-auto-before-update" type="checkbox" ${schedule.backupBeforeUpdate !== false ? "checked" : ""} /> 项目升级前自动备份数据库</label>
           <div class="flash" style="margin-top:14px">最近执行：${statusText}</div>
-          <div class="row" style="margin-top:14px"><button type="button" class="btn" id="db-auto-run">立即执行一次</button></div>
+          <div class="db-auto-actions"><button type="button" class="btn" id="db-auto-run">立即执行一次</button></div>
           <div class="flash err" id="db-auto-error" hidden></div>
         </div>`;
         const payload = () => ({
