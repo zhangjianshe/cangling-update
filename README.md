@@ -116,7 +116,7 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 
 ## 集群（多节点）
 
-同一个可执行文件可以组成「主节点 + 工作节点」的集群：主节点收集各节点信息（主机名、IP、磁盘/内存/CPU/GPU、软件、项目列表），网页控制台左侧「集群」入口可查看节点在线状态与每台主机的信息。主节点启动后也会把自己登记进节点列表并保持在线。
+同一个可执行文件可以组成「主节点 + 工作节点」的集群：主节点收集各节点信息（主机名、IP、磁盘/内存/CPU/GPU、软件、项目列表），网页控制台顶部“主机节点”模块可查看节点在线状态与每台主机的信息。主节点启动后也会把自己登记进节点列表并保持在线。
 
 - 所有节点使用**相同的 `--cluster-token`**（机器间认证，与网页登录账号无关）。
 - 新节点注册到主节点、或从离线恢复在线时，主节点会自动把本机账号推送给它，使各节点保持同一套登录账号密码（详见「登录与忘记密码」）。
@@ -139,7 +139,7 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 
 ### K3s 资源管理
 
-控制台“集群管理 → K3s 资源”使用主节点本机的 `k3s kubectl` 管理集群。当前支持命名空间、节点、Pod、Deployment、StatefulSet、DaemonSet、Job、CronJob、Service、Ingress、ConfigMap、PVC、PV 和 StorageClass。
+控制台顶部的“K3s 资源”模块使用主节点本机的 `k3s kubectl` 管理集群；“主机节点”作为独立一级模块管理 cangling-update 节点。当前支持命名空间、节点、Pod、Deployment、StatefulSet、DaemonSet、Job、CronJob、Service、Ingress、ConfigMap、PVC、PV 和 StorageClass。
 
 资源详情中可以查看只读 YAML、关联事件和 Pod 日志。运维操作限制为工作负载滚动重启、Deployment/StatefulSet 扩缩容以及删除 Pod；不提供任意命令和在线 YAML 写入。程序必须运行在安装了 k3s server、且有权访问集群的主机上。
 
@@ -168,8 +168,8 @@ updates/
 
 主节点控制台的「集群」页面提供**初始化集群**按钮：填写集群名称后一键完成各节点基线软件安装。目标集群可完全离线，所有软件包都从主节点的 `repo/cangling-repo/<本机平台>/` 里读取安装脚本执行。
 
-- 主节点：`git`、`samba`、`docker`、`k3s-server`、`k9s`，并在安装 k3s 后写入 Traefik 入口端口覆盖（HTTP 8020 / HTTPS 8443），检查 `/root/.kube/config`（缺失则从 `/etc/rancher/k3s/k3s.yaml` 拷贝）。
-- 工作节点：`git`、`samba`、`docker`、`k3s-agent`（自动携带 `K3S_URL` / `K3S_TOKEN` 加入集群）。
+- 主节点：`git`、`samba`、`cifs-utils`、NFS 客户端与服务端（Debian/Ubuntu 为 `nfs-common` + `nfs-kernel-server`，RPM 系为 `nfs-utils`）、`docker`、`k3s-server`、`k9s`，并在安装 k3s 后写入 Traefik 入口端口覆盖（HTTP 8020 / HTTPS 8443），检查 `/root/.kube/config`（缺失则从 `/etc/rancher/k3s/k3s.yaml` 拷贝）。
+- 工作节点：`git`、`samba`、`cifs-utils`、NFS 客户端与服务端、`docker`、`k3s-agent`（自动携带 `K3S_URL` / `K3S_TOKEN` 加入集群）。初始化集群和“检查并修复”都会执行同一套 NFS 依赖检查；仅当 `mount.nfs` 与 `exportfs` 均存在时才视为安装完成。
 - 各软件对应 `repo/cangling-repo/<平台>/<软件名>/install.sh`（如 `repo/cangling-repo/linux-x86/docker/install.sh`）；安装脚本可通过环境变量 `CANGLING_CLUSTER_NAME`、`K3S_URL`、`K3S_TOKEN` 获取集群信息。
 - 主节点会把 k3s 的 node-token（`/var/lib/rancher/k3s/server/node-token`）下发给各工作节点用于加入。
 
@@ -177,11 +177,13 @@ updates/
 
 本程序启动时若 Docker 守护进程还没起来，页面会显示「守护进程未就绪」，此时不能做基线备份或 Compose 操作。Docker 启动后页面会自动恢复，不必重启本程序。已安装过服务的机器请再执行一次 `install-service`，以便开机时先拉起 docker。
 
-### 主机 CIFS 存储部署
+### 主机 CIFS / NFS 存储部署
 
 「存储」页面创建主机 CIFS 共享时必须填写专用存储用户名和密码。部署会在共享主机创建同名、不可登录的 OS 用户和 Samba 用户，关闭 guest，并以该用户访问共享目录；禁止使用 `root` 作为存储账号。
 
 挂载到其它节点时，密码写入 `/etc/cangling-update/storage-*.credentials`（目录权限 `0700`、文件权限 `0600`），`/etc/fstab` 只引用凭据文件，不保存明文密码。CIFS 默认使用 SMB3，并设置 `uid=0,gid=0,file_mode=0660,dir_mode=0770`，因此 bind mount 到以 root 运行的容器后可直接读写，而共享主机上实际写文件的仍是专用存储用户。
+
+选择“主机 NFS 共享”时不需要共享名称和账号密码。部署会在共享主机写入 `/etc/exports.d/cangling-<存储ID>.exports`，启动 `nfs-kernel-server`（或 `nfs-server`），并在其它节点以 NFS 挂载共享目录。默认导出选项为 `rw,sync,no_subtree_check,no_root_squash`，也可在高级选项中使用逗号分隔的 NFS 导出选项。共享主机需要预先安装 `nfs-kernel-server`，挂载节点需要 `nfs-common`。
 
 旧版创建的匿名共享需要先在页面补充用户名和密码，再卸载旧挂载并重新部署，才能切换到认证模式。
 

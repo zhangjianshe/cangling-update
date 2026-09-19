@@ -40,8 +40,8 @@ dl_apt "git" "$SRC_ROOT/$PLATFORM/git"
 dl_apt "samba" "$SRC_ROOT/$PLATFORM/samba"
 # cifs-utils（CIFS/SMB 挂载客户端）
 dl_apt "cifs-utils" "$SRC_ROOT/$PLATFORM/cifs-utils"
-# nfs-common（NFS 挂载客户端）
-dl_apt "nfs-common" "$SRC_ROOT/$PLATFORM/nfs-common"
+# NFS 客户端与服务端（同一离线软件目录供初始化/检查修复执行）
+dl_apt "nfs-common nfs-kernel-server" "$SRC_ROOT/$PLATFORM/nfs-common"
 
 # docker：先加官方源（Ubuntu/Debian）
 if [ ! -f /etc/apt/sources.list.d/docker.list ]; then
@@ -53,4 +53,4 @@ if [ ! -f /etc/apt/sources.list.d/docker.list ]; then
 fi
 dl_apt "docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin" "$SRC_ROOT/$PLATFORM/docker"
 
-echo "完成，git/samba/cifs-utils/nfs-common/docker 离线 .deb 已就绪（平台 $PLATFORM）。"
+echo "完成，git/samba/cifs-utils/NFS 客户端与服务端/docker 离线 .deb 已就绪（平台 $PLATFORM）。"

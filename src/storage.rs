@@ -1,8 +1,8 @@
-//! 存储模块：定义外部存储（CIFS/NFS）与主机 CIFS 共享，并可挂载外部存储、
+//! 存储模块：定义外部存储（CIFS/NFS）与主机 CIFS/NFS 共享，并可挂载外部存储、
 //! 在目标主机上启动共享。
 //!
 //! - 外部存储：`mount -t cifs/nfs` 挂载到本机，并尽量写入 /etc/fstab。
-//! - 主机 CIFS 共享：在集群主机（或本机）上写入 samba 共享片段并重启 smbd。
+//! - 主机共享：CIFS 写入 samba 配置；NFS 写入 exports.d 配置并刷新导出。
 
 use crate::cluster;
 use crate::error::AppError;
@@ -73,6 +73,8 @@ pub struct StorageBody {
 pub struct ClusterShareRequest {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_cifs_protocol")]
+    pub protocol: String,
     pub share: String,
     pub path: String,
     #[serde(default)]
@@ -113,13 +115,15 @@ pub struct ClusterUnmountRequest {
     pub target_dir: String,
 }
 
+fn default_cifs_protocol() -> String {
+    "cifs".into()
+}
+
 // ---------------------------------------------------------------------------
 // HTTP 处理器（控制台，登录会话）
 // ---------------------------------------------------------------------------
 
-pub async fn list_storages(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<Storage>>, AppError> {
+pub async fn list_storages(State(state): State<AppState>) -> Result<Json<Vec<Storage>>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let mut list = list_storages_db(&conn)?;
     refresh_external_status(&mut list);
@@ -152,8 +156,7 @@ pub async fn update_storage(
     Json(body): Json<StorageBody>,
 ) -> Result<Json<Storage>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-    let existing =
-        get_storage_db(&conn, &id)?.ok_or_else(|| AppError::not_found("存储不存在"))?;
+    let existing = get_storage_db(&conn, &id)?.ok_or_else(|| AppError::not_found("存储不存在"))?;
     let s = normalize(&body, Some(&existing), &conn)?;
     if storage_name_exists(&conn, &s.name, Some(&id))? {
         return Err(AppError::conflict("存储名称已存在"));
@@ -258,7 +261,7 @@ pub async fn start_share(
 ) -> Result<Json<Storage>, AppError> {
     let mut s = load_storage(&state, &id)?;
     if s.kind != KIND_HOST_SHARE {
-        return Err(AppError::bad("只有「主机 CIFS 共享」需要启动共享"));
+        return Err(AppError::bad("只有「主机共享」需要启动共享"));
     }
 
     let local_id = cluster::load_or_create_node_id(&state.paths);
@@ -273,7 +276,7 @@ pub async fn start_share(
     Ok(Json(s))
 }
 
-/// worker 侧（机器间接口）：在本机启动一个 samba 共享。
+/// worker 侧（机器间接口）：在本机启动一个 CIFS 或 NFS 共享。
 pub async fn cluster_start_share(
     Json(body): Json<ClusterShareRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -281,7 +284,7 @@ pub async fn cluster_start_share(
         id: body.id,
         name: body.name,
         kind: KIND_HOST_SHARE.into(),
-        protocol: "cifs".into(),
+        protocol: body.protocol,
         host_id: String::new(),
         host_name: "本机".into(),
         server: String::new(),
@@ -346,14 +349,17 @@ fn map_storage(row: &rusqlite::Row<'_>) -> rusqlite::Result<Storage> {
 }
 
 pub fn list_storages_db(conn: &Connection) -> rusqlite::Result<Vec<Storage>> {
-    let mut stmt =
-        conn.prepare(&format!("SELECT {STORAGE_COLS} FROM storages ORDER BY updated_at DESC"))?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {STORAGE_COLS} FROM storages ORDER BY updated_at DESC"
+    ))?;
     let rows = stmt.query_map([], map_storage)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
 }
 
 pub fn get_storage_db(conn: &Connection, id: &str) -> rusqlite::Result<Option<Storage>> {
-    let mut stmt = conn.prepare(&format!("SELECT {STORAGE_COLS} FROM storages WHERE id = ?1"))?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {STORAGE_COLS} FROM storages WHERE id = ?1"
+    ))?;
     stmt.query_row(params![id], map_storage).optional()
 }
 
@@ -524,21 +530,39 @@ fn normalize(
         s.host_id = String::new();
         s.host_name = "本机".into();
     } else {
-        s.protocol = "cifs".into();
-        s.server = String::new();
-        if s.share.is_empty() {
-            return Err(AppError::bad("请填写共享名称"));
+        if s.protocol != "cifs" && s.protocol != "nfs" {
+            return Err(AppError::bad("主机共享协议必须是 cifs 或 nfs"));
         }
+        s.server = String::new();
         if s.path.is_empty() {
             return Err(AppError::bad("请填写要共享的主机目录"));
+        }
+        if !FsPath::new(&s.path).is_absolute() {
+            return Err(AppError::bad("共享目录必须是绝对路径"));
         }
         if s.target_dir.is_empty() {
             return Err(AppError::bad("请填写目标目录（挂载点）"));
         }
-        if s.username.is_empty() || s.password.is_empty() {
-            return Err(AppError::bad("主机 CIFS 共享必须填写专用用户名和密码"));
+        if !FsPath::new(&s.target_dir).is_absolute() {
+            return Err(AppError::bad("目标目录（挂载点）必须是绝对路径"));
         }
-        validate_storage_username(&s.username)?;
+        if s.protocol == "cifs" {
+            if s.share.is_empty() {
+                return Err(AppError::bad("请填写共享名称"));
+            }
+            if s.username.is_empty() || s.password.is_empty() {
+                return Err(AppError::bad("主机 CIFS 共享必须填写专用用户名和密码"));
+            }
+            validate_storage_username(&s.username)?;
+            validate_samba_options(&s.options)?;
+        } else {
+            validate_nfs_export_path(&s.path)?;
+            validate_nfs_export_options(&s.options)?;
+            // NFS 客户端挂载的是导出路径，而不是 Samba 风格的共享名。
+            s.share = s.path.clone();
+            s.username.clear();
+            s.password.clear();
+        }
         if s.host_id.is_empty() {
             s.host_name = "本机".into();
         } else if s.host_name.is_empty() {
@@ -589,8 +613,7 @@ where
 async fn forward_start_share(state: &AppState, s: &Storage) -> Result<String, AppError> {
     let addr = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        node_addr(&conn, &s.host_id)?
-            .ok_or_else(|| AppError::bad("目标主机不在集群节点列表中"))?
+        node_addr(&conn, &s.host_id)?.ok_or_else(|| AppError::bad("目标主机不在集群节点列表中"))?
     };
     let token = state
         .cluster
@@ -604,6 +627,7 @@ async fn forward_start_share(state: &AppState, s: &Storage) -> Result<String, Ap
     let body = serde_json::json!({
         "id": s.id,
         "name": s.name,
+        "protocol": s.protocol,
         "share": s.share,
         "path": s.path,
         "target_dir": s.target_dir,
@@ -696,9 +720,13 @@ async fn deploy_host_share(
     };
 
     let req = ClusterMountRequest {
-        protocol: "cifs".into(),
+        protocol: s.protocol.clone(),
         server: owning_ip,
-        share: s.share.clone(),
+        share: if s.protocol == "nfs" {
+            s.path.clone()
+        } else {
+            s.share.clone()
+        },
         target_dir: s.target_dir.clone(),
         username: s.username.clone(),
         password: s.password.clone(),
@@ -1022,8 +1050,8 @@ fn build_mount_spec_parts(
                 }
                 opts.push_str("guest");
             } else {
-                let credentials_file = credentials_file
-                    .ok_or_else(|| AppError::internal("缺少 CIFS 凭据文件"))?;
+                let credentials_file =
+                    credentials_file.ok_or_else(|| AppError::internal("缺少 CIFS 凭据文件"))?;
                 if !opts.is_empty() {
                     opts.push(',');
                 }
@@ -1180,7 +1208,7 @@ fn cmd_message(out: &std::process::Output) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 主机 CIFS 共享：samba 配置 + 启动
+// 主机共享：Samba / NFS 配置 + 启动
 // ---------------------------------------------------------------------------
 
 fn ensure_symlink(link: &str, target: &str) -> Result<String, AppError> {
@@ -1197,29 +1225,39 @@ fn ensure_symlink(link: &str, target: &str) -> Result<String, AppError> {
         )));
     }
     if lp.exists() {
-        return Err(AppError::bad(format!("{link} 已存在且不是软链接，无法覆盖")));
+        return Err(AppError::bad(format!(
+            "{link} 已存在且不是软链接，无法覆盖"
+        )));
     }
     if let Some(parent) = lp.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| AppError::internal(format!("创建 {} 失败：{e}", parent.display())))?;
     }
-    std::os::unix::fs::symlink(tp, lp).map_err(|e| {
-        AppError::internal(format!("创建软链接 {link} → {target} 失败：{e}"))
-    })?;
+    std::os::unix::fs::symlink(tp, lp)
+        .map_err(|e| AppError::internal(format!("创建软链接 {link} → {target} 失败：{e}")))?;
     Ok(format!("已创建软链接 {link} → {target}"))
 }
 
 fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
+    match s.protocol.as_str() {
+        "cifs" => start_cifs_share_local(s),
+        "nfs" => start_nfs_share_local(s),
+        _ => Err(AppError::bad("主机共享协议必须是 cifs 或 nfs")),
+    }
+}
+
+fn prepare_host_share_path(s: &Storage) -> Result<(String, String), AppError> {
     let dir = s.path.trim();
     if dir.is_empty() {
         return Err(AppError::bad("请填写要共享的目录"));
+    }
+    if !FsPath::new(dir).is_absolute() {
+        return Err(AppError::bad("共享目录必须是绝对路径"));
     }
     if !FsPath::new(dir).is_dir() {
         std::fs::create_dir_all(dir)
             .map_err(|e| AppError::internal(format!("创建共享目录失败 {dir}：{e}")))?;
     }
-    let share_name = sanitize_share_name(&s.share)?;
-
     // 在源主机上建立软链接，使所有节点（源主机 + 挂载节点）用同一路径访问该存储。
     let link_note = if s.target_dir.trim().is_empty() || s.target_dir.trim() == dir {
         String::new()
@@ -1229,6 +1267,12 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
             Err(e) => format!("未创建软链接：{e}"),
         }
     };
+    Ok((dir.to_string(), link_note))
+}
+
+fn start_cifs_share_local(s: &Storage) -> Result<String, AppError> {
+    let (dir, link_note) = prepare_host_share_path(s)?;
+    let share_name = sanitize_share_name(&s.share)?;
 
     if find_smbd().is_none() {
         return Err(AppError::internal(
@@ -1245,7 +1289,7 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     validate_samba_options(&s.options)?;
     ensure_os_user(&s.username)?;
     ensure_samba_user(&s.username, &s.password)?;
-    prepare_share_directory(dir, &s.username)?;
+    prepare_share_directory(&dir, &s.username)?;
 
     let conf_dir = FsPath::new("/etc/samba");
     std::fs::create_dir_all(conf_dir)
@@ -1254,9 +1298,8 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     let auth_note = format!("专用 OS/Samba 用户认证（{}）", s.username);
 
     let conf_file = conf_dir.join(format!("cangling-{}.conf", s.id));
-    let mut snippet = format!(
-        "[{share_name}]\n   path = {dir}\n   browseable = yes\n   read only = no\n"
-    );
+    let mut snippet =
+        format!("[{share_name}]\n   path = {dir}\n   browseable = yes\n   read only = no\n");
     for line in s.options.lines() {
         let l = line.trim();
         if !l.is_empty() {
@@ -1277,13 +1320,102 @@ fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
     ensure_include(&smb_conf, &format!("include = {}", conf_file.display()))?;
 
     let note = reload_smbd()?;
-    let mut msg = format!(
-        "共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并应用 smbd 配置：{note}"
-    );
+    let mut msg =
+        format!("共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并应用 smbd 配置：{note}");
     if !link_note.is_empty() {
         msg.push_str(&format!("；{link_note}"));
     }
     Ok(msg)
+}
+
+fn validate_nfs_export_options(options: &str) -> Result<(), AppError> {
+    let value = options.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    if value
+        .chars()
+        .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, ',' | '=' | '_' | '-' | '.')))
+    {
+        return Err(AppError::bad(
+            "NFS 导出选项只能包含字母、数字、逗号、等号、点、下划线和短横线",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_nfs_export_path(path: &str) -> Result<(), AppError> {
+    if path
+        .chars()
+        .any(|c| c.is_whitespace() || matches!(c, '(' | ')'))
+    {
+        return Err(AppError::bad("NFS 共享目录不能包含空白字符或括号"));
+    }
+    Ok(())
+}
+
+fn start_nfs_share_local(s: &Storage) -> Result<String, AppError> {
+    let (dir, link_note) = prepare_host_share_path(s)?;
+    validate_nfs_export_path(&dir)?;
+    validate_nfs_export_options(&s.options)?;
+    let exportfs = find_exportfs().ok_or_else(|| {
+        AppError::internal("未检测到 exportfs。请先在共享主机安装 nfs-kernel-server 后再启动共享。")
+    })?;
+    let options = if s.options.trim().is_empty() {
+        "rw,sync,no_subtree_check,no_root_squash"
+    } else {
+        s.options.trim()
+    };
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770))
+        .map_err(|e| AppError::internal(format!("设置共享目录权限失败：{e}")))?;
+
+    let exports_dir = FsPath::new("/etc/exports.d");
+    std::fs::create_dir_all(exports_dir)
+        .map_err(|e| AppError::internal(format!("创建 {} 失败：{e}", exports_dir.display())))?;
+    let exports_file = exports_dir.join(format!("cangling-{}.exports", s.id));
+    std::fs::write(&exports_file, format!("{dir} *({options})\n"))
+        .map_err(|e| AppError::internal(format!("写入 {} 失败：{e}", exports_file.display())))?;
+
+    let mut service = "";
+    for unit in ["nfs-kernel-server", "nfs-server"] {
+        if systemctl_ok(&["enable", "--now", unit]) || systemctl_ok(&["restart", unit]) {
+            service = unit;
+            break;
+        }
+    }
+    let out = Command::new(exportfs)
+        .arg("-ra")
+        .output()
+        .map_err(|e| AppError::internal(format!("执行 exportfs -ra 失败：{e}")))?;
+    if !out.status.success() {
+        return Err(AppError::internal(format!(
+            "应用 NFS 导出配置失败：{}",
+            cmd_message(&out)
+        )));
+    }
+    if service.is_empty() {
+        return Err(AppError::internal(
+            "NFS 导出已写入，但无法启动 nfs-kernel-server/nfs-server 服务",
+        ));
+    }
+    let mut msg = format!("NFS 共享 {dir} 已导出（{options}），服务 {service} 已启动");
+    if !link_note.is_empty() {
+        msg.push_str(&format!("；{link_note}"));
+    }
+    Ok(msg)
+}
+
+fn find_exportfs() -> Option<PathBuf> {
+    ["exportfs", "/usr/sbin/exportfs", "/sbin/exportfs"]
+        .into_iter()
+        .find_map(|candidate| {
+            let path = FsPath::new(candidate);
+            if path.is_absolute() {
+                path.is_file().then(|| path.to_path_buf())
+            } else {
+                which(candidate)
+            }
+        })
 }
 
 fn sanitize_share_name(raw: &str) -> Result<String, AppError> {
@@ -1330,12 +1462,19 @@ fn validate_samba_options(options: &str) -> Result<(), AppError> {
         "force create mode",
         "force directory mode",
     ];
-    for line in options.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in options
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if line.starts_with('[') {
             return Err(AppError::bad("Samba 高级选项不能定义新的共享段"));
         }
         if let Some((key, _)) = line.split_once('=') {
-            if MANAGED.iter().any(|managed| key.trim().eq_ignore_ascii_case(managed)) {
+            if MANAGED
+                .iter()
+                .any(|managed| key.trim().eq_ignore_ascii_case(managed))
+            {
                 return Err(AppError::bad(format!(
                     "Samba 选项 {} 由系统管理，不能在高级选项中覆盖",
                     key.trim()
@@ -1453,7 +1592,11 @@ fn smbd_listening() -> bool {
     Command::new("ss")
         .args(["-lnt"])
         .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.contains(":445")))
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.contains(":445"))
+        })
         .unwrap_or(false)
 }
 
@@ -1572,17 +1715,27 @@ mod tests {
     }
 
     #[test]
+    fn nfs_export_options_reject_config_injection() {
+        assert!(validate_nfs_export_options("rw,sync,no_subtree_check,sec=sys").is_ok());
+        assert!(validate_nfs_export_options("").is_ok());
+        assert!(validate_nfs_export_options("rw)\n/etc *(rw").is_err());
+        assert!(validate_nfs_export_options("rw, insecure").is_err());
+        assert!(validate_nfs_export_path("/mnt/data").is_ok());
+        assert!(validate_nfs_export_path("/mnt/bad path").is_err());
+        assert!(validate_nfs_export_path("/mnt/data\n/etc").is_err());
+    }
+
+    #[test]
     fn mount_spec_builds_cifs_and_nfs() {
-        let (fstype, src, opts) =
-            build_mount_spec_parts(
-                "cifs",
-                "10.0.0.2",
-                "backup",
-                "u",
-                Some(FsPath::new("/etc/cangling-update/test.credentials")),
-                "iocharset=utf8",
-            )
-            .unwrap();
+        let (fstype, src, opts) = build_mount_spec_parts(
+            "cifs",
+            "10.0.0.2",
+            "backup",
+            "u",
+            Some(FsPath::new("/etc/cangling-update/test.credentials")),
+            "iocharset=utf8",
+        )
+        .unwrap();
         assert_eq!(fstype, "cifs");
         assert_eq!(src, "//10.0.0.2/backup");
         assert!(opts.contains("credentials=/etc/cangling-update/test.credentials"));

@@ -193,10 +193,12 @@
       width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;
     }
     .app[data-section="cluster"] .shell,
+    .app[data-section="k3s"] .shell,
     .app[data-section="repo"] .shell,
     .app[data-section="images"] .shell,
     .app[data-section="storage"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
+    .app[data-section="k3s"] aside,
     .app[data-section="repo"] aside,
     .app[data-section="images"] aside,
     .app[data-section="storage"] aside { display: none; }
@@ -229,31 +231,22 @@
       vertical-align: top;
     }
     .cluster-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
-    .cluster-section-tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
-    .cluster-section-tabs .btn { margin-bottom: -1px; border-radius: 6px 6px 0 0; background: transparent; }
-    .cluster-section-tabs .btn.active { color: var(--accent); border-color: var(--line) var(--line) var(--bg); }
-    .k3s-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
-    .k3s-stat { padding: 12px 14px; border: 1px solid var(--line); background: var(--bg-2); }
-    .k3s-stat span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
-    .k3s-stat strong { font-size: 20px; font-weight: 650; }
+    .k3s-summary { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+    .k3s-stat {
+      display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px;
+      border: 1px solid var(--line); border-radius: 999px; background: var(--bg-2);
+      white-space: nowrap;
+    }
+    .k3s-stat span { color: var(--muted); font-size: 12px; }
+    .k3s-stat strong { font-size: 12px; font-weight: 650; }
     .k3s-toolbar { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 12px; }
     .k3s-toolbar .field { margin: 0; }
-    .k3s-toolbar .field:first-child { width: min(260px, 30vw); }
-    .k3s-toolbar .field:nth-child(2) { flex: 1; min-width: 180px; }
+    .k3s-toolbar .field:nth-child(1),
+    .k3s-toolbar .field:nth-child(2) { width: min(220px, 24vw); }
+    .k3s-toolbar .field:nth-child(3) { flex: 1; min-width: 220px; }
     .k3s-toolbar input, .k3s-toolbar select { width: 100%; height: 34px; }
-    .k3s-resource-layout {
-      display: grid; grid-template-columns: 210px minmax(0, 1fr);
-      min-height: 420px; border: 1px solid var(--line); background: var(--bg-2);
-    }
-    .k3s-resource-nav { padding: 8px; border-right: 1px solid var(--line); }
-    .k3s-resource-nav h4 { margin: 10px 8px 4px; color: var(--muted); font-size: 12px; }
-    .k3s-resource-nav button {
-      display: flex; justify-content: space-between; width: 100%; padding: 7px 9px;
-      border: 0; text-align: left; color: var(--text); background: transparent;
-    }
-    .k3s-resource-nav button:hover { background: var(--bg-3); }
-    .k3s-resource-nav button.active { color: var(--accent); background: var(--bg-active); font-weight: 600; }
-    .k3s-resource-list { min-width: 0; overflow: auto; }
+    .k3s-toolbar select { padding-top: 0; padding-bottom: 0; line-height: 32px; }
+    .k3s-resource-list { min-width: 0; min-height: 420px; overflow: auto; border: 1px solid var(--line); background: var(--bg-2); }
     .k3s-resource-list table { min-width: 760px; }
     .k3s-resource-list tbody tr { cursor: pointer; }
     .k3s-resource-list tbody tr:hover { background: var(--bg-active); }
@@ -269,8 +262,11 @@
     .k3s-detail-tabs .btn.active { color: var(--accent); border-color: var(--accent); background: var(--bg-active); }
     .k3s-code { max-height: 430px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--line); background: var(--log-bg); color: var(--log-text); white-space: pre; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     @media (max-width: 900px) {
-      .k3s-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .k3s-resource-layout { grid-template-columns: 160px minmax(0, 1fr); }
+      .k3s-summary { justify-content: flex-start; margin-left: 0; }
+      .k3s-toolbar { align-items: stretch; flex-direction: column; }
+      .k3s-toolbar .field:nth-child(1),
+      .k3s-toolbar .field:nth-child(2),
+      .k3s-toolbar .field:nth-child(3) { width: 100%; min-width: 0; }
     }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
     .dot.online { background: var(--success); }
@@ -770,11 +766,11 @@
     .modal.password-modal .modal-body { padding: 20px; overflow: auto; }
     .modal.password-modal .modal-foot { padding: 12px 20px; }
     .modal select {
-      padding-top: 0; padding-bottom: 0; line-height: 32px;
+      padding-top: 0; padding-bottom: 0; line-height: normal;
     }
     .modal .storage-form select,
     .modal .db-auto-form select {
-      line-height: 36px;
+      padding-top: 0; padding-bottom: 0; line-height: normal;
     }
     .password-form .field { margin-bottom: 16px; }
     .password-form .field:last-of-type { margin-bottom: 0; }
@@ -1026,7 +1022,8 @@
       </a>
       <nav class="top-nav" aria-label="功能切换">
         <button type="button" class="btn" id="btn-repo" title="软件仓库">软件仓库</button>
-        <button type="button" class="btn" id="btn-cluster" title="集群管理">集群管理</button>
+        <button type="button" class="btn" id="btn-cluster" title="主机节点">主机节点</button>
+        <button type="button" class="btn" id="btn-k3s" title="K3s 资源">K3s 资源</button>
         <button type="button" class="btn" id="btn-images" title="容器镜像">镜像</button>
         <button type="button" class="btn" id="btn-storage" title="存储">存储</button>
         <button type="button" class="btn" id="btn-projects" title="项目">项目</button>
@@ -1086,7 +1083,7 @@
   </div>
   <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "pods", k3sNamespace: "_all", k3sSearch: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [] };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "pods", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [] };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1497,7 +1494,8 @@
     }
 
     function sectionFromHash(hash) {
-      if (hash.startsWith("#/cluster")) return "cluster";
+      if (hash === "#/cluster") return "cluster";
+      if (hash === "#/k3s" || hash === "#/cluster/k3s") return "k3s";
       if (hash === "#/repo") return "repo";
       if (hash === "#/images") return "images";
       if (hash === "#/storage") return "storage";
@@ -1509,7 +1507,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), repo: $("#btn-repo"), images: $("#btn-images"), storage: $("#btn-storage") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), repo: $("#btn-repo"), images: $("#btn-images"), storage: $("#btn-storage") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -1533,7 +1531,7 @@
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
       if (hash === "#/cluster") return renderCluster();
-      if (hash === "#/cluster/k3s") return renderK3s();
+      if (hash === "#/k3s" || hash === "#/cluster/k3s") return renderK3s();
       if (hash === "#/repo") return renderRepo();
       if (hash === "#/images") return renderImages();
       if (hash === "#/storage") return renderStorage();
@@ -1606,8 +1604,7 @@
       const roleName = { standalone: "单机", master: "主节点", worker: "工作节点" }[st.role] || st.role;
       if (st.role === "standalone") {
         $("#main").innerHTML = `
-          <div class="title-row"><div><h2>集群</h2><div class="path">多机部署与节点管理</div></div></div>
-          ${clusterSectionTabs("hosts")}
+          <div class="title-row"><div><h2>主机节点</h2><div class="path">多机部署与节点管理</div></div></div>
           <div id="flash" hidden></div>
           <div class="card" id="cluster-overview-card">
             ${clusterOverviewHeader()}
@@ -1643,9 +1640,8 @@
         : "";
       $("#main").innerHTML = `
         <div class="title-row">
-          <div><h2>集群</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
+          <div><h2>主机节点</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
         </div>
-        ${clusterSectionTabs("hosts")}
         <div id="flash" hidden></div>
         <div class="card" id="cluster-overview-card">
           ${clusterOverviewHeader()}
@@ -1937,13 +1933,6 @@
       { group: "存储", id: "storageclasses", label: "StorageClass", scoped: false },
     ];
 
-    function clusterSectionTabs(active) {
-      return `<div class="cluster-section-tabs">
-        <button type="button" class="btn ${active === "hosts" ? "active" : ""}" onclick="goHash('#/cluster')">主机节点</button>
-        <button type="button" class="btn ${active === "k3s" ? "active" : ""}" onclick="goHash('#/cluster/k3s')">K3s 资源</button>
-      </div>`;
-    }
-
     function stopK3sPoll() {
       if (k3sPoll.timer) { clearInterval(k3sPoll.timer); k3sPoll.timer = null; }
     }
@@ -1958,9 +1947,9 @@
       $("#main").classList.remove("db-fill");
       $("#main").innerHTML = `
         <div class="title-row">
-          <div><h2>K3s 资源</h2><div class="path">浏览和维护当前主节点上的 Kubernetes 资源</div></div>
+          <div><h2>K3s 资源</h2></div>
+          <div id="k3s-summary"></div>
         </div>
-        ${clusterSectionTabs("k3s")}
         <div id="flash" hidden></div>
         <div id="k3s-root"><div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取集群…</div></div></div>`;
       await loadK3s(true);
@@ -2010,42 +1999,41 @@
         `<option value="_all" ${state.k3sNamespace === "_all" ? "selected" : ""}>所有命名空间</option>`,
         ...state.k3sNamespaces.map((name) => `<option value="${esc(name)}" ${state.k3sNamespace === name ? "selected" : ""}>${esc(name)}</option>`)
       ].join("");
-      let group = "";
-      const nav = K3S_RESOURCES.map((item) => {
-        const heading = item.group !== group ? (group = item.group, `<h4>${esc(item.group)}</h4>`) : "";
-        return heading + `<button type="button" data-k3s-kind="${item.id}" class="${item.id === state.k3sKind ? "active" : ""}"><span>${esc(item.label)}</span></button>`;
-      }).join("");
+      const groups = [...new Set(K3S_RESOURCES.map((item) => item.group))];
+      const typeOptions = groups.map((group) => `<optgroup label="${esc(group)}">${K3S_RESOURCES
+        .filter((item) => item.group === group)
+        .map((item) => `<option value="${item.id}" ${item.id === state.k3sKind ? "selected" : ""}>${esc(item.label)}</option>`)
+        .join("")}</optgroup>`).join("");
+      const summary = $("#k3s-summary");
+      if (summary) summary.innerHTML = `<div class="k3s-summary">
+        <div class="k3s-stat"><span>版本</span><strong>${esc(k3sVersion())}</strong></div>
+        <div class="k3s-stat"><span>节点</span><strong>${status.readyNodes || 0}/${status.nodes || 0}</strong></div>
+        <div class="k3s-stat"><span>Pod</span><strong>${status.pods || 0}</strong></div>
+        <div class="k3s-stat"><span>异常</span><strong class="${status.unhealthyPods ? "bad" : "ok"}">${status.unhealthyPods || 0}</strong></div>
+      </div>`;
       root.innerHTML = `
-        <div class="k3s-summary">
-          <div class="k3s-stat"><span>Kubernetes 版本</span><strong>${esc(k3sVersion())}</strong></div>
-          <div class="k3s-stat"><span>节点</span><strong>${status.readyNodes || 0} / ${status.nodes || 0}</strong></div>
-          <div class="k3s-stat"><span>Pod</span><strong>${status.pods || 0}</strong></div>
-          <div class="k3s-stat"><span>异常 Pod</span><strong class="${status.unhealthyPods ? "bad" : "ok"}">${status.unhealthyPods || 0}</strong></div>
-        </div>
         <div class="k3s-toolbar">
           <div class="field"><label>命名空间</label><select id="k3s-namespace" ${meta.scoped ? "" : "disabled"}>${namespaceOptions}</select></div>
-          <div class="field"><label>搜索资源</label><input id="k3s-search" type="text" value="${esc(state.k3sSearch)}" placeholder="按名称或命名空间过滤" /></div>
+          <div class="field"><label>资源类型</label><select id="k3s-kind">${typeOptions}</select></div>
+          <div class="field"><label>资源</label><input id="k3s-resource" type="text" value="${esc(state.k3sResource)}" placeholder="输入资源名称过滤" autocomplete="off" /></div>
           <button type="button" class="btn" id="k3s-refresh">刷新</button>
         </div>
-        <div class="k3s-resource-layout">
-          <nav class="k3s-resource-nav">${nav}</nav>
-          <div class="k3s-resource-list" id="k3s-resource-list"></div>
-        </div>`;
+        <div class="k3s-resource-list" id="k3s-resource-list"></div>`;
       $("#k3s-namespace").onchange = async (event) => {
         state.k3sNamespace = event.target.value;
+        state.k3sResource = "";
         await loadK3s(true);
       };
-      $("#k3s-search").oninput = (event) => {
-        state.k3sSearch = event.target.value;
+      $("#k3s-kind").onchange = async (event) => {
+        state.k3sKind = event.target.value;
+        state.k3sResource = "";
+        await loadK3s(true);
+      };
+      $("#k3s-resource").oninput = (event) => {
+        state.k3sResource = event.target.value;
         renderK3sTable();
       };
       $("#k3s-refresh").onclick = () => loadK3s(true);
-      document.querySelectorAll("[data-k3s-kind]").forEach((button) => {
-        button.onclick = async () => {
-          state.k3sKind = button.dataset.k3sKind;
-          await loadK3s(true);
-        };
-      });
       renderK3sTable();
     }
 
@@ -2092,11 +2080,10 @@
     function renderK3sTable() {
       const box = $("#k3s-resource-list");
       if (!box) return;
-      const query = state.k3sSearch.trim().toLowerCase();
+      const query = state.k3sResource.trim().toLowerCase();
       const items = state.k3sItems.filter((item) => {
         const metadata = item.metadata || {};
-        return !query || String(metadata.name || "").toLowerCase().includes(query)
-          || String(metadata.namespace || "").toLowerCase().includes(query);
+        return !query || String(metadata.name || "").toLowerCase().includes(query);
       });
       const rows = items.map((item, index) => {
         const metadata = item.metadata || {};
@@ -2895,7 +2882,7 @@
       const rows = (state.storages || []).map(storageRow).join("");
       $("#main").innerHTML = `
         <div class="title-row">
-          <div><h2>存储</h2><div class="path">定义外部存储（CIFS/NFS）或主机 CIFS 共享，并挂载 / 启动共享</div></div>
+          <div><h2>存储</h2><div class="path">定义外部存储或主机 CIFS/NFS 共享，并挂载 / 启动共享</div></div>
         </div>
         <div id="flash" hidden></div>
         <div class="card">
@@ -2920,10 +2907,10 @@
     }
 
     function storageRow(s) {
-      const kind = s.kind === "host_share" ? "主机 CIFS 共享" : "外部存储";
-      const protocol = s.kind === "host_share" ? "CIFS" : ((s.protocol || "—").toUpperCase());
+      const protocol = (s.protocol || "—").toUpperCase();
+      const kind = s.kind === "host_share" ? `主机 ${protocol} 共享` : "外部存储";
       const serverShare = s.kind === "host_share"
-        ? `${esc(s.share)}（源目录 ${esc(s.path || "—")}）`
+        ? (s.protocol === "nfs" ? esc(s.path || "—") : `${esc(s.share)}（源目录 ${esc(s.path || "—")}）`)
         : `${esc(s.server || "—")} / ${esc(s.share || "—")}`;
       return `<tr>
         <td>${esc(s.name)}</td>
@@ -2988,7 +2975,7 @@
 
     function storageFormHtml(s) {
       const v = (k) => esc((s && s[k]) || "");
-      const kind = s ? s.kind : "external";
+      const kind = s && s.kind === "host_share" ? `host_share_${s.protocol || "cifs"}` : "external";
       const protocol = s ? (s.protocol || "cifs") : "cifs";
       const nodes = state.clusterNodes || [];
       const hostOpts = `<option value="">本机</option>` + nodes.map(n =>
@@ -3003,7 +2990,8 @@
             <div class="field"><label>类型</label>
               <select id="st-kind">
                 <option value="external" ${kind === "external" ? "selected" : ""}>外部存储（CIFS/NFS）</option>
-                <option value="host_share" ${kind === "host_share" ? "selected" : ""}>主机 CIFS 共享</option>
+                <option value="host_share_cifs" ${kind === "host_share_cifs" ? "selected" : ""}>主机 CIFS 共享</option>
+                <option value="host_share_nfs" ${kind === "host_share_nfs" ? "selected" : ""}>主机 NFS 共享</option>
               </select>
             </div>
           </div>
@@ -3029,18 +3017,18 @@
         <div class="form-section" id="st-host-share" hidden>
           <div class="form-section-title">共享信息</div>
           <div class="field"><label>所在主机</label><select id="st-host-id">${hostOpts}</select></div>
-          <div class="field"><label>共享名称</label><input id="st-share-h" type="text" value="${v('share')}" placeholder="data" /><p class="hint">客户端通过该名称访问共享。</p></div>
-          <div class="field"><label>共享目录</label><input id="st-path-h" type="text" value="${v('path')}" placeholder="/data/share" /><p class="hint">主机上的绝对路径，将作为 samba 共享暴露。</p></div>
+          <div class="field" id="st-host-share-name"><label>共享名称</label><input id="st-share-h" type="text" value="${v('share')}" placeholder="data" /><p class="hint">CIFS 客户端通过该名称访问共享。</p></div>
+          <div class="field"><label>共享目录</label><input id="st-path-h" type="text" value="${v('path')}" placeholder="/data/share" /><p class="hint" id="st-host-path-hint">主机上的绝对路径，将作为 Samba 共享暴露。</p></div>
           <div class="field"><label>目标目录（挂载点）</label><input id="st-target-dir-h" type="text" value="${v('target_dir')}" placeholder="/mnt/storage" /><p class="hint">部署到其它主机时挂载到此目录，会自动创建。</p></div>
-          <div class="form-grid">
+          <div class="form-grid" id="st-host-creds">
             <div class="field"><label>存储用户名</label><input id="st-username-h" type="text" value="${v('username')}" placeholder="cangling-storage" autocomplete="off" /></div>
             <div class="field"><label>存储密码</label><input id="st-password-h" type="password" placeholder="${s ? '已设置时留空则不修改' : '请输入 Samba 密码'}" autocomplete="new-password" /></div>
           </div>
-          <p class="hint">部署时会创建同名的受限 OS 用户和 Samba 用户，禁用 guest。目标主机通过权限为 600 的凭据文件挂载；容器 root 默认映射为 uid/gid 0。</p>
+          <p class="hint" id="st-host-auth-hint">部署时会创建同名的受限 OS 用户和 Samba 用户，禁用 guest。目标主机通过权限为 600 的凭据文件挂载；容器 root 默认映射为 uid/gid 0。</p>
         </div>
         <div class="form-section">
           <div class="form-section-title">高级选项</div>
-          <div class="field"><label>额外选项（选填）</label><textarea id="st-options" placeholder="例如 iocharset=utf8 或 samba 配置行">${v('options')}</textarea><p class="hint">CIFS/NFS 挂载选项，或 samba 共享配置行（每行一条）。</p></div>
+          <div class="field"><label>额外选项（选填）</label><textarea id="st-options" placeholder="例如 iocharset=utf8 或 Samba 配置行">${v('options')}</textarea><p class="hint" id="st-options-hint">CIFS/NFS 挂载选项，或 Samba 共享配置行（每行一条）。</p></div>
         </div>
       </div>`;
     }
@@ -3051,7 +3039,25 @@
       const ext = $("#st-external");
       const host = $("#st-host-share");
       if (ext) ext.hidden = kind !== "external";
-      if (host) host.hidden = kind !== "host_share";
+      const isHost = kind.startsWith("host_share_");
+      const isHostNfs = kind === "host_share_nfs";
+      if (host) host.hidden = !isHost;
+      const shareName = $("#st-host-share-name");
+      const hostCreds = $("#st-host-creds");
+      const authHint = $("#st-host-auth-hint");
+      if (shareName) shareName.hidden = isHostNfs;
+      if (hostCreds) hostCreds.hidden = isHostNfs;
+      if (authHint) authHint.textContent = isHostNfs
+        ? "部署时会配置主机 NFS 导出，并在其它节点挂载该导出目录。默认允许集群节点以 root 身份读写。"
+        : "部署时会创建同名的受限 OS 用户和 Samba 用户，禁用 guest。目标主机通过权限为 600 的凭据文件挂载；容器 root 默认映射为 uid/gid 0。";
+      const pathHint = $("#st-host-path-hint");
+      if (pathHint) pathHint.textContent = isHostNfs
+        ? "主机上的绝对路径，将作为 NFS 导出目录。"
+        : "主机上的绝对路径，将作为 Samba 共享暴露。";
+      const optionsHint = $("#st-options-hint");
+      if (optionsHint) optionsHint.textContent = isHostNfs
+        ? "NFS 导出选项，逗号分隔；留空使用 rw,sync,no_subtree_check,no_root_squash。"
+        : (isHost ? "Samba 共享配置行，每行一条。" : "CIFS/NFS 客户端挂载选项，逗号分隔。");
       const protoEl = $("#st-protocol");
       const proto = protoEl ? protoEl.value : "cifs";
       const creds = $("#st-cifs-creds");
@@ -3064,9 +3070,9 @@
       const box = $("#storage-form-flash");
       const show = (kind, msg) => { if (box) { box.className = "flash " + kind; box.textContent = msg; box.hidden = false; } };
       const name = $("#st-name").value.trim();
-      const kind = $("#st-kind").value;
-      const body = { name, kind };
-      if (kind === "external") {
+      const formKind = $("#st-kind").value;
+      const body = { name, kind: formKind === "external" ? "external" : "host_share" };
+      if (formKind === "external") {
         body.protocol = $("#st-protocol").value;
         body.server = $("#st-server").value.trim();
         body.share = $("#st-share").value.trim();
@@ -3074,7 +3080,7 @@
         body.username = $("#st-username").value.trim();
         body.password = $("#st-password").value;
       } else {
-        body.protocol = "cifs";
+        body.protocol = formKind === "host_share_nfs" ? "nfs" : "cifs";
         body.host_id = $("#st-host-id").value;
         body.share = $("#st-share-h").value.trim();
         body.path = $("#st-path-h").value.trim();
@@ -6782,6 +6788,7 @@
     $("#btn-add-project").onclick = () => goHash("#/new");
     $("#btn-projects").onclick = () => goHash("#/");
     $("#btn-cluster").onclick = () => goHash("#/cluster");
+    $("#btn-k3s").onclick = () => goHash("#/k3s");
     $("#btn-repo").onclick = () => goHash("#/repo");
     $("#btn-images").onclick = () => goHash("#/images");
     $("#btn-storage").onclick = () => goHash("#/storage");

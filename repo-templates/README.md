@@ -35,6 +35,8 @@ repo-templates/
 | --- | --- | --- | --- |
 | git | master + worker | `.deb` | `.rpm` |
 | samba | master + worker | `.deb` | `.rpm` |
+| cifs-utils | master + worker | `.deb` | `.rpm` |
+| NFS 客户端与服务端 | master + worker | `nfs-common` + `nfs-kernel-server` `.deb` | `nfs-utils` `.rpm` |
 | docker | master + worker | docker-ce `.deb` | docker 静态二进制 `docker-*.tgz`（musl，兼容 glibc 2.28） |
 | k3s-server | master | 二进制 + airgap | 二进制 + airgap |
 | k3s-agent | worker | 二进制 + airgap | 二进制 + airgap |
@@ -49,10 +51,10 @@ cd repo-templates
 # 跨架构资产（k3s / k9s / docker 静态二进制 / compose），在有网+可访问 github/docker.com 的机器上：
 PROXY=http://proxy.cangling.cn:7890 ./fetch-all.sh
 
-# linux-x86 的 git/samba/docker .deb：在 Ubuntu/Debian 干净机器/容器上：
+# linux-x86 的 git/samba/CIFS/NFS/docker .deb：在 Ubuntu/Debian 干净机器/容器上：
 ./fetch-apt.sh
 
-# kylin-arm 的 git/samba .rpm：在麒麟（RPM）机器上：
+# kylin-arm 的 git/samba/CIFS/NFS .rpm：在麒麟（RPM）机器上：
 ./fetch-dnf.sh
 ```
 

@@ -35,7 +35,7 @@ dl "git" "git"
 dl "samba" "samba"
 # cifs-utils（CIFS 挂载客户端）
 dl "cifs-utils" "cifs-utils"
-# nfs 客户端（麒麟包名 nfs-utils，仓库目录名 nfs-common）
+# NFS 客户端与服务端（麒麟的 nfs-utils 同时提供 mount.nfs/exportfs）
 dl "nfs-utils" "nfs-common"
 
 echo "完成，$PLATFORM 的 git/samba/cifs-utils/nfs-utils 离线 .rpm 已就绪。"
