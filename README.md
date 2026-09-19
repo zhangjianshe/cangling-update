@@ -19,6 +19,7 @@
 8. 在 Compose 面板里在线编辑 `docker-compose.yml`，并单独管理该文件的历史版本；若项目目录有 `.env`，可同样编辑环境变量
 9. **数据库管理**：选择正在运行的容器（当前仅 postgres），浏览 schema / 表 / 视图，分页查看数据，或执行 SQL
 10. **集群镜像管理**：浏览、上传离线镜像包，查看各节点的 k3s/containerd 镜像，并将镜像包导入所选节点
+11. **K3s 资源管理**：浏览命名空间、节点、工作负载、网络、配置和存储资源，查看 YAML、事件与 Pod 日志，并执行滚动重启、扩缩容和 Pod 重建
 
 ## 安装
 ```bash
@@ -135,6 +136,12 @@ curl -s 'http://localhost:5400/hostinfo?color=0'   # 无颜色
 ```
 
 > master / worker 角色必须设置令牌，否则拒绝启动。节点身份保存在各节点数据目录的 `node-id` 文件中，重启后保持不变。
+
+### K3s 资源管理
+
+控制台“集群管理 → K3s 资源”使用主节点本机的 `k3s kubectl` 管理集群。当前支持命名空间、节点、Pod、Deployment、StatefulSet、DaemonSet、Job、CronJob、Service、Ingress、ConfigMap、PVC、PV 和 StorageClass。
+
+资源详情中可以查看只读 YAML、关联事件和 Pod 日志。运维操作限制为工作负载滚动重启、Deployment/StatefulSet 扩缩容以及删除 Pod；不提供任意命令和在线 YAML 写入。程序必须运行在安装了 k3s server、且有权访问集群的主机上。
 
 控制台“镜像”模块默认读取 `/opt/cangling/images` 中的 `.tar`、`.tar.gz` 和 `.tgz`，也可在页面或启动参数中指定其它绝对目录。主节点通过流式传输把所选镜像包发送到在线节点，并执行 `k3s ctr images import`；各节点需已安装 k3s，服务进程需有权读取目录和访问 k3s/containerd。
 

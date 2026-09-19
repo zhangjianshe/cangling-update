@@ -12,6 +12,7 @@ mod gitrepo;
 mod hostinfo;
 mod images;
 mod k3s;
+mod k3s_resources;
 mod models;
 mod paths;
 mod portal;

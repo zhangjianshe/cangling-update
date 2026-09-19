@@ -229,9 +229,53 @@
       vertical-align: top;
     }
     .cluster-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .cluster-section-tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .cluster-section-tabs .btn { margin-bottom: -1px; border-radius: 6px 6px 0 0; background: transparent; }
+    .cluster-section-tabs .btn.active { color: var(--accent); border-color: var(--line) var(--line) var(--bg); }
+    .k3s-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+    .k3s-stat { padding: 12px 14px; border: 1px solid var(--line); background: var(--bg-2); }
+    .k3s-stat span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+    .k3s-stat strong { font-size: 20px; font-weight: 650; }
+    .k3s-toolbar { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 12px; }
+    .k3s-toolbar .field { margin: 0; }
+    .k3s-toolbar .field:first-child { width: min(260px, 30vw); }
+    .k3s-toolbar .field:nth-child(2) { flex: 1; min-width: 180px; }
+    .k3s-toolbar input, .k3s-toolbar select { width: 100%; height: 34px; }
+    .k3s-resource-layout {
+      display: grid; grid-template-columns: 210px minmax(0, 1fr);
+      min-height: 420px; border: 1px solid var(--line); background: var(--bg-2);
+    }
+    .k3s-resource-nav { padding: 8px; border-right: 1px solid var(--line); }
+    .k3s-resource-nav h4 { margin: 10px 8px 4px; color: var(--muted); font-size: 12px; }
+    .k3s-resource-nav button {
+      display: flex; justify-content: space-between; width: 100%; padding: 7px 9px;
+      border: 0; text-align: left; color: var(--text); background: transparent;
+    }
+    .k3s-resource-nav button:hover { background: var(--bg-3); }
+    .k3s-resource-nav button.active { color: var(--accent); background: var(--bg-active); font-weight: 600; }
+    .k3s-resource-list { min-width: 0; overflow: auto; }
+    .k3s-resource-list table { min-width: 760px; }
+    .k3s-resource-list tbody tr { cursor: pointer; }
+    .k3s-resource-list tbody tr:hover { background: var(--bg-active); }
+    .k3s-resource-name { color: var(--accent); font-weight: 600; }
+    .k3s-detail { padding: 16px; overflow: auto; }
+    .k3s-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    .k3s-detail-head h4 { margin: 0 0 4px; font-size: 16px; }
+    .k3s-detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .k3s-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; margin-bottom: 14px; }
+    .k3s-detail-grid div { min-width: 0; overflow-wrap: anywhere; }
+    .k3s-detail-grid span { color: var(--muted); }
+    .k3s-detail-tabs { display: flex; gap: 4px; margin: 0 0 10px; }
+    .k3s-detail-tabs .btn.active { color: var(--accent); border-color: var(--accent); background: var(--bg-active); }
+    .k3s-code { max-height: 430px; margin: 0; padding: 12px; overflow: auto; border: 1px solid var(--line); background: var(--log-bg); color: var(--log-text); white-space: pre; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    @media (max-width: 900px) {
+      .k3s-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .k3s-resource-layout { grid-template-columns: 160px minmax(0, 1fr); }
+    }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
     .dot.online { background: var(--success); }
     .dot.offline { background: var(--danger); }
+    .dot.pending { background: var(--accent); }
     .task-log {
       margin: 0; white-space: pre-wrap; word-break: break-all;
       max-height: 320px; overflow: auto; background: var(--bg-input);
@@ -795,6 +839,7 @@
     }
     .storage-form input[type=text],
     .storage-form input[type=password],
+    .storage-form input[type=number],
     .storage-form select,
     .storage-form textarea {
       width: 100%; background: var(--bg-input); color: var(--text);
@@ -1041,7 +1086,7 @@
   </div>
   <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "pods", k3sNamespace: "_all", k3sSearch: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [] };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1083,6 +1128,7 @@
     const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false, statusTimer: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
+    const k3sPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
     const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
@@ -1451,7 +1497,7 @@
     }
 
     function sectionFromHash(hash) {
-      if (hash === "#/cluster") return "cluster";
+      if (hash.startsWith("#/cluster")) return "cluster";
       if (hash === "#/repo") return "repo";
       if (hash === "#/images") return "images";
       if (hash === "#/storage") return "storage";
@@ -1478,6 +1524,7 @@
     function route() {
       stopComposePoll();
       stopClusterPoll();
+      stopK3sPoll();
       stopImageMonitorPoll();
       comboClose();
       closeDialog();
@@ -1486,6 +1533,7 @@
       const hash = location.hash || "#/";
       if (hash === "#/new") return renderNew();
       if (hash === "#/cluster") return renderCluster();
+      if (hash === "#/cluster/k3s") return renderK3s();
       if (hash === "#/repo") return renderRepo();
       if (hash === "#/images") return renderImages();
       if (hash === "#/storage") return renderStorage();
@@ -1559,6 +1607,7 @@
       if (st.role === "standalone") {
         $("#main").innerHTML = `
           <div class="title-row"><div><h2>集群</h2><div class="path">多机部署与节点管理</div></div></div>
+          ${clusterSectionTabs("hosts")}
           <div id="flash" hidden></div>
           <div class="card" id="cluster-overview-card">
             ${clusterOverviewHeader()}
@@ -1596,6 +1645,7 @@
         <div class="title-row">
           <div><h2>集群</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
         </div>
+        ${clusterSectionTabs("hosts")}
         <div id="flash" hidden></div>
         <div class="card" id="cluster-overview-card">
           ${clusterOverviewHeader()}
@@ -1868,6 +1918,340 @@
         <thead><tr><th>状态</th><th>类型</th><th>名称</th><th>地址</th><th>版本</th><th>主 IP</th><th>CPU</th><th>内存</th><th>磁盘</th><th>GPU</th><th>项目</th><th>最后心跳</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="12" class="hint">暂无节点</td></tr>`}</tbody>
       </table>`;
+    }
+
+    const K3S_RESOURCES = [
+      { group: "集群", id: "namespaces", label: "命名空间", scoped: false },
+      { group: "集群", id: "nodes", label: "节点", scoped: false },
+      { group: "工作负载", id: "pods", label: "Pod", scoped: true },
+      { group: "工作负载", id: "deployments", label: "Deployment", scoped: true },
+      { group: "工作负载", id: "statefulsets", label: "StatefulSet", scoped: true },
+      { group: "工作负载", id: "daemonsets", label: "DaemonSet", scoped: true },
+      { group: "工作负载", id: "jobs", label: "Job", scoped: true },
+      { group: "工作负载", id: "cronjobs", label: "CronJob", scoped: true },
+      { group: "网络", id: "services", label: "Service", scoped: true },
+      { group: "网络", id: "ingresses", label: "Ingress", scoped: true },
+      { group: "配置", id: "configmaps", label: "ConfigMap", scoped: true },
+      { group: "存储", id: "persistentvolumeclaims", label: "PVC", scoped: true },
+      { group: "存储", id: "persistentvolumes", label: "PV", scoped: false },
+      { group: "存储", id: "storageclasses", label: "StorageClass", scoped: false },
+    ];
+
+    function clusterSectionTabs(active) {
+      return `<div class="cluster-section-tabs">
+        <button type="button" class="btn ${active === "hosts" ? "active" : ""}" onclick="goHash('#/cluster')">主机节点</button>
+        <button type="button" class="btn ${active === "k3s" ? "active" : ""}" onclick="goHash('#/cluster/k3s')">K3s 资源</button>
+      </div>`;
+    }
+
+    function stopK3sPoll() {
+      if (k3sPoll.timer) { clearInterval(k3sPoll.timer); k3sPoll.timer = null; }
+    }
+
+    function k3sResourceMeta() {
+      return K3S_RESOURCES.find((item) => item.id === state.k3sKind) || K3S_RESOURCES[1];
+    }
+
+    async function renderK3s() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>K3s 资源</h2><div class="path">浏览和维护当前主节点上的 Kubernetes 资源</div></div>
+        </div>
+        ${clusterSectionTabs("k3s")}
+        <div id="flash" hidden></div>
+        <div id="k3s-root"><div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取集群…</div></div></div>`;
+      await loadK3s(true);
+      k3sPoll.timer = setInterval(() => loadK3s(false), 5000);
+    }
+
+    async function loadK3s(first) {
+      if (k3sPoll.inflight) return;
+      k3sPoll.inflight = true;
+      try {
+        if (first || !state.k3sStatus) {
+          const [status, namespaces] = await Promise.all([
+            api("/api/k3s/status"),
+            api("/api/k3s/namespaces"),
+          ]);
+          state.k3sStatus = status;
+          state.k3sNamespaces = (namespaces.items || []).map((item) => item.metadata && item.metadata.name).filter(Boolean);
+        }
+        const meta = k3sResourceMeta();
+        const namespace = meta.scoped ? state.k3sNamespace : "_cluster";
+        const result = await api("/api/k3s/resources?kind=" + encodeURIComponent(meta.id) + "&namespace=" + encodeURIComponent(namespace));
+        state.k3sItems = result.items || [];
+        if (first || !document.getElementById("k3s-resource-list")) renderK3sLayout();
+        else renderK3sTable();
+      } catch (e) {
+        const root = $("#k3s-root");
+        if (root) root.innerHTML = `<div class="card"><h3>K3s 暂不可用</h3><p class="hint">${esc(e.message)}</p><button class="btn" id="k3s-retry">重试</button></div>`;
+        const retry = $("#k3s-retry");
+        if (retry) retry.onclick = () => loadK3s(true);
+      } finally {
+        k3sPoll.inflight = false;
+      }
+    }
+
+    function k3sVersion() {
+      const version = state.k3sStatus && state.k3sStatus.version || {};
+      return version.serverVersion && version.serverVersion.gitVersion
+        || version.clientVersion && version.clientVersion.gitVersion || "—";
+    }
+
+    function renderK3sLayout() {
+      const root = $("#k3s-root");
+      if (!root) return;
+      const status = state.k3sStatus || {};
+      const meta = k3sResourceMeta();
+      const namespaceOptions = [
+        `<option value="_all" ${state.k3sNamespace === "_all" ? "selected" : ""}>所有命名空间</option>`,
+        ...state.k3sNamespaces.map((name) => `<option value="${esc(name)}" ${state.k3sNamespace === name ? "selected" : ""}>${esc(name)}</option>`)
+      ].join("");
+      let group = "";
+      const nav = K3S_RESOURCES.map((item) => {
+        const heading = item.group !== group ? (group = item.group, `<h4>${esc(item.group)}</h4>`) : "";
+        return heading + `<button type="button" data-k3s-kind="${item.id}" class="${item.id === state.k3sKind ? "active" : ""}"><span>${esc(item.label)}</span></button>`;
+      }).join("");
+      root.innerHTML = `
+        <div class="k3s-summary">
+          <div class="k3s-stat"><span>Kubernetes 版本</span><strong>${esc(k3sVersion())}</strong></div>
+          <div class="k3s-stat"><span>节点</span><strong>${status.readyNodes || 0} / ${status.nodes || 0}</strong></div>
+          <div class="k3s-stat"><span>Pod</span><strong>${status.pods || 0}</strong></div>
+          <div class="k3s-stat"><span>异常 Pod</span><strong class="${status.unhealthyPods ? "bad" : "ok"}">${status.unhealthyPods || 0}</strong></div>
+        </div>
+        <div class="k3s-toolbar">
+          <div class="field"><label>命名空间</label><select id="k3s-namespace" ${meta.scoped ? "" : "disabled"}>${namespaceOptions}</select></div>
+          <div class="field"><label>搜索资源</label><input id="k3s-search" type="text" value="${esc(state.k3sSearch)}" placeholder="按名称或命名空间过滤" /></div>
+          <button type="button" class="btn" id="k3s-refresh">刷新</button>
+        </div>
+        <div class="k3s-resource-layout">
+          <nav class="k3s-resource-nav">${nav}</nav>
+          <div class="k3s-resource-list" id="k3s-resource-list"></div>
+        </div>`;
+      $("#k3s-namespace").onchange = async (event) => {
+        state.k3sNamespace = event.target.value;
+        await loadK3s(true);
+      };
+      $("#k3s-search").oninput = (event) => {
+        state.k3sSearch = event.target.value;
+        renderK3sTable();
+      };
+      $("#k3s-refresh").onclick = () => loadK3s(true);
+      document.querySelectorAll("[data-k3s-kind]").forEach((button) => {
+        button.onclick = async () => {
+          state.k3sKind = button.dataset.k3sKind;
+          await loadK3s(true);
+        };
+      });
+      renderK3sTable();
+    }
+
+    function k3sAge(timestamp) {
+      if (!timestamp) return "—";
+      let seconds = Math.max(0, Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000));
+      if (seconds < 60) return seconds + "秒";
+      if (seconds < 3600) return Math.floor(seconds / 60) + "分";
+      if (seconds < 86400) return Math.floor(seconds / 3600) + "时";
+      return Math.floor(seconds / 86400) + "天";
+    }
+
+    function k3sItemSummary(item) {
+      const kind = state.k3sKind;
+      const spec = item.spec || {}, status = item.status || {};
+      if (kind === "pods") {
+        const containers = status.containerStatuses || [];
+        return {
+          status: status.phase || "Unknown",
+          detail: containers.filter((container) => container.ready).length + "/" + containers.length,
+          extra: containers.reduce((sum, container) => sum + (container.restartCount || 0), 0) + " 次重启",
+        };
+      }
+      if (["deployments", "statefulsets", "daemonsets"].includes(kind)) {
+        const desired = kind === "daemonsets" ? status.desiredNumberScheduled : (spec.replicas == null ? 1 : spec.replicas);
+        const ready = kind === "daemonsets" ? status.numberReady : status.readyReplicas;
+        return { status: Number(ready || 0) >= Number(desired || 0) ? "Ready" : "Progressing", detail: (ready || 0) + "/" + (desired || 0), extra: "可用 " + (status.availableReplicas || status.currentNumberScheduled || 0) };
+      }
+      if (kind === "jobs") return { status: status.failed ? "Failed" : status.succeeded ? "Complete" : "Running", detail: (status.succeeded || 0) + "/" + (spec.completions || 1), extra: "失败 " + (status.failed || 0) };
+      if (kind === "cronjobs") return { status: spec.suspend ? "Suspended" : "Active", detail: spec.schedule || "—", extra: "活动 " + ((status.active || []).length) };
+      if (kind === "services") return { status: spec.type || "ClusterIP", detail: spec.clusterIP || "—", extra: (spec.ports || []).map((port) => port.port + "/" + (port.protocol || "TCP")).join(", ") || "—" };
+      if (kind === "ingresses") return { status: (status.loadBalancer && status.loadBalancer.ingress || []).length ? "Ready" : "Pending", detail: (spec.rules || []).map((rule) => rule.host || "*").join(", ") || "—", extra: spec.ingressClassName || "—" };
+      if (kind === "persistentvolumeclaims") return { status: status.phase || "Pending", detail: spec.volumeName || "—", extra: spec.resources && spec.resources.requests && spec.resources.requests.storage || "—" };
+      if (kind === "persistentvolumes") return { status: status.phase || "Unknown", detail: spec.capacity && spec.capacity.storage || "—", extra: spec.storageClassName || "—" };
+      if (kind === "nodes") {
+        const ready = (status.conditions || []).some((condition) => condition.type === "Ready" && condition.status === "True");
+        return { status: ready ? "Ready" : "NotReady", detail: status.nodeInfo && status.nodeInfo.kubeletVersion || "—", extra: spec.podCIDR || "—" };
+      }
+      if (kind === "storageclasses") return { status: item.metadata && item.metadata.annotations && item.metadata.annotations["storageclass.kubernetes.io/is-default-class"] === "true" ? "Default" : "Ready", detail: item.provisioner || "—", extra: item.reclaimPolicy || "—" };
+      if (kind === "configmaps") return { status: "Ready", detail: Object.keys(item.data || {}).length + " 项", extra: "—" };
+      return { status: "Ready", detail: "—", extra: "—" };
+    }
+
+    function renderK3sTable() {
+      const box = $("#k3s-resource-list");
+      if (!box) return;
+      const query = state.k3sSearch.trim().toLowerCase();
+      const items = state.k3sItems.filter((item) => {
+        const metadata = item.metadata || {};
+        return !query || String(metadata.name || "").toLowerCase().includes(query)
+          || String(metadata.namespace || "").toLowerCase().includes(query);
+      });
+      const rows = items.map((item, index) => {
+        const metadata = item.metadata || {};
+        const summary = k3sItemSummary(item);
+        const good = ["Ready", "Running", "Succeeded", "Complete", "Active", "Default"].includes(summary.status);
+        const bad = ["Failed", "NotReady"].includes(summary.status);
+        return `<tr data-k3s-index="${index}">
+          <td><span class="dot ${good ? "online" : bad ? "offline" : "pending"}"></span>${esc(summary.status)}</td>
+          <td>${esc(metadata.namespace || "—")}</td>
+          <td class="k3s-resource-name">${esc(metadata.name || "—")}</td>
+          <td>${esc(summary.detail)}</td>
+          <td>${esc(summary.extra)}</td>
+          <td>${k3sAge(metadata.creationTimestamp)}</td>
+        </tr>`;
+      }).join("");
+      box.innerHTML = `<table>
+        <thead><tr><th>状态</th><th>命名空间</th><th>名称</th><th>就绪/信息</th><th>详情</th><th>创建时间</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="empty">没有匹配的资源</td></tr>'}</tbody>
+      </table>`;
+      box.querySelectorAll("[data-k3s-index]").forEach((row) => {
+        row.onclick = () => openK3sDetail(items[Number(row.dataset.k3sIndex)]);
+      });
+    }
+
+    async function openK3sDetail(item) {
+      const metadata = item.metadata || {};
+      const kind = k3sResourceMeta();
+      const namespace = metadata.namespace || "_cluster";
+      const base = "/api/k3s/resources/" + encodeURIComponent(kind.id) + "/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(metadata.name);
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("narrow");
+      $("#dialog-title").textContent = kind.label + " · " + metadata.name;
+      $("#dialog-body").innerHTML = `<div class="empty db-loading"><span class="spin"></span>加载资源详情…</div>`;
+      $("#dialog").hidden = false;
+      try {
+        const [detail, yaml, events] = await Promise.all([
+          api(base), api(base + "/yaml"), api(base + "/events"),
+        ]);
+        renderK3sDetail(kind, namespace, detail, yaml.text || "", events.items || []);
+      } catch (e) {
+        $("#dialog-body").innerHTML = `<div class="flash err" style="margin:16px">${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderK3sDetail(kind, namespace, detail, yaml, events) {
+      const metadata = detail.metadata || {}, spec = detail.spec || {};
+      const containers = (spec.containers || spec.template && spec.template.spec && spec.template.spec.containers || []);
+      const canRestart = ["deployments", "statefulsets", "daemonsets"].includes(kind.id) && namespace !== "_cluster";
+      const canScale = ["deployments", "statefulsets"].includes(kind.id) && namespace !== "_cluster";
+      const actions = [
+        canRestart ? '<button type="button" class="btn" id="k3s-restart">滚动重启</button>' : "",
+        canScale ? '<button type="button" class="btn" id="k3s-scale">调整副本</button>' : "",
+        kind.id === "pods" ? '<button type="button" class="btn danger" id="k3s-delete-pod">删除 Pod</button>' : "",
+      ].join("");
+      const eventText = events.length ? events.map((event) => {
+        const when = event.eventTime || event.lastTimestamp || event.metadata && event.metadata.creationTimestamp || "";
+        return "[" + fmtDateTime(when) + "] " + (event.type || "") + " " + (event.reason || "") + "\n" + (event.message || "");
+      }).join("\n\n") : "暂无事件";
+      $("#dialog-body").innerHTML = `<div class="k3s-detail">
+        <div class="k3s-detail-head">
+          <div><h4>${esc(metadata.name)}</h4><div class="hint">${esc(namespace === "_cluster" ? "集群级资源" : namespace)} · ${esc(detail.kind || kind.label)}</div></div>
+          <div class="k3s-detail-actions">${actions}</div>
+        </div>
+        <div class="k3s-detail-grid">
+          <div><span>UID：</span>${esc(metadata.uid || "—")}</div>
+          <div><span>创建时间：</span>${esc(fmtDateTime(metadata.creationTimestamp))}</div>
+          <div><span>容器：</span>${esc(containers.map((container) => container.name).join(", ") || "—")}</div>
+          <div><span>镜像：</span>${esc(containers.map((container) => container.image).join(", ") || "—")}</div>
+        </div>
+        <div class="k3s-detail-tabs">
+          <button type="button" class="btn active" data-k3s-detail-tab="yaml">YAML</button>
+          <button type="button" class="btn" data-k3s-detail-tab="events">事件</button>
+          ${kind.id === "pods" ? '<button type="button" class="btn" data-k3s-detail-tab="logs">日志</button>' : ""}
+        </div>
+        <pre class="k3s-code" id="k3s-detail-content">${esc(yaml)}</pre>
+      </div>`;
+      document.querySelectorAll("[data-k3s-detail-tab]").forEach((button) => {
+        button.onclick = async () => {
+          document.querySelectorAll("[data-k3s-detail-tab]").forEach((item) => item.classList.toggle("active", item === button));
+          const content = $("#k3s-detail-content");
+          if (button.dataset.k3sDetailTab === "yaml") content.textContent = yaml;
+          if (button.dataset.k3sDetailTab === "events") content.textContent = eventText;
+          if (button.dataset.k3sDetailTab === "logs") {
+            content.textContent = "正在读取日志…";
+            try {
+              const container = containers[0] && containers[0].name || "";
+              const result = await api("/api/k3s/pods/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(metadata.name) + "/logs?tail=500&container=" + encodeURIComponent(container));
+              content.textContent = result.text || "暂无日志";
+            } catch (e) { content.textContent = e.message; }
+          }
+        };
+      });
+      const restart = $("#k3s-restart");
+      if (restart) restart.onclick = async () => {
+        if (!(await confirmDialog("确定滚动重启 " + metadata.name + "？"))) return;
+        await k3sOperate("/api/k3s/workloads/" + kind.id + "/" + namespace + "/" + metadata.name + "/restart", { method: "POST" });
+      };
+      const scale = $("#k3s-scale");
+      if (scale) scale.onclick = async () => {
+        const current = spec.replicas == null ? 1 : spec.replicas;
+        openK3sScaleDialog(kind, namespace, metadata.name, current);
+      };
+      const remove = $("#k3s-delete-pod");
+      if (remove) remove.onclick = async () => {
+        if (!(await confirmDialog("确定删除 Pod " + metadata.name + "？控制器可能会自动重新创建。", { danger: true }))) return;
+        await k3sOperate("/api/k3s/pods/" + namespace + "/" + metadata.name, { method: "DELETE" });
+      };
+    }
+
+    function openK3sScaleDialog(kind, namespace, name, current) {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("form-modal");
+      $("#dialog-title").textContent = "调整副本 · " + name;
+      $("#dialog-body").innerHTML = `<div class="storage-form">
+        <div class="field"><label for="k3s-replicas">副本数</label><input id="k3s-replicas" type="number" min="0" max="1000" value="${current}" /></div>
+        <p class="hint">设置为 0 会停止该工作负载的全部 Pod。</p>
+        <div class="flash err" id="k3s-scale-error" hidden></div>
+      </div>`;
+      setDialogAction("应用", async () => {
+        const replicas = Number($("#k3s-replicas").value);
+        const error = $("#k3s-scale-error");
+        if (!Number.isInteger(replicas) || replicas < 0 || replicas > 1000) {
+          error.textContent = "副本数必须是 0 到 1000 的整数";
+          error.hidden = false;
+          return;
+        }
+        await k3sOperate("/api/k3s/workloads/" + kind.id + "/" + namespace + "/" + name + "/scale", {
+          method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ replicas }),
+        });
+      });
+      $("#dialog").hidden = false;
+      $("#k3s-replicas").focus();
+      $("#k3s-replicas").select();
+    }
+
+    async function k3sOperate(url, options) {
+      try {
+        const result = await api(url, options);
+        closeDialog();
+        flash("ok", result.message || "操作已提交");
+        await loadK3s(true);
+      } catch (e) {
+        const scaleError = $("#k3s-scale-error");
+        const content = $("#k3s-detail-content");
+        if (scaleError) {
+          scaleError.textContent = e.message;
+          scaleError.hidden = false;
+        } else if (content) {
+          content.textContent = e.message;
+        } else {
+          flash("err", e.message);
+        }
+      }
     }
 
     async function loadRepo() {
