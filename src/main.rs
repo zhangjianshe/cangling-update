@@ -16,6 +16,7 @@ mod k3s_resources;
 mod models;
 mod paths;
 mod portal;
+mod port_forward;
 mod progress;
 mod repo;
 mod service;
@@ -143,6 +144,21 @@ enum Command {
     /// 检测 k3s：写入 Traefik 入口端口配置（HTTP 8020 / HTTPS 8443），并确保 /root/.kube/config
     #[command(name = "fix-k3s")]
     FixK3s,
+    /// TCP 端口转发（默认将 0.0.0.0:7600 转发到 127.0.0.1:22）
+    PortForward {
+        /// 本地监听地址
+        #[arg(long, default_value = "0.0.0.0")]
+        listen_host: String,
+        /// 本地监听端口
+        #[arg(long, default_value_t = 7600)]
+        listen_port: u16,
+        /// 转发目标地址
+        #[arg(long, default_value = "127.0.0.1")]
+        target_host: String,
+        /// 转发目标端口
+        #[arg(long, default_value_t = 22)]
+        target_port: u16,
+    },
 }
 
 #[tokio::main]
@@ -223,6 +239,14 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Command::FixK3s) => {
             return k3s::fix();
+        }
+        Some(Command::PortForward {
+            listen_host,
+            listen_port,
+            target_host,
+            target_port,
+        }) => {
+            return port_forward::run(&listen_host, listen_port, &target_host, target_port).await;
         }
         None => {
             if service::is_installed() && !service::running_as_systemd_service() {

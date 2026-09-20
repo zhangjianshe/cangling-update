@@ -506,6 +506,11 @@ cangling-update [选项] [命令]
                        网页：GET /hostinfo（ANSI 彩色）  GET /hostinfo.md（仅限 localhost）
                        内容：软件版本与路径、本机 IP、项目列表、磁盘、内存、CPU/GPU
   fix-k3s              若已安装 k3s：写入 Traefik 入口配置（HTTP 8020 / HTTPS 8443）并重启 Traefik；检查 /root/.kube/config 并按需从 k3s.yaml 拷贝
+  port-forward         TCP 端口转发（前台运行，Ctrl+C 停止）
+                       --listen-host     监听地址（默认 0.0.0.0）
+                       --listen-port     监听端口（默认 7600）
+                       --target-host     目标地址（默认 127.0.0.1）
+                       --target-port     目标端口（默认 22）
 
 选项：
   --bind               监听地址（环境变量 CANGLING_BIND，默认 0.0.0.0）
@@ -515,6 +520,16 @@ cangling-update [选项] [命令]
   --master             master 地址（环境变量 CANGLING_MASTER；worker 不填则 UDP 广播发现）
   --cluster-token      集群共享令牌（环境变量 CANGLING_CLUSTER_TOKEN）
   --discovery-port     UDP 发现端口（环境变量 CANGLING_DISCOVERY_PORT，默认 5401）
+```
+
+例如，将本机所有网卡的 TCP 7600 端口转发到本机 SSH 端口：
+
+```bash
+sudo cangling-update port-forward
+# 等价于：
+sudo cangling-update port-forward \
+  --listen-host 0.0.0.0 --listen-port 7600 \
+  --target-host 127.0.0.1 --target-port 22
 ```
 
 
