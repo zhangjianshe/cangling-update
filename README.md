@@ -25,7 +25,7 @@
 ```bash
   mkdir update
   cd update
-  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.140/cangling-update-linux-amd64
+  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.141/cangling-update-linux-amd64
   chmod +x cangling-update
   ./cangling-update install-service
   # 访问地址 http://localhost:5400
@@ -239,10 +239,13 @@ chmod +x repo/cangling-repo/linux-x86/demo/install.sh
 
 ```bash
 sudo ./cangling-update --port 5400 install-service
+sudo ./cangling-update --bind 0.0.0.0 --port 80 \
+  --role master --cluster-token 'change-me' install-service
 sudo ./cangling-update restart
 sudo ./cangling-update uninstall-service
 ```
 
+- `install-service` 会把当前的监听、目录和集群参数完整写入 systemd；再次执行可重新注册运行参数。
 - 单元文件：`/etc/systemd/system/cangling-update.service`
 - 服务名：`cangling-update`
 - 命令链接：`/usr/local/bin/cangling-update` → 当前二进制（卸载服务时删除该符号链接）

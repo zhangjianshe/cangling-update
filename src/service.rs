@@ -7,7 +7,18 @@ const UNIT_PATH: &str = "/etc/systemd/system/cangling-update.service";
 const BIN_LINK_DIR: &str = "/usr/local/bin";
 const HOSTINFO_BASHRC_MARKER: &str = "# cangling-update hostinfo";
 
-pub fn install(bind: &str, port: u16, data_dir: Option<&Path>) -> Result<()> {
+pub struct InstallOptions<'a> {
+    pub bind: &'a str,
+    pub port: u16,
+    pub images_dir: &'a Path,
+    pub data_dir: Option<&'a Path>,
+    pub role: &'a str,
+    pub master: Option<&'a str>,
+    pub cluster_token: Option<&'a str>,
+    pub discovery_port: u16,
+}
+
+pub fn install(options: InstallOptions<'_>) -> Result<()> {
     require_root()?;
     require_systemd()?;
 
@@ -17,21 +28,7 @@ pub fn install(bind: &str, port: u16, data_dir: Option<&Path>) -> Result<()> {
         .map(Path::to_path_buf)
         .context("executable has no parent directory")?;
 
-    let mut exec = format!(
-        "{} --bind {} --port {}",
-        shell_quote(&exe),
-        shell_quote(Path::new(bind)),
-        port
-    );
-    if let Some(dir) = data_dir {
-        let dir = if dir.is_absolute() {
-            dir.to_path_buf()
-        } else {
-            std::fs::canonicalize(dir).unwrap_or_else(|_| workdir.join(dir))
-        };
-        exec.push_str(" --data-dir ");
-        exec.push_str(&shell_quote(&dir));
-    }
+    let exec = service_exec(&exe, &workdir, &options);
 
     let unit = format!(
         r#"[Unit]
@@ -67,13 +64,52 @@ WantedBy=multi-user.target
     eprintln!("  单元文件 {UNIT_PATH}");
     install_bin_link(&exe)?;
     let bashrc = root_home_dir().join(".bashrc");
-    install_hostinfo_bashrc(&bashrc, port)
+    install_hostinfo_bashrc(&bashrc, options.port)
         .with_context(|| format!("更新 {} 失败", bashrc.display()))?;
-    eprintln!("  登录信息 curl -k http://localhost:{port}/hostinfo");
+    eprintln!(
+        "  登录信息 curl -k http://localhost:{}/hostinfo",
+        options.port
+    );
     eprintln!("  管理：systemctl status|restart|stop {SERVICE_NAME}");
     eprintln!();
-    print_access_urls(bind, port);
+    print_access_urls(options.bind, options.port);
     Ok(())
+}
+
+fn service_exec(exe: &Path, workdir: &Path, options: &InstallOptions<'_>) -> String {
+    let mut exec = format!(
+        "{} --bind {} --port {}",
+        shell_quote(exe),
+        shell_quote(Path::new(options.bind)),
+        options.port
+    );
+    exec.push_str(" --images-dir ");
+    exec.push_str(&shell_quote(options.images_dir));
+    if let Some(dir) = options.data_dir {
+        let dir = if dir.is_absolute() {
+            dir.to_path_buf()
+        } else {
+            std::fs::canonicalize(dir).unwrap_or_else(|_| workdir.join(dir))
+        };
+        exec.push_str(" --data-dir ");
+        exec.push_str(&shell_quote(&dir));
+    }
+    exec.push_str(" --role ");
+    exec.push_str(&shell_quote(Path::new(options.role)));
+    if let Some(master) = options.master.filter(|value| !value.trim().is_empty()) {
+        exec.push_str(" --master ");
+        exec.push_str(&shell_quote(Path::new(master)));
+    }
+    if let Some(token) = options
+        .cluster_token
+        .filter(|value| !value.trim().is_empty())
+    {
+        exec.push_str(" --cluster-token ");
+        exec.push_str(&shell_quote(Path::new(token)));
+    }
+    exec.push_str(" --discovery-port ");
+    exec.push_str(&options.discovery_port.to_string());
+    exec
 }
 
 pub fn uninstall() -> Result<()> {
@@ -580,6 +616,30 @@ mod tests {
         assert_eq!(
             listen_from_exec("/opt/cangling-update --bind=127.0.0.1 --port=6000"),
             ("127.0.0.1".into(), 6000)
+        );
+    }
+
+    #[test]
+    fn install_exec_keeps_cluster_options() {
+        let options = InstallOptions {
+            bind: "0.0.0.0",
+            port: 80,
+            images_dir: Path::new("/opt/cangling/images"),
+            data_dir: Some(Path::new("relative-config-test")),
+            role: "master",
+            master: None,
+            cluster_token: Some("12345678hgtfd"),
+            discovery_port: 5401,
+        };
+        assert_eq!(
+            service_exec(
+                Path::new("/opt/cangling-update/cangling-update"),
+                Path::new("/opt/cangling-update"),
+                &options,
+            ),
+            "/opt/cangling-update/cangling-update --bind 0.0.0.0 --port 80 \
+--images-dir /opt/cangling/images --data-dir /opt/cangling-update/relative-config-test \
+--role master --cluster-token 12345678hgtfd --discovery-port 5401"
         );
     }
 

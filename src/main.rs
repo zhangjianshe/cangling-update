@@ -174,7 +174,27 @@ async fn main() -> anyhow::Result<()> {
             .await;
         }
         Some(Command::InstallService) => {
-            return service::install(&cli.bind, cli.port, cli.data_dir.as_deref());
+            let role = cluster::Role::parse(&cli.role).map_err(|e| anyhow::anyhow!("{e}"))?;
+            if matches!(role, cluster::Role::Master | cluster::Role::Worker)
+                && cli
+                    .cluster_token
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+            {
+                anyhow::bail!("master / worker 角色必须设置 --cluster-token");
+            }
+            return service::install(service::InstallOptions {
+                bind: &cli.bind,
+                port: cli.port,
+                images_dir: &cli.images_dir,
+                data_dir: cli.data_dir.as_deref(),
+                role: &cli.role,
+                master: cli.master.as_deref(),
+                cluster_token: cli.cluster_token.as_deref(),
+                discovery_port: cli.discovery_port,
+            });
         }
         Some(Command::UninstallService) => {
             return service::uninstall();
