@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Deserialize)]
@@ -25,7 +26,7 @@ struct ClientMsg {
 }
 
 pub async fn run_exec_socket(
-    socket: WebSocket,
+    mut socket: WebSocket,
     docker: Docker,
     dir: std::path::PathBuf,
     service: String,
@@ -33,30 +34,61 @@ pub async fn run_exec_socket(
 ) {
     let cols = query.cols.filter(|c| *c >= 2).unwrap_or(80);
     let rows = query.rows.filter(|r| *r >= 1).unwrap_or(24);
-    if let Err(err) = pump(socket, docker, &dir, &service, cols, rows).await {
-        tracing::warn!("compose exec {service}: {err:#}");
-    }
-}
-
-async fn pump(
-    mut socket: WebSocket,
-    docker: Docker,
-    dir: &Path,
-    service: &str,
-    cols: u16,
-    rows: u16,
-) -> Result<()> {
-    let (program, args) = match docker.compose_exec_argv(service).await {
+    let (program, args) = match docker.compose_exec_argv(&service).await {
         Ok(v) => v,
         Err(err) => {
             let _ = socket
                 .send(Message::Text(format!("无法进入容器：{err:#}\r\n").into()))
                 .await;
             let _ = socket.send(Message::Close(None)).await;
-            return Ok(());
+            return;
         }
     };
-    let session = match spawn_pty(&program, &args, dir, cols, rows) {
+    if let Err(err) = pump_command(
+        socket,
+        &program,
+        &args,
+        &dir,
+        cols,
+        rows,
+        &format!("已连接 {service}，正在进入容器…\r\n"),
+        None,
+    )
+    .await
+    {
+        tracing::warn!("compose exec {service}: {err:#}");
+    }
+}
+
+pub async fn run_command_socket(
+    socket: WebSocket,
+    program: String,
+    args: Vec<String>,
+    dir: std::path::PathBuf,
+    query: ExecQuery,
+    banner: String,
+    password: Option<String>,
+) {
+    let cols = query.cols.filter(|c| *c >= 2).unwrap_or(80);
+    let rows = query.rows.filter(|r| *r >= 1).unwrap_or(24);
+    if let Err(err) =
+        pump_command(socket, &program, &args, &dir, cols, rows, &banner, password).await
+    {
+        tracing::warn!("host terminal: {err:#}");
+    }
+}
+
+async fn pump_command(
+    mut socket: WebSocket,
+    program: &str,
+    args: &[String],
+    dir: &Path,
+    cols: u16,
+    rows: u16,
+    banner: &str,
+    password: Option<String>,
+) -> Result<()> {
+    let session = match spawn_pty(program, args, dir, cols, rows) {
         Ok(s) => s,
         Err(err) => {
             let _ = socket
@@ -67,13 +99,12 @@ async fn pump(
         }
     };
 
-    let _ = socket
-        .send(Message::Text(
-            format!("已连接 {service}，正在进入容器…\r\n").into(),
-        ))
-        .await;
+    let _ = socket.send(Message::Text(banner.to_string().into())).await;
 
     let mut output_rx = session.output;
+    let password_deadline = Instant::now() + Duration::from_secs(15);
+    let mut password_sent = false;
+    let mut prompt_tail = String::new();
     loop {
         tokio::select! {
             incoming = socket.recv() => {
@@ -115,6 +146,26 @@ async fn pump(
             chunk = output_rx.recv() => {
                 match chunk {
                     Some(bytes) if !bytes.is_empty() => {
+                        if !password_sent && password.is_some() && Instant::now() <= password_deadline {
+                            prompt_tail.push_str(&String::from_utf8_lossy(&bytes).to_ascii_lowercase());
+                            if prompt_tail.len() > 512 {
+                                prompt_tail = prompt_tail
+                                    .chars()
+                                    .rev()
+                                    .take(512)
+                                    .collect::<String>()
+                                    .chars()
+                                    .rev()
+                                    .collect();
+                            }
+                            if prompt_tail.contains("password:") {
+                                if let Some(secret) = password.as_deref() {
+                                    let _ = session.input.send(format!("{secret}\n").into_bytes());
+                                }
+                                password_sent = true;
+                                prompt_tail.clear();
+                            }
+                        }
                         if socket.send(Message::Binary(bytes.into())).await.is_err() {
                             break;
                         }

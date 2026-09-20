@@ -119,6 +119,20 @@ CREATE TABLE IF NOT EXISTS cluster_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS managed_hosts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL DEFAULT '',
+    ssh_port INTEGER NOT NULL DEFAULT 22,
+    username TEXT NOT NULL DEFAULT 'root',
+    password_enc TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'manual',
+    cluster_node_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_managed_hosts_cluster_node
+    ON managed_hosts(cluster_node_id);
 CREATE TABLE IF NOT EXISTS storages (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

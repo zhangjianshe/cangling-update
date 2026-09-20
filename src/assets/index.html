@@ -151,7 +151,23 @@
     header .btn {
       height: 34px; display: inline-flex; align-items: center; box-sizing: border-box;
     }
-    .meta-wrap { position: relative; }
+    .user-menu-wrap { position: relative; }
+    .user-menu-panel {
+      position: absolute; top: calc(100% + 8px); right: 0; z-index: 42;
+      width: 180px; padding: 6px;
+      background: var(--bg-2); border: 1px solid var(--line); box-shadow: var(--shadow);
+    }
+    .user-menu-panel[hidden] { display: none !important; }
+    .user-menu-panel .btn {
+      width: 100%; height: 34px; justify-content: flex-start;
+      border-color: transparent; background: transparent;
+    }
+    .user-menu-panel .btn:hover { background: var(--bg-3); }
+    .user-menu-panel .btn.danger { color: var(--danger-text); }
+    .user-menu-who {
+      padding: 7px 10px 9px; margin-bottom: 4px; border-bottom: 1px solid var(--line);
+      color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis;
+    }
     .btn-meta.warn { border-color: var(--danger-line); color: var(--danger-text); }
     .meta-panel {
       position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
@@ -174,11 +190,6 @@
     .meta-row b {
       color: var(--text); font-weight: 600; word-break: break-all;
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    }
-    #who {
-      display: inline-flex; align-items: center; height: 34px; padding: 0 10px;
-      border: 1px solid var(--line); background: var(--bg-3); line-height: 1;
-      box-sizing: border-box;
     }
     .ok { color: var(--success); }
     .bad { color: var(--danger); }
@@ -213,6 +224,10 @@
     .pitem-version { flex: 0 0 auto; padding: 1px 5px; border-radius: 5px; color: var(--on-emphasis); background: var(--success-emphasis); font-size: 10px; font-weight: 600; line-height: 1.5; }
     .pitem .d { display: block; width: 100%; min-width: 0; color: var(--muted); margin-top: 1px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .project-list-item { position: relative; display: flex; align-items: stretch; margin-bottom: 2px; }
+    .host-row { cursor: pointer; }
+    .host-row:hover td { background: var(--bg-3); }
+    .host-actions { display: flex; gap: 6px; white-space: nowrap; }
+    .host-actions .btn { padding: 4px 8px; }
     .project-list-item .pitem { min-width: 0; margin-bottom: 0; padding-right: 34px; }
     .project-more { position: absolute; top: 50%; right: 5px; width: 26px; height: 26px; padding: 0; transform: translateY(-50%); border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 18px; line-height: 1; }
     .project-more:hover, .project-more[aria-expanded="true"] { color: var(--text); background: var(--bg-active); }
@@ -765,6 +780,8 @@
     .modal.db-auto-modal .modal-body { overflow: auto; }
     .modal.password-modal .modal-body { padding: 20px; overflow: auto; }
     .modal.password-modal .modal-foot { padding: 12px 20px; }
+    .self-update-form { padding: 20px; }
+    .self-update-form input[type=file] { width: 100%; box-sizing: border-box; }
     .modal select {
       padding-top: 0; padding-bottom: 0; line-height: normal;
     }
@@ -1030,17 +1047,21 @@
       </nav>
       </div>
       <div class="header-right">
-        <div class="meta-wrap">
-          <button type="button" class="btn btn-meta" id="btn-meta" aria-expanded="false" aria-haspopup="true" title="系统信息">系统信息</button>
+        <div class="user-menu-wrap">
+          <button type="button" class="btn" id="btn-user-menu" aria-expanded="false" aria-haspopup="true">更多 ▾</button>
+          <div class="user-menu-panel" id="user-menu-panel" hidden>
+            <div class="user-menu-who" id="who"></div>
+            <button type="button" class="btn btn-meta" id="btn-meta" title="系统信息">系统信息</button>
+            <button type="button" class="btn" id="btn-self-update">更新自己</button>
+            <button type="button" class="btn" id="btn-pass">修改密码</button>
+            <button type="button" class="btn" id="theme-toggle" aria-label="切换深色或浅色主题">浅色</button>
+            <button type="button" class="btn danger" id="btn-logout">退出</button>
+          </div>
           <div class="meta-panel" id="meta-panel" hidden>
             <h3>系统信息</h3>
             <div class="meta" id="meta">加载中…</div>
           </div>
         </div>
-        <span id="who"></span>
-        <button type="button" class="btn" id="btn-pass">修改密码</button>
-        <button type="button" class="btn" id="btn-logout">退出</button>
-        <button type="button" class="btn" id="theme-toggle" aria-label="切换深色或浅色主题">浅色</button>
       </div>
     </header>
     <div class="shell">
@@ -1083,7 +1104,7 @@
   </div>
   <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "pods", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [] };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "pods", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [] };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1493,6 +1514,90 @@
       }
     }
 
+    function openSelfUpdate() {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("password-modal");
+      $("#dialog-title").textContent = "更新 cangling-update";
+      setDialogAction("检查并更新", submitSelfUpdate);
+      const current = state.meta && state.meta.version ? state.meta.version : "__APP_VERSION__";
+      $("#dialog-body").innerHTML = `
+        <div class="self-update-form">
+          <p class="hint">当前版本：<b>v${esc(current)}</b></p>
+          <div class="field">
+            <label for="self-update-file">选择 cangling-update 程序</label>
+            <input id="self-update-file" type="file" />
+          </div>
+          <p class="hint hint-soft">系统将检查 ELF 架构并执行 <code>version</code>。只有版本高于当前程序时才会原子替换并重启服务。</p>
+          <div class="progress-wrap" id="self-update-progress" hidden>
+            <div class="progress-meta"><span id="self-update-progress-msg">正在上传</span><span id="self-update-progress-pct">0%</span></div>
+            <div class="progress"><span id="self-update-progress-bar"></span></div>
+          </div>
+          <div id="self-update-flash" hidden></div>
+        </div>`;
+      $("#dialog").hidden = false;
+      $("#self-update-file").focus();
+    }
+
+    function submitSelfUpdate() {
+      const input = $("#self-update-file");
+      const file = input && input.files && input.files[0];
+      const box = $("#self-update-flash");
+      const action = $("#dialog-extra");
+      const progress = $("#self-update-progress");
+      const progressBar = $("#self-update-progress-bar");
+      const progressPct = $("#self-update-progress-pct");
+      const show = (kind, message) => {
+        box.className = "flash " + kind;
+        box.textContent = message;
+        box.hidden = false;
+      };
+      if (!file) {
+        show("err", "请选择要上传的 cangling-update 程序");
+        return;
+      }
+      action.disabled = true;
+      input.disabled = true;
+      box.hidden = true;
+      progress.hidden = false;
+      const data = new FormData();
+      data.append("file", file, file.name);
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/self-update");
+      const token = sessionToken();
+      if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const pct = Math.round(event.loaded * 100 / event.total);
+        progressPct.textContent = pct + "%";
+        progressBar.style.width = pct + "%";
+      };
+      xhr.onerror = () => {
+        show("err", "上传失败：网络连接中断");
+        action.disabled = false;
+        input.disabled = false;
+      };
+      xhr.onload = () => {
+        let payload = {};
+        try { payload = JSON.parse(xhr.responseText || "{}"); } catch (_) { payload = { error: xhr.responseText }; }
+        if (xhr.status === 401) {
+          showGate(payload.error || "请先登录或登录已过期");
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          show("err", payload.error || xhr.statusText || "更新失败");
+          action.disabled = false;
+          input.disabled = false;
+          return;
+        }
+        progressPct.textContent = "100%";
+        progressBar.style.width = "100%";
+        show("ok", `已从 v${payload.current_version} 更新到 v${payload.uploaded_version}，服务正在重启…`);
+        setTimeout(() => location.reload(), 4000);
+      };
+      xhr.send(data);
+    }
+
     function sectionFromHash(hash) {
       if (hash === "#/cluster") return "cluster";
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return "k3s";
@@ -1568,11 +1673,13 @@
       if (clusterPoll.inflight) return;
       clusterPoll.inflight = true;
       try {
-        const [st, nodes] = await Promise.all([
+        const [st, nodes, hosts] = await Promise.all([
           api("/api/cluster/status"),
           api("/api/cluster/nodes"),
+          api("/api/hosts"),
         ]);
         state.clusterNodes = nodes || [];
+        state.managedHosts = hosts || [];
         state.clusterStatus = st;
         if (first || !document.getElementById("cluster-overview-card")) {
           renderClusterLayout(st);
@@ -1604,7 +1711,7 @@
       const roleName = { standalone: "单机", master: "主节点", worker: "工作节点" }[st.role] || st.role;
       if (st.role === "standalone") {
         $("#main").innerHTML = `
-          <div class="title-row"><div><h2>主机节点</h2><div class="path">多机部署与节点管理</div></div></div>
+          <div class="title-row"><div><h2>主机节点</h2><div class="path">主机资产与远程终端</div></div><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div>
           <div id="flash" hidden></div>
           <div class="card" id="cluster-overview-card">
             ${clusterOverviewHeader()}
@@ -1618,9 +1725,11 @@
               </p>
               ${hostinfoNoteSection()}
             </div>
-          </div>`;
+          </div>
+          <div class="card"><h3>主机列表</h3><div id="nodes-body"></div></div>`;
         bindClusterOverviewButton();
         bindHostinfoNoteButton();
+        $("#btn-add-host").onclick = () => openHostForm();
         return;
       }
       const workerNote = st.role === "worker"
@@ -1641,6 +1750,7 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>主机节点</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
+          <button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button>
         </div>
         <div id="flash" hidden></div>
         <div class="card" id="cluster-overview-card">
@@ -1658,6 +1768,7 @@
       if (initBtn) initBtn.onclick = startClusterInit;
       const checkBtn = $("#btn-check-cluster");
       if (checkBtn) checkBtn.onclick = startClusterCheck;
+      $("#btn-add-host").onclick = () => openHostForm();
       bindClusterOverviewButton();
       bindHostinfoNoteButton();
     }
@@ -1881,39 +1992,137 @@
     function updateNodeTable() {
       const el = $("#nodes-body");
       if (!el) return;
-      const masterVer = ((state.clusterStatus || {}).version || "").replace(/^v/, "");
-      const rows = (state.clusterNodes || []).map(n => {
-        const h = n.host || {};
-        const disks = h.disks || [];
+      const rows = (state.managedHosts || []).map(host => {
+        const info = host.host_info || {};
+        const disks = info.disks || [];
         const rootDisk = disks.length ? disks[0].total : 0;
-        const gpus = h.gpus || [];
-        const gpuText = gpus.length
-          ? gpus.map(g => `${esc(g.name)} ×${g.count}`).join(" · ")
+        const gpuText = (info.gpus || []).length ? info.gpus.map(gpu => `${esc(gpu.name)} ×${gpu.count}`).join(" · ") : "—";
+        const resourceText = info.cpu
+          ? `${esc(info.cpu.model || "CPU")} · ${info.cpu.logical_cpus || 0} 核 · ${info.mem && info.mem.total ? fmtBytes(info.mem.total) : "—"} · ${rootDisk ? fmtBytes(rootDisk) : "—"}`
           : "—";
-        const nodeVer = String(n.version || "").replace(/^v/, "");
-        const outdated = n.role === "worker" && masterVer && nodeVer && nodeVer !== masterVer;
-        const verCell = outdated
-          ? `<span class="bad" title="低于主节点，注册/心跳时将自动升级">${esc(n.version)} → ${esc(masterVer)}</span>`
-          : esc(n.version || "—");
-        return `<tr>
-          <td><span class="dot ${n.status}"></span>${n.status === "online" ? "在线" : "离线"}</td>
-          <td><span class="hint">${esc(n.role || "—")}</span></td>
-          <td>${esc(n.name)}</td>
-          <td>${esc(n.addr || "—")}</td>
-          <td>${verCell}</td>
-          <td>${esc(h.primary_ip || "—")}</td>
-          <td>${h.cpu ? esc(h.cpu.model || "") + " · " + h.cpu.logical_cpus + " 核" : "—"}</td>
-          <td>${h.mem && h.mem.total ? fmtBytes(h.mem.total) : "—"}</td>
-          <td>${rootDisk ? fmtBytes(rootDisk) : "—"}</td>
+        const status = host.cluster_status === "local" ? "本机"
+          : host.cluster_status === "online" ? "集群在线"
+          : host.cluster_status === "offline" ? "集群离线" : "未加入集群";
+        const dot = host.cluster_status === "local" || host.cluster_status === "online" ? "online" : "offline";
+        const kind = host.kind === "local" ? "本机" : host.kind === "cluster" ? "集群节点" : "手工添加";
+        return `<tr class="host-row" data-host-terminal="${esc(host.id)}" title="点击打开终端">
+          <td><span class="dot ${dot}"></span>${status}</td>
+          <td><span class="hint">${kind}</span></td>
+          <td>${esc(host.name)}</td>
+          <td><code>${esc(host.host)}:${host.ssh_port}</code></td>
+          <td>${esc(host.username || "—")}</td>
+          <td>${host.password_set ? "密码" : host.kind === "local" ? "本地 Shell" : "SSH 密钥/无密码"}</td>
+          <td>${esc(host.role || "—")}</td>
+          <td>${esc(host.version || "—")}</td>
+          <td>${resourceText}</td>
           <td>${gpuText}</td>
-          <td>${(h.projects || []).length}</td>
-          <td>${fmtDateTime(n.last_seen)}</td>
+          <td>${(info.projects || []).length || "—"}</td>
+          <td>${fmtDateTime(host.last_seen)}</td>
+          <td><div class="host-actions">
+            ${host.editable ? `<button type="button" class="btn" data-host-edit="${esc(host.id)}">编辑</button>` : ""}
+            ${host.deletable ? `<button type="button" class="btn danger" data-host-delete="${esc(host.id)}">删除</button>` : ""}
+          </div></td>
         </tr>`;
       }).join("");
       el.innerHTML = `<table class="cluster-table">
-        <thead><tr><th>状态</th><th>类型</th><th>名称</th><th>地址</th><th>版本</th><th>主 IP</th><th>CPU</th><th>内存</th><th>磁盘</th><th>GPU</th><th>项目</th><th>最后心跳</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="12" class="hint">暂无节点</td></tr>`}</tbody>
+        <thead><tr><th>状态</th><th>来源</th><th>名称</th><th>SSH 地址</th><th>用户</th><th>认证</th><th>集群角色</th><th>版本</th><th>CPU / 内存 / 磁盘</th><th>GPU</th><th>项目</th><th>最后心跳</th><th>操作</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="13" class="hint">暂无主机</td></tr>`}</tbody>
       </table>`;
+      el.querySelectorAll("[data-host-terminal]").forEach(row => row.onclick = () => openHostTerminal(row.dataset.hostTerminal));
+      el.querySelectorAll("[data-host-edit]").forEach(button => button.onclick = event => {
+        event.stopPropagation();
+        openHostForm((state.managedHosts || []).find(host => host.id === button.dataset.hostEdit));
+      });
+      el.querySelectorAll("[data-host-delete]").forEach(button => button.onclick = async event => {
+        event.stopPropagation();
+        const host = (state.managedHosts || []).find(item => item.id === button.dataset.hostDelete);
+        if (!host || !(await confirmDialog(`确定删除主机“${host.name}”？`, { danger: true }))) return;
+        try {
+          await api("/api/hosts/" + encodeURIComponent(host.id), { method: "DELETE" });
+          flash("ok", "主机已删除");
+          await loadCluster();
+        } catch (error) { flash("err", error.message); }
+      });
+    }
+
+    function openHostForm(host = null) {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("password-modal");
+      $("#dialog-title").textContent = host ? "编辑主机" : "添加主机";
+      setDialogAction("保存", () => saveHost(host));
+      $("#dialog-body").innerHTML = `<div class="password-form">
+        <div class="field"><label>名称</label><input id="host-name" type="text" value="${esc(host ? host.name : "")}" placeholder="例如：计算节点 01" /></div>
+        <div class="field"><label>主机 IP</label><input id="host-address" type="text" value="${esc(host ? host.host : "")}" placeholder="192.168.3.121" /></div>
+        <div class="row">
+          <div class="field" style="flex:1"><label>SSH 端口</label><input id="host-port" type="number" min="1" max="65535" value="${host ? host.ssh_port : 22}" /></div>
+          <div class="field" style="flex:2"><label>SSH 用户</label><input id="host-user" type="text" value="${esc(host ? host.username : "root")}" /></div>
+        </div>
+        <div class="field"><label>SSH 密码</label><input id="host-password" type="password" autocomplete="new-password" placeholder="${host && host.password_set ? "已保存；留空则不修改" : "可留空，使用 SSH 密钥"}" /></div>
+        ${host && host.password_set ? `<label class="check"><input id="host-clear-password" type="checkbox" /> 清除已保存的密码，改用 SSH 密钥</label>` : ""}
+        <p class="hint hint-soft">密码加密保存在本机数据库中。首次 SSH 连接会自动记录主机指纹；指纹变化时连接将被拒绝。</p>
+        <div id="host-form-flash" hidden></div>
+      </div>`;
+      $("#dialog").hidden = false;
+      $("#host-name").focus();
+    }
+
+    async function saveHost(existing) {
+      const button = $("#dialog-extra");
+      const box = $("#host-form-flash");
+      const show = (kind, message) => { box.className = "flash " + kind; box.textContent = message; box.hidden = false; };
+      const payload = {
+        name: $("#host-name").value.trim(),
+        host: $("#host-address").value.trim(),
+        ssh_port: Number($("#host-port").value || 22),
+        username: $("#host-user").value.trim(),
+        password: $("#host-password").value,
+        clear_password: !!$("#host-clear-password")?.checked,
+      };
+      button.disabled = true;
+      try {
+        await api(existing ? "/api/hosts/" + encodeURIComponent(existing.id) : "/api/hosts", {
+          method: existing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        closeDialog();
+        flash("ok", existing ? "主机已更新" : "主机已添加");
+        await loadCluster();
+      } catch (error) {
+        show("err", error.message);
+        button.disabled = false;
+      }
+    }
+
+    async function openHostTerminal(id) {
+      const host = (state.managedHosts || []).find(item => item.id === id);
+      if (!host) return;
+      closeDialog();
+      try {
+        await loadXterm();
+        if (document.fonts && document.fonts.load) await document.fonts.load('15px "Iosevka Term"');
+      } catch (error) { flash("err", error.message); return; }
+      $("#dialog-title").textContent = "终端 · " + host.name;
+      $("#dialog-body").innerHTML = `<div class="term" id="term"></div>`;
+      $("#dialog").hidden = false;
+      const term = new window.Terminal({ cursorBlink: true, fontSize: 15, fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace', theme: termTheme() });
+      const Fit = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
+      const fit = Fit ? new Fit() : null;
+      if (fit) term.loadAddon(fit);
+      term.open($("#term"));
+      if (fit) fit.fit();
+      dialog.term = term; dialog.fit = fit;
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const qs = "?cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24) + (sessionToken() ? "&token=" + encodeURIComponent(sessionToken()) : "");
+      const ws = new WebSocket(proto + "://" + location.host + "/api/hosts/" + encodeURIComponent(id) + "/terminal" + qs);
+      ws.binaryType = "arraybuffer"; dialog.ws = ws;
+      ws.onmessage = event => term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+      ws.onerror = () => term.writeln("\r\n连接失败");
+      ws.onclose = () => term.writeln("\r\n连接已关闭");
+      term.onData(data => { if (ws.readyState === 1) ws.send(data); });
+      const resize = () => { if (fit) fit.fit(); if (ws.readyState === 1) ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows })); };
+      dialog.onResize = resize; window.addEventListener("resize", resize); setTimeout(resize, 50); term.focus();
     }
 
     const K3S_RESOURCES = [
@@ -6748,7 +6957,7 @@
       applyAceTheme();
       if (currentProjectTab() === "edit" && composeCanvas.yaml) renderComposeCanvas();
     }
-    $("#theme-toggle").onclick = toggleTheme;
+    $("#theme-toggle").onclick = () => { toggleTheme(); setUserMenuOpen(false); };
     $("#gate-theme").onclick = toggleTheme;
     renderTheme();
 
@@ -6793,20 +7002,41 @@
     $("#btn-repo").onclick = () => goHash("#/repo");
     $("#btn-images").onclick = () => goHash("#/images");
     $("#btn-storage").onclick = () => goHash("#/storage");
+    function setUserMenuOpen(open) {
+      const panel = $("#user-menu-panel");
+      const button = $("#btn-user-menu");
+      if (!panel || !button) return;
+      panel.hidden = !open;
+      button.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    $("#btn-user-menu").onclick = (e) => {
+      e.stopPropagation();
+      const panel = $("#user-menu-panel");
+      setMetaPanelOpen(false);
+      setUserMenuOpen(panel && panel.hidden);
+    };
     $("#btn-meta").onclick = (e) => {
       e.stopPropagation();
+      setUserMenuOpen(false);
       const panel = $("#meta-panel");
       setMetaPanelOpen(panel && panel.hidden);
     };
     document.addEventListener("click", (e) => {
-      const wrap = document.querySelector(".meta-wrap");
-      if (wrap && !wrap.contains(e.target)) setMetaPanelOpen(false);
+      const wrap = document.querySelector(".user-menu-wrap");
+      if (wrap && !wrap.contains(e.target)) {
+        setMetaPanelOpen(false);
+        setUserMenuOpen(false);
+      }
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") setMetaPanelOpen(false);
+      if (e.key === "Escape") {
+        setMetaPanelOpen(false);
+        setUserMenuOpen(false);
+      }
     });
-    $("#btn-logout").onclick = () => logout();
-    $("#btn-pass").onclick = openChangePassword;
+    $("#btn-logout").onclick = () => { setUserMenuOpen(false); logout(); };
+    $("#btn-pass").onclick = () => { setUserMenuOpen(false); openChangePassword(); };
+    $("#btn-self-update").onclick = () => { setUserMenuOpen(false); openSelfUpdate(); };
     $("#gate-submit").onclick = submitGate;
     ["gate-user", "gate-pass", "gate-pass2"].forEach((id) => {
       const el = document.getElementById(id);

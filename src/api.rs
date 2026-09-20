@@ -194,7 +194,9 @@ pub fn router(state: AppState) -> Router {
             get(crate::cluster::init::status),
         )
         .merge(crate::k3s_resources::routes())
+        .merge(crate::hosts::routes())
         .merge(crate::images::console_routes())
+        .merge(crate::self_upgrade::routes())
         .route(
             "/api/storages",
             get(crate::storage::list_storages).post(crate::storage::create_storage),
