@@ -74,6 +74,10 @@ pub fn run(check_only: bool, force: bool, proxy: Option<String>) -> Result<()> {
         None => eprintln!("代理      未设置（示例：https_proxy=http://10.1.1.2:7890）"),
     }
 
+    if try_local_repo_update(&dest_dir, &dest, host_arch, current, check_only, force)? {
+        return Ok(());
+    }
+
     probe_github()?;
 
     let release = fetch_latest().map_err(annotate_network)?;
@@ -165,6 +169,78 @@ pub fn run(check_only: bool, force: bool, proxy: Option<String>) -> Result<()> {
         eprintln!("本机运行中的程序未替换（版本已是最新）。");
     }
     Ok(())
+}
+
+/// 优先使用 keeper 已同步到本机 repo 的 NP4 更新包，离线环境无需访问 GitHub。
+/// 只有本机架构的包版本更高（或指定 --force）时才在这里完成更新；否则继续检查 GitHub。
+fn try_local_repo_update(
+    exe_dir: &Path,
+    dest: &Path,
+    host_arch: Arch,
+    current: &str,
+    check_only: bool,
+    force: bool,
+) -> Result<bool> {
+    let Some(local) = binaries::find_np4_update_binary(exe_dir, host_arch) else {
+        eprintln!(
+            "本地仓库  未找到 repo/np4/np4-update/latest 中的 {} 更新包",
+            host_arch.label()
+        );
+        return Ok(false);
+    };
+    let local_version = binary_version(&local, exe_dir)
+        .with_context(|| format!("读取本地更新包版本失败：{}", local.display()))?;
+    let newer = binaries::is_newer(&local_version, current);
+    eprintln!("本地仓库  {}（v{}）", local.display(), local_version);
+
+    if !force && !newer {
+        eprintln!("本地仓库中的本机架构程序不高于当前版本，继续检查 GitHub。");
+        return Ok(false);
+    }
+    if check_only {
+        eprintln!("可从本地软件仓库更新到 v{local_version}");
+        return Ok(true);
+    }
+
+    // 同时把 repo 中已有的两种架构程序写入 updates/，供 master 更新 worker。
+    for arch in Arch::all() {
+        let Some(source) = binaries::find_np4_update_binary(exe_dir, arch) else {
+            continue;
+        };
+        let slot = binaries::binary_path(exe_dir, arch);
+        binaries::copy_executable(&source, &slot)?;
+        eprintln!("{}  已从本地仓库保存 {}", arch.label(), slot.display());
+    }
+    let slot = binaries::binary_path(exe_dir, host_arch);
+    binaries::copy_executable(&slot, dest)?;
+    eprintln!("已从本地仓库更新到 v{local_version}：{}", dest.display());
+    eprintln!("未重启服务。若正在以 systemd 运行，执行后再生效：");
+    eprintln!("  {} restart", dest.display());
+    Ok(true)
+}
+
+fn binary_version(path: &Path, exe_dir: &Path) -> Result<String> {
+    // SFTP 同步不保证保留可执行位；复制到临时槽位并设置权限后再探测版本。
+    let probe = exe_dir.join(".cangling-update.local-version");
+    binaries::copy_executable(path, &probe)?;
+    let output = Command::new(&probe)
+        .arg("version")
+        .output()
+        .with_context(|| format!("执行 {} version", probe.display()));
+    let _ = fs::remove_file(&probe);
+    let output = output?;
+    if !output.status.success() {
+        bail!("更新包执行 version 失败");
+    }
+    let version = String::from_utf8(output.stdout)
+        .context("更新包版本输出不是 UTF-8")?
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
+    if version.is_empty() {
+        bail!("更新包没有输出版本号");
+    }
+    Ok(version)
 }
 
 fn fetch_latest() -> Result<Release> {

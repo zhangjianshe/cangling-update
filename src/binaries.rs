@@ -172,7 +172,7 @@ fn stored_at(path: &Path, arch: Arch) -> Option<StoredBinary> {
 }
 
 /// keeper 同步的 `repo/np4/np4-update/latest/` 下按文件名或 ELF 头匹配。
-fn find_np4_update_binary(exe_dir: &Path, arch: Arch) -> Option<PathBuf> {
+pub fn find_np4_update_binary(exe_dir: &Path, arch: Arch) -> Option<PathBuf> {
     let latest = crate::repo::np4_update_latest_dir(exe_dir);
     if !latest.is_dir() {
         return None;
