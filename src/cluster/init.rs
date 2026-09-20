@@ -281,7 +281,8 @@ fn build_steps(state: &AppState) -> Vec<InitStep> {
 async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
     let me = node_label();
 
-    // 1) 本机（master）软件，依次安装，任一失败即中止。
+    // 1) 本机（master）软件依次安装。单个软件失败只记录结果，继续后续项目；
+    // 最终状态会根据 failed 步骤提示“部分步骤失败”。
     for pkg in MASTER_SOFTWARE {
         update_step(state, &me, "master", pkg, "running", String::new(), 0);
         let envs = vec![("CANGLING_CLUSTER_NAME".to_string(), name.to_string())];
@@ -295,10 +296,6 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
                     update_step(state, &me, "master", pkg, "ok", output, elapsed);
                 } else {
                     update_step(state, &me, "master", pkg, "failed", output, elapsed);
-                    return Err(AppError::internal(format!(
-                        "{pkg} 安装失败（退出码 {:?}）",
-                        r.exit_code
-                    )));
                 }
             }
             Err(e) => {
@@ -311,7 +308,6 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
                     format!("{e:#}"),
                     elapsed,
                 );
-                return Err(e);
             }
         }
     }
