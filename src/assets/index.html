@@ -3290,6 +3290,7 @@
         await refreshProjects();
         location.hash = "#/p/" + project.id;
       } catch (e) {
+        showProgress("harbor-prog", false);
         if (error) { error.textContent = e.message; error.hidden = false; }
       } finally {
         stop();
