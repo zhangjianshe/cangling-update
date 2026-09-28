@@ -3086,7 +3086,9 @@ async fn apply_replace(
     upload: IncomingUpload,
 ) -> Result<Json<ReplaceResult>, AppError> {
     let IncomingUpload {
+        note,
         restart,
+        stop_compose,
         files: staged_files,
         tmp,
         job_id,
@@ -3114,6 +3116,111 @@ async fn apply_replace(
         return Err(AppError::bad(format!("升级前数据库备份失败，已取消替换：{err}")));
     }
 
+    // A direct JAR replacement used to overwrite the live file without leaving
+    // anything that the version rollback endpoint could restore.  Register a
+    // full pre-replace snapshot so the existing version history remains the
+    // single recovery mechanism for both publish and replace operations.
+    let mut stopped = false;
+    if !jar_files.is_empty() {
+        let version_id = Uuid::new_v4().to_string();
+        let version_no = {
+            let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+            db::next_version_no(&conn, &project.id)?
+        };
+        let tree = state.paths.version_tree(&project.id, &version_id);
+        let version_dir = state.paths.version_dir(&project.id, &version_id);
+
+        stopped = match compose_down_for_backup(
+            &state,
+            &live,
+            job_id.as_deref(),
+            stop_compose,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                let _ = tokio::fs::remove_dir_all(&tmp).await;
+                job_err(&state, job_id.as_deref(), &err.to_string());
+                return Err(err);
+            }
+        };
+
+        job_set(
+            &state,
+            job_id.as_deref(),
+            "snapshot",
+            "正在备份 JAR 替换前的应用目录…",
+            0,
+            0,
+        );
+        let live_clone = live.clone();
+        let tree_clone = tree.clone();
+        let jobs = state.jobs.clone();
+        let job_for_snapshot = job_id.clone();
+        if let Err(err) = tokio::task::spawn_blocking(move || {
+            snapshot_blocking(live_clone, tree_clone, jobs, job_for_snapshot)
+        })
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))
+        .and_then(|result| result.map_err(AppError::from))
+        {
+            let _ = remove_dir_if_exists(&version_dir);
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            if stopped {
+                compose_up_best_effort(
+                    &state,
+                    &live,
+                    job_id.as_deref(),
+                    "备份失败，正在重新启动 Compose…",
+                )
+                .await;
+            }
+            job_err(&state, job_id.as_deref(), &err.to_string());
+            return Err(err);
+        }
+
+        let version = Version {
+            id: version_id,
+            project_id: project.id.clone(),
+            version_no,
+            label: format!("v{version_no}"),
+            note: if note.trim().is_empty() {
+                "JAR 替换前自动快照".into()
+            } else {
+                format!("JAR 替换前自动快照：{}", note.trim())
+            },
+            backup_path: tree.display().to_string(),
+            images: Vec::new(),
+            jars: Vec::new(),
+            is_current: false,
+            kind: "pre-replace".into(),
+            created_at: db::now_rfc3339(),
+            app_bytes: 0,
+            backup_bytes: 0,
+            repo_bytes: 0,
+        };
+        let insert_result = {
+            let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+            db::insert_version(&conn, &version)
+        };
+        if let Err(err) = insert_result {
+            let _ = remove_dir_if_exists(&version_dir);
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            if stopped {
+                compose_up_best_effort(
+                    &state,
+                    &live,
+                    job_id.as_deref(),
+                    "写入备份记录失败，正在重新启动 Compose…",
+                )
+                .await;
+            }
+            job_err(&state, job_id.as_deref(), &err.to_string());
+            return Err(err.into());
+        }
+    }
+
     let mut loaded = Vec::new();
     if !archives.is_empty() {
         job_set(
@@ -3129,6 +3236,15 @@ async fn apply_replace(
     {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = tokio::fs::remove_dir_all(&tmp).await;
+        if stopped {
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "镜像导入失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
         return Err(err);
     }
 
@@ -3147,6 +3263,15 @@ async fn apply_replace(
     if let Err(err) = deploy_jars(&jar_files, None, &live, &mounts, &mut deployed_jars).await {
         job_err(&state, job_id.as_deref(), &err.to_string());
         let _ = tokio::fs::remove_dir_all(&tmp).await;
+        if stopped {
+            compose_up_best_effort(
+                &state,
+                &live,
+                job_id.as_deref(),
+                "JAR 写入失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
         return Err(err);
     }
     let _ = tokio::fs::remove_dir_all(&tmp).await;

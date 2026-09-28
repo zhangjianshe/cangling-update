@@ -1148,7 +1148,7 @@
     const clusterPoll = { timer: null, inflight: false };
     const k3sPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
-    const KIND = { baseline: "基线", update: "升级", "pre-rollback": "回滚前快照" };
+    const KIND = { baseline: "基线", update: "升级", "pre-replace": "替换前快照", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
     const FILE_EDIT = {
@@ -4209,7 +4209,7 @@
               </div>
             </section>
           </div>
-          <p class="hint">「导入并发布为最新版」会先<b>全量备份</b>目录（含数据库数据）。「替换并重启」只覆盖镜像/JAR 并重启容器，不备份、不记版本。</p>
+          <p class="hint">「导入并发布为最新版」会先<b>全量备份</b>目录（含数据库数据）。使用「替换并重启」替换 JAR 前也会建立目录快照并写入版本历史，可在“版本历史”中恢复；仅替换 Docker 镜像不生成目录恢复点。</p>
           <div class="field" style="margin-top:12px"><label>备注</label><input id="note" type="text" placeholder="本次升级改了什么" /></div>
           <label class="check"><input type="checkbox" id="f-stop" /> 备份前先执行 Compose Down（推荐）</label>
           <label class="check"><input type="checkbox" id="restart" /> 完成后启动整个 Compose（JAR 服务会强制重建，其它容器也会启动）</label>
@@ -4220,7 +4220,7 @@
           </div>
           <div class="row" style="margin-top:14px">
             <button class="btn primary" id="btn-update" ${state.busy ? "disabled" : ""}>导入并发布为最新版</button>
-            <button class="btn" id="btn-replace" ${state.busy ? "disabled" : ""} title="覆盖镜像/JAR 并重启容器，不备份目录">替换并重启</button>
+            <button class="btn" id="btn-replace" ${state.busy ? "disabled" : ""} title="替换 JAR 前自动备份，并可从版本历史恢复">替换并重启</button>
             <button class="btn" id="btn-snap" ${state.busy ? "disabled" : ""}>仅备份当前目录</button>
           </div>
         </div>
@@ -6172,8 +6172,11 @@
         flash("err", "请至少选择一个镜像包或 JAR。");
         return;
       }
+      const hasJar = state.files.some(file => /\.jar$/i.test(file.name || ""));
       if (!(await confirmDialog(
-        "不会备份当前目录，也不会写入版本记录。\n" +
+        (hasJar
+          ? "JAR 替换前会自动备份当前目录并写入版本历史，可从版本历史恢复。\n"
+          : "仅替换 Docker 镜像不会生成目录恢复点。\n") +
         "将覆盖已选的镜像包 / JAR，并重启容器。\n" +
         "确定继续？",
         { danger: true }
@@ -6191,7 +6194,7 @@
         const fd = new FormData();
         fd.append("note", $("#note").value || "替换并重启");
         fd.append("restart", "true");
-        fd.append("stop_compose", "false");
+        fd.append("stop_compose", $("#f-stop") && $("#f-stop").checked ? "true" : "false");
         fd.append("job_id", job.id);
         for (const f of state.files) fd.append("files", f, f.name);
 
