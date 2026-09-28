@@ -109,6 +109,10 @@ pub struct DeployedJar {
     pub file: String,
     pub dest: String,
     pub services: Vec<String>,
+    /// Filename inside a targeted JAR backup directory. Empty for normal
+    /// publish/deploy records created before targeted backups were added.
+    #[serde(default)]
+    pub backup_file: String,
 }
 
 #[derive(Debug, Deserialize)]

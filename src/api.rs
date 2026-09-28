@@ -3116,10 +3116,10 @@ async fn apply_replace(
         return Err(AppError::bad(format!("升级前数据库备份失败，已取消替换：{err}")));
     }
 
-    // A direct JAR replacement used to overwrite the live file without leaving
-    // anything that the version rollback endpoint could restore.  Register a
-    // full pre-replace snapshot so the existing version history remains the
-    // single recovery mechanism for both publish and replace operations.
+    // Keep direct replacement lightweight: save only the live JAR files that
+    // are about to be overwritten, together with their exact destinations.
+    // The targeted backup is exposed through the existing version history.
+    let mounts = read_jar_mounts(&live);
     let mut stopped = false;
     if !jar_files.is_empty() {
         let version_id = Uuid::new_v4().to_string();
@@ -3127,7 +3127,7 @@ async fn apply_replace(
             let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
             db::next_version_no(&conn, &project.id)?
         };
-        let tree = state.paths.version_tree(&project.id, &version_id);
+        let jars_dir = state.paths.version_jars(&project.id, &version_id);
         let version_dir = state.paths.version_dir(&project.id, &version_id);
 
         stopped = match compose_down_for_backup(
@@ -3150,74 +3150,78 @@ async fn apply_replace(
             &state,
             job_id.as_deref(),
             "snapshot",
-            "正在备份 JAR 替换前的应用目录…",
+            "正在备份即将替换的 JAR…",
             0,
-            0,
+            jar_files.len() as u64,
         );
-        let live_clone = live.clone();
-        let tree_clone = tree.clone();
-        let jobs = state.jobs.clone();
-        let job_for_snapshot = job_id.clone();
-        if let Err(err) = tokio::task::spawn_blocking(move || {
-            snapshot_blocking(live_clone, tree_clone, jobs, job_for_snapshot)
-        })
+        let backed_up_jars = match backup_replaced_jars(
+            &jar_files,
+            &jars_dir,
+            &live,
+            &mounts,
+        )
         .await
-        .map_err(|e| AppError::internal(e.to_string()))
-        .and_then(|result| result.map_err(AppError::from))
         {
-            let _ = remove_dir_if_exists(&version_dir);
-            let _ = tokio::fs::remove_dir_all(&tmp).await;
-            if stopped {
-                compose_up_best_effort(
-                    &state,
-                    &live,
-                    job_id.as_deref(),
-                    "备份失败，正在重新启动 Compose…",
-                )
-                .await;
+            Ok(jars) => jars,
+            Err(err) => {
+                let _ = remove_dir_if_exists(&version_dir);
+                let _ = tokio::fs::remove_dir_all(&tmp).await;
+                if stopped {
+                    compose_up_best_effort(
+                        &state,
+                        &live,
+                        job_id.as_deref(),
+                        "备份失败，正在重新启动 Compose…",
+                    )
+                    .await;
+                }
+                job_err(&state, job_id.as_deref(), &err.to_string());
+                return Err(err);
             }
-            job_err(&state, job_id.as_deref(), &err.to_string());
-            return Err(err);
-        }
+        };
 
-        let version = Version {
-            id: version_id,
-            project_id: project.id.clone(),
-            version_no,
-            label: format!("v{version_no}"),
-            note: if note.trim().is_empty() {
-                "JAR 替换前自动快照".into()
-            } else {
-                format!("JAR 替换前自动快照：{}", note.trim())
-            },
-            backup_path: tree.display().to_string(),
-            images: Vec::new(),
-            jars: Vec::new(),
-            is_current: false,
-            kind: "pre-replace".into(),
-            created_at: db::now_rfc3339(),
-            app_bytes: 0,
-            backup_bytes: 0,
-            repo_bytes: 0,
-        };
-        let insert_result = {
-            let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-            db::insert_version(&conn, &version)
-        };
-        if let Err(err) = insert_result {
+        if backed_up_jars.is_empty() {
             let _ = remove_dir_if_exists(&version_dir);
-            let _ = tokio::fs::remove_dir_all(&tmp).await;
-            if stopped {
-                compose_up_best_effort(
-                    &state,
-                    &live,
-                    job_id.as_deref(),
-                    "写入备份记录失败，正在重新启动 Compose…",
-                )
-                .await;
+        } else {
+            let version = Version {
+                id: version_id,
+                project_id: project.id.clone(),
+                version_no,
+                label: format!("v{version_no}"),
+                note: if note.trim().is_empty() {
+                    "JAR 替换前自动备份".into()
+                } else {
+                    format!("JAR 替换前自动备份：{}", note.trim())
+                },
+                backup_path: jars_dir.display().to_string(),
+                images: Vec::new(),
+                jars: backed_up_jars,
+                is_current: false,
+                kind: "pre-replace".into(),
+                created_at: db::now_rfc3339(),
+                app_bytes: 0,
+                backup_bytes: 0,
+                repo_bytes: 0,
+            };
+            let insert_result = {
+                let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+                db::insert_version(&conn, &version)
+            };
+            if let Err(err) = insert_result {
+                let _ = remove_dir_if_exists(&version_dir);
+                let _ = tokio::fs::remove_dir_all(&tmp).await;
+                if stopped {
+                    compose_up_best_effort(
+                        &state,
+                        &live,
+                        job_id.as_deref(),
+                        "写入备份记录失败，正在重新启动 Compose…",
+                    )
+                    .await;
+                }
+                job_err(&state, job_id.as_deref(), &err.to_string());
+                return Err(err.into());
             }
-            job_err(&state, job_id.as_deref(), &err.to_string());
-            return Err(err.into());
         }
     }
 
@@ -3248,7 +3252,6 @@ async fn apply_replace(
         return Err(err);
     }
 
-    let mounts = read_jar_mounts(&live);
     let mut deployed_jars = Vec::new();
     if !jar_files.is_empty() {
         job_set(
@@ -3315,6 +3318,110 @@ fn read_jar_mounts(project_dir: &std::path::Path) -> Vec<JarMount> {
     }
 }
 
+fn jar_targets(
+    name: &str,
+    live: &std::path::Path,
+    mounts: &[JarMount],
+) -> (Vec<PathBuf>, Vec<String>) {
+    let matches: Vec<&JarMount> = mounts.iter().filter(|m| m.basename == name).collect();
+    if matches.is_empty() {
+        let fallback = if live.join("jars").is_dir() {
+            live.join("jars").join(name)
+        } else {
+            live.join(name)
+        };
+        (vec![fallback], Vec::new())
+    } else {
+        (
+            matches
+                .iter()
+                .map(|m| resolve_host_path(live, &m.host_path))
+                .collect(),
+            matches.iter().map(|m| m.service.clone()).collect(),
+        )
+    }
+}
+
+async fn backup_replaced_jars(
+    jar_files: &[PathBuf],
+    backup_dir: &std::path::Path,
+    live: &std::path::Path,
+    mounts: &[JarMount],
+) -> Result<Vec<DeployedJar>, AppError> {
+    tokio::fs::create_dir_all(backup_dir).await?;
+    let mut backed_up = Vec::new();
+    for (jar_index, src) in jar_files.iter().enumerate() {
+        let name = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app.jar")
+            .to_string();
+        let (dests, services) = jar_targets(&name, live, mounts);
+        for (dest_index, dest) in dests.into_iter().enumerate() {
+            if !dest.is_file() {
+                continue;
+            }
+            let backup_file = format!("{jar_index:04}-{dest_index:04}-{name}");
+            tokio::fs::copy(&dest, backup_dir.join(&backup_file)).await?;
+            backed_up.push(DeployedJar {
+                file: name.clone(),
+                dest: dest.display().to_string(),
+                services: services.clone(),
+                backup_file,
+            });
+        }
+    }
+    Ok(backed_up)
+}
+
+async fn backup_jar_destinations(
+    jars: &[DeployedJar],
+    backup_dir: &std::path::Path,
+) -> Result<Vec<DeployedJar>, AppError> {
+    tokio::fs::create_dir_all(backup_dir).await?;
+    let mut backed_up = Vec::new();
+    for (index, jar) in jars.iter().enumerate() {
+        let dest = PathBuf::from(&jar.dest);
+        if !dest.is_file() {
+            continue;
+        }
+        let name = dest
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app.jar")
+            .to_string();
+        let backup_file = format!("{index:04}-{name}");
+        tokio::fs::copy(&dest, backup_dir.join(&backup_file)).await?;
+        backed_up.push(DeployedJar {
+            file: jar.file.clone(),
+            dest: jar.dest.clone(),
+            services: jar.services.clone(),
+            backup_file,
+        });
+    }
+    Ok(backed_up)
+}
+
+async fn restore_jar_backup(
+    backup_dir: &std::path::Path,
+    jars: &[DeployedJar],
+) -> Result<(), AppError> {
+    for jar in jars {
+        let backup_name = safe_filename(&jar.backup_file)
+            .map_err(|err| AppError::bad(err.to_string()))?;
+        let src = backup_dir.join(backup_name);
+        if !src.is_file() {
+            return Err(AppError::bad(format!("JAR 备份不存在：{}", src.display())));
+        }
+        let dest = PathBuf::from(&jar.dest);
+        if let Some(parent) = dest.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::copy(src, dest).await?;
+    }
+    Ok(())
+}
+
 async fn deploy_jars(
     jar_files: &[PathBuf],
     archive_dir: Option<&std::path::Path>,
@@ -3338,25 +3445,7 @@ async fn deploy_jars(
             tokio::fs::copy(src, dir.join(&name)).await?;
         }
 
-        let matches: Vec<&JarMount> = mounts.iter().filter(|m| m.basename == name).collect();
-        let (dests, services) = if matches.is_empty() {
-            let fallback = if live.join("jars").is_dir() {
-                live.join("jars").join(&name)
-            } else {
-                live.join(&name)
-            };
-            (vec![fallback], Vec::new())
-        } else {
-            let dests = matches
-                .iter()
-                .map(|m| resolve_host_path(live, &m.host_path))
-                .collect::<Vec<_>>();
-            let services = matches
-                .iter()
-                .map(|m| m.service.clone())
-                .collect::<Vec<_>>();
-            (dests, services)
-        };
+        let (dests, services) = jar_targets(&name, live, mounts);
 
         for dest in &dests {
             if let Some(parent) = dest.parent() {
@@ -3371,6 +3460,7 @@ async fn deploy_jars(
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
             services,
+            backup_file: String::new(),
         });
     }
     Ok(())
@@ -3460,6 +3550,135 @@ async fn load_and_retag(
     Ok(())
 }
 
+async fn rollback_jar_version(
+    state: &AppState,
+    project: &Project,
+    target: &Version,
+    body: &RollbackBody,
+) -> Result<Json<UpdateResult>, AppError> {
+    let live = PathBuf::from(&project.directory);
+    let stopped = compose_down_for_backup(
+        state,
+        &live,
+        body.job_id.as_deref(),
+        body.stop_compose,
+    )
+    .await?;
+    let safety_id = Uuid::new_v4().to_string();
+    let safety_no = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::next_version_no(&conn, &project.id)?
+    };
+    let safety_dir = state.paths.version_dir(&project.id, &safety_id);
+    let safety_jars = state.paths.version_jars(&project.id, &safety_id);
+    job_set(
+        state,
+        body.job_id.as_deref(),
+        "snapshot",
+        "正在备份当前 JAR…",
+        0,
+        target.jars.len() as u64,
+    );
+    let current_jars = match backup_jar_destinations(&target.jars, &safety_jars).await {
+        Ok(jars) => jars,
+        Err(err) => {
+            let _ = remove_dir_if_exists(&safety_dir);
+            if stopped {
+                compose_up_best_effort(
+                    state,
+                    &live,
+                    body.job_id.as_deref(),
+                    "备份失败，正在重新启动 Compose…",
+                )
+                .await;
+            }
+            return Err(err);
+        }
+    };
+    let safety = Version {
+        id: safety_id,
+        project_id: project.id.clone(),
+        version_no: safety_no,
+        label: format!("v{safety_no}"),
+        note: format!("恢复 {} 前的 JAR 自动备份", target.label),
+        backup_path: safety_jars.display().to_string(),
+        images: Vec::new(),
+        jars: current_jars,
+        is_current: false,
+        kind: "pre-replace".into(),
+        created_at: db::now_rfc3339(),
+        app_bytes: 0,
+        backup_bytes: 0,
+        repo_bytes: 0,
+    };
+    let insert_result = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::insert_version(&conn, &safety)
+    };
+    if let Err(err) = insert_result {
+        let _ = remove_dir_if_exists(&safety_dir);
+        if stopped {
+            compose_up_best_effort(
+                state,
+                &live,
+                body.job_id.as_deref(),
+                "写入备份记录失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
+        return Err(err.into());
+    }
+
+    job_set(
+        state,
+        body.job_id.as_deref(),
+        "restore",
+        "正在恢复 JAR…",
+        0,
+        target.jars.len() as u64,
+    );
+    if let Err(err) = restore_jar_backup(FsPath::new(&target.backup_path), &target.jars).await {
+        if stopped {
+            compose_up_best_effort(
+                state,
+                &live,
+                body.job_id.as_deref(),
+                "恢复失败，正在重新启动 Compose…",
+            )
+            .await;
+        }
+        return Err(err);
+    }
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::mark_current(&conn, &project.id, &target.id)?;
+    }
+    if body.restart {
+        job_set(
+            state,
+            body.job_id.as_deref(),
+            "compose",
+            "正在重启 JAR 服务…",
+            0,
+            0,
+        );
+        restart_after_update(state, &live, &target.jars)
+            .await
+            .map_err(|err| AppError::internal(err.to_string()))?;
+    }
+    job_ok(state, body.job_id.as_deref(), "JAR 恢复完成");
+    let version = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::get_version(&conn, &project.id, &target.id)?
+            .ok_or_else(|| AppError::internal("version missing"))?
+    };
+    Ok(Json(UpdateResult {
+        version,
+        loaded: Vec::new(),
+        jars: target.jars.clone(),
+    }))
+}
+
 async fn rollback(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3482,6 +3701,13 @@ async fn rollback(
             return Err(AppError::Conflict("正在恢复或升级中，请勿重复操作".into()));
         }
     };
+
+    if target.kind == "pre-replace"
+        && !target.jars.is_empty()
+        && target.jars.iter().all(|jar| !jar.backup_file.is_empty())
+    {
+        return rollback_jar_version(&state, &project, &target, &body).await;
+    }
 
     // Snapshot current live tree first so rollback itself can be undone.
     let safety_id = Uuid::new_v4().to_string();
