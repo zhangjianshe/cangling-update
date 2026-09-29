@@ -445,13 +445,9 @@ fn normalize_username(raw: &str) -> Result<String, AppError> {
 }
 
 pub fn validate_password(password: &str) -> Result<(), AppError> {
-    if password.len() < 8 {
-        return Err(AppError::bad("密码至少 8 位"));
-    }
-    if password.len() > 128 {
-        return Err(AppError::bad("密码过长"));
-    }
-    Ok(())
+    let policy = crate::password_policy::PasswordPolicy::from_env()
+        .map_err(AppError::internal)?;
+    policy.validate(password).map_err(AppError::bad)
 }
 
 async fn hash_password_async(password: String) -> Result<String, AppError> {

@@ -16,6 +16,7 @@ mod k3s;
 mod k3s_resources;
 mod models;
 mod paths;
+mod password_policy;
 mod portal;
 mod port_forward;
 mod progress;
@@ -397,7 +398,7 @@ async fn change_password(
 
     let (password, generated) = match password {
         Some(p) => (p, false),
-        None => (generate_password(), true),
+        None => (generate_password()?, true),
     };
     auth::validate_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
     let hash = auth::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -506,7 +507,7 @@ fn reset_password(
 
     let (password, generated) = match password {
         Some(p) => (p, false),
-        None => (generate_password(), true),
+        None => (generate_password()?, true),
     };
     auth::validate_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
     let hash = auth::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -555,12 +556,10 @@ fn init_logging(log_file: &Path) {
     }
 }
 
-fn generate_password() -> String {
-    format!(
-        "{}{}",
-        &uuid::Uuid::new_v4().simple().to_string()[..8],
-        &uuid::Uuid::new_v4().simple().to_string()[..8]
-    )
+fn generate_password() -> anyhow::Result<String> {
+    password_policy::PasswordPolicy::from_env()
+        .and_then(|policy| policy.generate())
+        .map_err(anyhow::Error::msg)
 }
 
 async fn shutdown_signal() {

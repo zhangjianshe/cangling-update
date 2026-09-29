@@ -285,7 +285,7 @@ sudo ./cangling-update update --proxy http://10.1.1.2:7890
 ## 首次使用
 
 1. 打开 `http://<主机>:5400`，进入可配置的首页门户（底部固定「系统管理」，指向 `/console`）
-2. 点「编辑首页」或「初始化」完成**管理员初始化**（用户名 2–32 位字母数字，密码至少 8 位），之后可添加入口、上传背景图或 MP4
+2. 点「编辑首页」或「初始化」完成**管理员初始化**（用户名 2–32 位字母数字；密码遵循下文的密码策略），之后可添加入口、上传背景图或 MP4
 3. 点底部「系统管理」进入 Docker Compose 升级台；右上角可退出
 4. **新建项目**，填写名称、说明（会出现在左侧项目列表里）和本机**绝对路径**，目录里必须有：
    - `docker-compose.yml` / `docker-compose.yaml` / `compose.yml` / `compose.yaml`
@@ -456,6 +456,7 @@ config/
 ## 登录与忘记密码
 
 - 密码用 Argon2 存放
+- 默认密码策略：12–128 位，且至少包含一个大写字母、一个小写字母和一个特殊字符
 - 会话 Cookie：`cangling_session`（HttpOnly）
 - **2 小时没有任何操作**（页面交互或接口）会退出
 - 连续 **3 次登录失败**后，该账号会被锁定 **3 分钟**，期间无法登录
@@ -473,6 +474,23 @@ sudo ./cangling-update --data-dir /var/lib/cangling-update reset-password
 ```
 
 不写 `-p` 会生成一串随机密码，只打印一次。重置后该用户的旧登录全部失效。
+
+密码策略可通过环境变量配置，网页初始化、网页修改密码、`change-password` 和
+`reset-password` 都使用同一规则：
+
+```bash
+# 支持前后向断言的正则表达式
+export CANGLING_PASSWORD_REGEX='^(?=.{16,64}$)(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).*$'
+export CANGLING_PASSWORD_HINT='密码必须为 16–64 位，并包含大小写字母、数字和特殊字符'
+
+# reset-password/change-password 未传 -p 时生成的密码长度，允许 12–128
+export CANGLING_PASSWORD_GENERATED_LENGTH=24
+```
+
+服务部署时可通过 `systemctl edit cangling-update` 把这些变量写入 `[Service]` 的
+`Environment=` 配置，然后执行 `systemctl daemon-reload && systemctl restart cangling-update`。
+直接执行命令行重置时，也要让命令读取到相同变量。自动生成器使用大小写字母、数字和特殊字符生成候选密码，并以配置正则复核；
+如果自定义正则过于特殊而无法自动生成，请使用 `-p` 明确指定符合规则的密码。
 
 ### 修改密码（网页 / 命令行，可同步到工作节点）
 
