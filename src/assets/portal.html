@@ -291,8 +291,8 @@
       <h2 id="login-title">登录</h2>
       <p class="hint" id="login-hint" hidden></p>
       <div id="login-flash" class="flash" hidden></div>
-      <div class="field"><label>用户名</label><input id="login-user" type="text" autocomplete="username" /></div>
-      <div class="field"><label>密码</label><input id="login-pass" type="password" autocomplete="current-password" /></div>
+      <div class="field"><label>用户名</label><input id="login-user" type="text" autocomplete="off" data-1p-ignore data-lpignore="true" /></div>
+      <div class="field"><label>密码</label><input id="login-pass" type="password" autocomplete="off" data-1p-ignore data-lpignore="true" /></div>
       <div class="field" id="login-pass2-wrap" hidden>
         <label>确认密码</label><input id="login-pass2" type="password" autocomplete="new-password" />
       </div>
@@ -761,6 +761,8 @@
           });
           if (user && user.token) setSessionToken(user.token);
         }
+        $("#login-pass").value = "";
+        $("#login-pass2").value = "";
         $("#login-box").hidden = true;
         applyPage(await api("/api/portal"));
       } catch (e) {
@@ -838,7 +840,11 @@
     $("#btn-login").onclick = () => openLogin();
     $("#btn-logout").onclick = logout;
     $("#login-submit").onclick = submitLogin;
-    $("#login-cancel").onclick = () => { $("#login-box").hidden = true; };
+    $("#login-cancel").onclick = () => {
+      $("#login-pass").value = "";
+      $("#login-pass2").value = "";
+      $("#login-box").hidden = true;
+    };
     ["login-user", "login-pass", "login-pass2"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") submitLogin(); });
