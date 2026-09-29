@@ -457,6 +457,7 @@ config/
 
 - 密码用 Argon2 存放
 - 默认密码策略：8–128 位，且至少包含一个大写字母、一个小写字母和一个特殊字符；命令自动生成的密码默认 8 位
+- 数据库中没有用户时自动创建 `admin`；未设置 `CANGLING_ADMIN_PASSWORD` 时初始密码为 `-Cangling@zky`，部署后应立即修改
 - 会话 Cookie：`cangling_session`（HttpOnly）
 - **2 小时没有任何操作**（页面交互或接口）会退出
 - 连续 **3 次登录失败**后，该账号会被锁定 **3 分钟**，期间无法登录
@@ -479,6 +480,9 @@ sudo ./cangling-update --data-dir /var/lib/cangling-update reset-password
 `reset-password` 都使用同一规则：
 
 ```bash
+# 首次启动的管理员密码；未设置时使用 -Cangling@zky
+export CANGLING_ADMIN_PASSWORD='Your-initial!Password'
+
 # 支持前后向断言的正则表达式
 export CANGLING_PASSWORD_REGEX='^(?=.{16,64}$)(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).*$'
 export CANGLING_PASSWORD_HINT='密码必须为 16–64 位，并包含大小写字母、数字和特殊字符'

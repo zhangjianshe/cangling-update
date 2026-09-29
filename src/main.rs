@@ -40,6 +40,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, EnvFilter};
 
+const DEFAULT_ADMIN_USERNAME: &str = "admin";
+const DEFAULT_ADMIN_PASSWORD: &str = "-Cangling@zky";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "cangling-update",
@@ -281,6 +284,10 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let conn = db::open(&paths.db_path)?;
+    let configured_admin_password = std::env::var("CANGLING_ADMIN_PASSWORD")
+        .ok()
+        .filter(|password| !password.trim().is_empty());
+    ensure_initial_admin(&conn, configured_admin_password.as_deref())?;
     let docker = Docker::detect().await;
     let docker_meta = docker.meta().await;
 
@@ -562,7 +569,69 @@ fn generate_password() -> anyhow::Result<String> {
         .map_err(anyhow::Error::msg)
 }
 
+fn ensure_initial_admin(
+    conn: &rusqlite::Connection,
+    configured_password: Option<&str>,
+) -> anyhow::Result<()> {
+    if db::user_count(conn)? > 0 {
+        return Ok(());
+    }
+
+    let password = configured_password.unwrap_or(DEFAULT_ADMIN_PASSWORD);
+    auth::validate_password(password)
+        .map_err(|error| anyhow::anyhow!("初始管理员密码不符合规则：{error}"))?;
+    let hash = auth::hash_password(password).map_err(|error| anyhow::anyhow!("{error}"))?;
+    db::insert_user(
+        conn,
+        &uuid::Uuid::new_v4().to_string(),
+        DEFAULT_ADMIN_USERNAME,
+        &hash,
+    )?;
+    if configured_password.is_some() {
+        tracing::warn!("尚未配置管理员，已使用 CANGLING_ADMIN_PASSWORD 创建 admin 账号");
+    } else {
+        tracing::warn!("尚未配置管理员，已使用缺省初始密码创建 admin 账号；请登录后立即修改密码");
+    }
+    Ok(())
+}
+
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     tracing::info!("shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user_database() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn initial_admin_uses_default_and_is_not_overwritten() {
+        let conn = user_database();
+        ensure_initial_admin(&conn, None).unwrap();
+        let original = db::get_user_by_name(&conn, DEFAULT_ADMIN_USERNAME)
+            .unwrap()
+            .unwrap();
+
+        ensure_initial_admin(&conn, Some("Another-valid!Password")).unwrap();
+        let unchanged = db::get_user_by_name(&conn, DEFAULT_ADMIN_USERNAME)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(db::user_count(&conn).unwrap(), 1);
+        assert_eq!(original.password_hash, unchanged.password_hash);
+    }
 }
