@@ -407,9 +407,12 @@ fn restore_blocking(
 }
 
 async fn index() -> impl IntoResponse {
-    let html =
-        include_str!("assets/index.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"));
+    let html = index_html();
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html)
+}
+
+fn index_html() -> String {
+    include_str!("assets/index.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
 async fn meta(State(state): State<AppState>) -> Json<Meta> {
@@ -5145,6 +5148,17 @@ mod tests {
     use super::*;
     use std::collections::{HashMap, HashSet};
     use std::fs;
+
+    #[test]
+    fn console_html_uses_proxy_aware_paths() {
+        let html = index_html();
+        assert!(html.contains("const APP_BASE_PATH = detectAppBase()"));
+        assert!(html.contains("fetch(appPath(path)"));
+        assert!(html.contains("appWebSocket("));
+        assert!(html.contains("src=\"vendor/compose-canvas.js"));
+        assert!(!html.contains("src=\"/vendor/"));
+        assert!(!html.contains("fetch(\"/api/"));
+    }
 
     fn temp_root() -> PathBuf {
         let p = std::env::temp_dir().join(format!(

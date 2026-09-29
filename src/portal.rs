@@ -48,9 +48,12 @@ pub fn routes() -> Router<AppState> {
 }
 
 pub async fn page() -> impl IntoResponse {
-    let html =
-        include_str!("assets/portal.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"));
+    let html = portal_html();
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html)
+}
+
+fn portal_html() -> String {
+    include_str!("assets/portal.html").replace("__APP_VERSION__", env!("CARGO_PKG_VERSION"))
 }
 
 async fn get_portal(
@@ -621,6 +624,17 @@ fn normalize_text(raw: &str, label: &str, min: usize, max: usize) -> Result<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portal_html_uses_proxy_aware_paths() {
+        let html = portal_html();
+        assert!(html.contains("const APP_BASE_PATH = detectAppBase()"));
+        assert!(html.contains("fetch(appPath(path)"));
+        assert!(html.contains("src=\"vendor/portal.jpg\""));
+        assert!(html.contains("href=\"console\""));
+        assert!(!html.contains("src=\"/vendor/"));
+        assert!(!html.contains("fetch(\"/api/"));
+    }
 
     #[test]
     fn url_accepts_http_and_relative() {

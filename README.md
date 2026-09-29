@@ -294,6 +294,37 @@ sudo ./cangling-update update --proxy http://10.1.1.2:7890
 
 如果首次备份失败或进程中断，磁盘上可能留下没有项目记录的 `config/backups/<编号>/`。首页和「新建项目」页会列出这些残留，可在页面上清理。
 
+### 通过 Nginx 路径前缀访问
+
+门户和控制台会根据浏览器当前页面地址自动推导 API、上传、媒体、字体、动态脚本和
+WebSocket 地址，因此服务端无需配置路径前缀。例如，将根路径服务发布到
+`/update/`：
+
+```nginx
+location = /update {
+    absolute_redirect off;
+    return 308 /update/;
+}
+
+location ^~ /update/ {
+    proxy_pass http://cangling-update:5400/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+`proxy_pass` 末尾的 `/` 用于在转发前去掉 `/update/`。精确匹配和
+`absolute_redirect off` 可确保访问 `/update` 时返回相对重定向，不会丢失代理对外使用的
+非标准端口。访问入口分别为 `/update/` 和 `/update/console`。
+
+页面也允许宿主页面在应用脚本执行前设置
+`window.CANGLING_UPDATE_BASE_PATH = "/update"` 来覆盖自动检测结果。
+
 ## 升级
 
 ### 镜像包

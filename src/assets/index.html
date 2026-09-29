@@ -960,7 +960,7 @@
       font-display: swap;
       src: local("Iosevka Term"), local("Iosevka Term Regular"),
            local("IosevkaTermNerdFontMono"), local("IosevkaTerm Nerd Font Mono"),
-           url("/vendor/iosevka-term-regular.woff2") format("woff2");
+           url("vendor/iosevka-term-regular.woff2") format("woff2");
     }
     @font-face {
       font-family: "Iosevka Term";
@@ -968,7 +968,7 @@
       font-weight: 700;
       font-display: swap;
       src: local("Iosevka Term Bold"), local("IosevkaTermNerdFontMono Bold"),
-           url("/vendor/iosevka-term-bold.woff2") format("woff2");
+           url("vendor/iosevka-term-bold.woff2") format("woff2");
     }
     .modal-body .term {
       flex: 1; min-height: 0; padding: 0; background: var(--log-bg);
@@ -1023,7 +1023,7 @@
   <div class="app" id="app" hidden>
     <header>
       <div class="header-left">
-        <a class="brand" href="/" title="返回首页">
+        <a class="brand" href="./" title="返回首页">
         <span class="mark" title="系统更新" aria-hidden="true">
           <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
             <rect width="32" height="32" rx="6" fill="currentColor"/>
@@ -1102,8 +1102,29 @@
     <input id="combo-search" type="text" placeholder="过滤" autocomplete="off" spellcheck="false" />
     <div id="combo-list" role="listbox"></div>
   </div>
-  <script src="/vendor/compose-canvas.js?v=interactive-85"></script>
+  <script src="vendor/compose-canvas.js?v=interactive-85"></script>
   <script>
+    function normalizeAppBase(value) {
+      const trimmed = String(value || "").trim().replace(/^\/+|\/+$/g, "");
+      return trimmed ? "/" + trimmed : "";
+    }
+    function detectAppBase() {
+      if (window.CANGLING_UPDATE_BASE_PATH != null) {
+        return normalizeAppBase(window.CANGLING_UPDATE_BASE_PATH);
+      }
+      const path = location.pathname.replace(/\/+$/, "");
+      return normalizeAppBase(path.endsWith("/console") ? path.slice(0, -8) : path);
+    }
+    const APP_BASE_PATH = detectAppBase();
+    function appPath(path) {
+      if (!path || !String(path).startsWith("/")) return path;
+      return APP_BASE_PATH + path;
+    }
+    function appWebSocket(path) {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      return proto + "://" + location.host + appPath(path);
+    }
+
     const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "pods", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [] };
     const PROJECT_TABS = [
       {
@@ -1250,7 +1271,7 @@
     }, 15000);
 
     async function api(path, opts = {}) {
-      const res = await fetch(path, withAuth(opts));
+      const res = await fetch(appPath(path), withAuth(opts));
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
@@ -1403,7 +1424,7 @@
       stopComposePoll();
       stopMetaPoll();
       closeDialog();
-      try { await fetch("/api/auth/logout", withAuth({ method: "POST" })); } catch {}
+      try { await fetch(appPath("/api/auth/logout"), withAuth({ method: "POST" })); } catch {}
       setSessionToken("");
       state.user = null;
       state.projects = [];
@@ -1415,7 +1436,7 @@
       const urlToken = takeUrlSessionToken();
       if (urlToken) setSessionToken(urlToken);
       try {
-        const st = await fetch("/api/auth/status", withAuth()).then((r) => r.json());
+        const st = await fetch(appPath("/api/auth/status"), withAuth()).then((r) => r.json());
         state.needsSetup = !!st.needs_setup;
         if (st.user) {
           await enterApp(st.user);
@@ -1563,7 +1584,7 @@
       const data = new FormData();
       data.append("file", file, file.name);
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", "/api/self-update");
+      xhr.open("POST", appPath("/api/self-update"));
       const token = sessionToken();
       if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
       xhr.upload.onprogress = (event) => {
@@ -2113,9 +2134,8 @@
       term.open($("#term"));
       if (fit) fit.fit();
       dialog.term = term; dialog.fit = fit;
-      const proto = location.protocol === "https:" ? "wss" : "ws";
       const qs = "?cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24) + (sessionToken() ? "&token=" + encodeURIComponent(sessionToken()) : "");
-      const ws = new WebSocket(proto + "://" + location.host + "/api/hosts/" + encodeURIComponent(id) + "/terminal" + qs);
+      const ws = new WebSocket(appWebSocket("/api/hosts/" + encodeURIComponent(id) + "/terminal" + qs));
       ws.binaryType = "arraybuffer"; dialog.ws = ws;
       ws.onmessage = event => term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
       ws.onerror = () => term.writeln("\r\n连接失败");
@@ -2754,7 +2774,7 @@
       const out = $("#repo-run-out");
       if (out) out.innerHTML = `<pre class="task-log">正在打包 ${esc(pkg)} …</pre>`;
       try {
-        const res = await fetch(`/api/repo/${encodeURIComponent(tab)}/${encodeURIComponent(pkg)}/download`, withAuth());
+        const res = await fetch(appPath(`/api/repo/${encodeURIComponent(tab)}/${encodeURIComponent(pkg)}/download`), withAuth());
         if (res.status === 401) {
           showGate("请先登录或登录已过期");
           throw new Error("请先登录或登录已过期");
@@ -2992,7 +3012,7 @@
       const input = $("#images-file"); const file = input.files && input.files[0];
       if (!file) return;
       const fd = new FormData(); fd.append("file", file, file.name);
-      const xhr = new XMLHttpRequest(); xhr.open("POST", "/api/images/upload" + imageDirectoryQuery());
+      const xhr = new XMLHttpRequest(); xhr.open("POST", appPath("/api/images/upload" + imageDirectoryQuery()));
       state.imageUpload = xhr;
       const token = sessionToken(); if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
       showProgress("images-prog", true);
@@ -5857,7 +5877,7 @@
     function sendTempUploadChunk(url, chunk, onProgress) {
       return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open("PUT", url);
+        xhr.open("PUT", appPath(url));
         const token = sessionToken();
         if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
         xhr.setRequestHeader("Content-Type", "application/octet-stream");
@@ -6144,7 +6164,7 @@
             else resolve(payload);
           };
           xhr.onerror = () => reject(new Error("上传失败"));
-          xhr.open("POST", "/api/projects/" + state.current.id + "/updates");
+          xhr.open("POST", appPath("/api/projects/" + state.current.id + "/updates"));
           xhr.send(fd);
         });
         flash("ok", `已将 ${data.version.label} 发布为最新版。`);
@@ -6231,7 +6251,7 @@
             else resolve(payload);
           };
           xhr.onerror = () => reject(new Error("上传失败"));
-          xhr.open("POST", "/api/projects/" + state.current.id + "/replace");
+          xhr.open("POST", appPath("/api/projects/" + state.current.id + "/replace"));
           xhr.send(fd);
         });
         const nImg = (data.loaded && data.loaded.length) || 0;
@@ -6396,14 +6416,14 @@
           const css = document.createElement("link");
           css.id = "xterm-css";
           css.rel = "stylesheet";
-          css.href = "/vendor/xterm.css";
+          css.href = appPath("/vendor/xterm.css");
           document.head.appendChild(css);
         }
         const s1 = document.createElement("script");
-        s1.src = "/vendor/xterm.js";
+        s1.src = appPath("/vendor/xterm.js");
         s1.onload = () => {
           const s2 = document.createElement("script");
-          s2.src = "/vendor/xterm-addon-fit.js";
+          s2.src = appPath("/vendor/xterm-addon-fit.js");
           s2.onload = resolve;
           s2.onerror = () => reject(new Error("无法加载 xterm-addon-fit.js"));
           document.head.appendChild(s2);
@@ -6530,17 +6550,17 @@
       if (window.ace) return Promise.resolve();
       if (dialog.aceReady) return dialog.aceReady;
       dialog.aceReady = (async () => {
-        await loadScriptOnce("/vendor/ace/ace.js");
+        await loadScriptOnce(appPath("/vendor/ace/ace.js"));
         if (!window.ace) throw new Error("无法加载 Ace 编辑器");
-        window.ace.config.set("basePath", "/vendor/ace");
+        window.ace.config.set("basePath", appPath("/vendor/ace"));
         window.ace.config.set("loadWorkerFromBlob", false);
         await Promise.all([
-          loadScriptOnce("/vendor/ace/mode-yaml.js"),
-          loadScriptOnce("/vendor/ace/mode-ini.js"),
-          loadScriptOnce("/vendor/ace/mode-sql.js"),
-          loadScriptOnce("/vendor/ace/theme-github.js"),
-          loadScriptOnce("/vendor/ace/theme-github_dark.js"),
-          loadScriptOnce("/vendor/ace/ext-searchbox.js"),
+          loadScriptOnce(appPath("/vendor/ace/mode-yaml.js")),
+          loadScriptOnce(appPath("/vendor/ace/mode-ini.js")),
+          loadScriptOnce(appPath("/vendor/ace/mode-sql.js")),
+          loadScriptOnce(appPath("/vendor/ace/theme-github.js")),
+          loadScriptOnce(appPath("/vendor/ace/theme-github_dark.js")),
+          loadScriptOnce(appPath("/vendor/ace/ext-searchbox.js")),
         ]);
       })();
       return dialog.aceReady;
@@ -6898,12 +6918,11 @@
       dialog.term = term;
       dialog.fit = fit;
 
-      const proto = location.protocol === "https:" ? "wss" : "ws";
       const qs = "?cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24) +
         (sessionToken() ? "&token=" + encodeURIComponent(sessionToken()) : "");
       const ws = new WebSocket(
-        proto + "://" + location.host + "/api/projects/" + state.current.id +
-        "/compose/exec/" + encodeURIComponent(name) + qs
+        appWebSocket("/api/projects/" + state.current.id +
+        "/compose/exec/" + encodeURIComponent(name) + qs)
       );
       ws.binaryType = "arraybuffer";
       dialog.ws = ws;
