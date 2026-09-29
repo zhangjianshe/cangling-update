@@ -2,11 +2,11 @@ use fancy_regex::Regex;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 
-pub const DEFAULT_REGEX: &str = r"^(?=.{12,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).*$";
+pub const DEFAULT_REGEX: &str = r"^(?=.{8,128}$)(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).*$";
 pub const DEFAULT_HINT: &str =
-    "密码必须为 12–128 位，并至少包含一个大写字母、一个小写字母和一个特殊字符";
-const DEFAULT_GENERATED_LENGTH: usize = 20;
-const MIN_GENERATED_LENGTH: usize = 12;
+    "密码必须为 8–128 位，并至少包含一个大写字母、一个小写字母和一个特殊字符";
+const DEFAULT_GENERATED_LENGTH: usize = 8;
+const MIN_GENERATED_LENGTH: usize = 8;
 const MAX_GENERATED_LENGTH: usize = 128;
 const GENERATION_ATTEMPTS: usize = 1024;
 
@@ -26,7 +26,7 @@ impl PasswordPolicy {
             .unwrap_or_else(|| DEFAULT_HINT.to_string());
         let generated_length = match std::env::var("CANGLING_PASSWORD_GENERATED_LENGTH") {
             Ok(value) => value.parse::<usize>().map_err(|_| {
-                "CANGLING_PASSWORD_GENERATED_LENGTH 必须是 12–128 的整数".to_string()
+                "CANGLING_PASSWORD_GENERATED_LENGTH 必须是 8–128 的整数".to_string()
             })?,
             Err(_) => DEFAULT_GENERATED_LENGTH,
         };
@@ -35,7 +35,7 @@ impl PasswordPolicy {
 
     fn new(pattern: &str, hint: String, generated_length: usize) -> Result<Self, String> {
         if !(MIN_GENERATED_LENGTH..=MAX_GENERATED_LENGTH).contains(&generated_length) {
-            return Err("CANGLING_PASSWORD_GENERATED_LENGTH 必须在 12–128 之间".to_string());
+            return Err("CANGLING_PASSWORD_GENERATED_LENGTH 必须在 8–128 之间".to_string());
         }
         let regex = Regex::new(pattern)
             .map_err(|error| format!("CANGLING_PASSWORD_REGEX 无效：{error}"))?;
@@ -92,7 +92,8 @@ mod tests {
         assert!(policy.validate("good-password-12").is_err());
         assert!(policy.validate("GOOD-PASSWORD-12").is_err());
         assert!(policy.validate("GoodPassword12").is_err());
-        assert!(policy.validate("Short-Aa!").is_err());
+        assert!(policy.validate("Aa-short!").is_ok());
+        assert!(policy.validate("Aa-shr!").is_err());
     }
 
     #[test]

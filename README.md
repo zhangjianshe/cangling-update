@@ -456,7 +456,7 @@ config/
 ## 登录与忘记密码
 
 - 密码用 Argon2 存放
-- 默认密码策略：12–128 位，且至少包含一个大写字母、一个小写字母和一个特殊字符
+- 默认密码策略：8–128 位，且至少包含一个大写字母、一个小写字母和一个特殊字符；命令自动生成的密码默认 8 位
 - 会话 Cookie：`cangling_session`（HttpOnly）
 - **2 小时没有任何操作**（页面交互或接口）会退出
 - 连续 **3 次登录失败**后，该账号会被锁定 **3 分钟**，期间无法登录
@@ -483,7 +483,7 @@ sudo ./cangling-update --data-dir /var/lib/cangling-update reset-password
 export CANGLING_PASSWORD_REGEX='^(?=.{16,64}$)(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s]).*$'
 export CANGLING_PASSWORD_HINT='密码必须为 16–64 位，并包含大小写字母、数字和特殊字符'
 
-# reset-password/change-password 未传 -p 时生成的密码长度，允许 12–128
+# reset-password/change-password 未传 -p 时生成的密码长度，允许 8–128
 export CANGLING_PASSWORD_GENERATED_LENGTH=24
 ```
 
