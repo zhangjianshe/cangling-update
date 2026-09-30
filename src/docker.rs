@@ -396,9 +396,7 @@ impl Docker {
         cmd.stderr(Stdio::piped());
         // `Command::output()` captures stdout again. Spawning first preserves
         // the file descriptor configured above for binary database dumps.
-        let child = cmd
-            .spawn()
-            .context("failed to spawn docker compose exec")?;
+        let child = cmd.spawn().context("failed to spawn docker compose exec")?;
         let result = tokio::time::timeout(timeout, child.wait_with_output())
             .await
             .map_err(|_| anyhow::anyhow!("数据库命令执行超时"))?
@@ -406,9 +404,16 @@ impl Docker {
         let stdout = String::from_utf8_lossy(&result.stdout).to_string();
         let stderr = String::from_utf8_lossy(&result.stderr).to_string();
         if !result.status.success() {
-            bail!("容器数据库命令失败：{}", stderr.trim().if_empty(stdout.trim()));
+            bail!(
+                "容器数据库命令失败：{}",
+                stderr.trim().if_empty(stdout.trim())
+            );
         }
-        Ok(if stdout.trim().is_empty() { stderr } else { stdout })
+        Ok(if stdout.trim().is_empty() {
+            stderr
+        } else {
+            stdout
+        })
     }
 
     pub async fn compose_exec_to_file(
@@ -428,9 +433,7 @@ impl Docker {
         let part = destination.with_extension(format!("{extension}.part"));
         let _ = std::fs::remove_file(&part);
         let result = self
-            .compose_exec_file_io(
-                dir, service, user, env, command, None, Some(&part), timeout,
-            )
+            .compose_exec_file_io(dir, service, user, env, command, None, Some(&part), timeout)
             .await;
         match result {
             Ok(message) => {
@@ -463,7 +466,14 @@ impl Docker {
         timeout: Duration,
     ) -> Result<String> {
         self.compose_exec_file_io(
-            dir, service, user, env, command, Some(source), None, timeout,
+            dir,
+            service,
+            user,
+            env,
+            command,
+            Some(source),
+            None,
+            timeout,
         )
         .await
     }

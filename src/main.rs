@@ -15,14 +15,14 @@ mod images;
 mod k3s;
 mod k3s_resources;
 mod models;
-mod paths;
 mod password_policy;
-mod portal;
+mod paths;
 mod port_forward;
+mod portal;
 mod progress;
 mod repo;
-mod service;
 mod self_upgrade;
+mod service;
 mod state;
 mod storage;
 mod term;
@@ -59,7 +59,11 @@ struct Cli {
     port: u16,
 
     /// 容器镜像离线包目录
-    #[arg(long, env = "CANGLING_IMAGES_DIR", default_value = "/opt/cangling/images")]
+    #[arg(
+        long,
+        env = "CANGLING_IMAGES_DIR",
+        default_value = "/opt/cangling/images"
+    )]
     images_dir: PathBuf,
 
     /// Config directory (default: <executable-dir>/config)
@@ -481,10 +485,7 @@ fn issue_session_cli(paths: &AppPaths, username: Option<String>) -> anyhow::Resu
     };
     let token = uuid::Uuid::new_v4().to_string();
     db::create_session(&conn, &token, &user.id)?;
-    println!(
-        "CK_SESSION|ok=1|username={}|token={}",
-        user.username, token
-    );
+    println!("CK_SESSION|ok=1|username={}|token={}", user.username, token);
     Ok(())
 }
 

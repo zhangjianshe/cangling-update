@@ -93,11 +93,12 @@ pub fn restore_compose_file(snapshot_dir: &Path, live: &Path) -> Result<()> {
         .find(|path| path.is_file())
         .with_context(|| format!("Compose baseline is missing in {}", snapshot_dir.display()))?;
     fs::create_dir_all(live)?;
-    let name = src.file_name().context("Compose baseline has no filename")?;
+    let name = src
+        .file_name()
+        .context("Compose baseline has no filename")?;
     let dst = live.join(name);
     let tmp = live.join(format!(".{}.cangling-update.tmp", name.to_string_lossy()));
-    fs::copy(&src, &tmp)
-        .with_context(|| format!("copy {} to {}", src.display(), tmp.display()))?;
+    fs::copy(&src, &tmp).with_context(|| format!("copy {} to {}", src.display(), tmp.display()))?;
     fs::set_permissions(&tmp, fs::metadata(&src)?.permissions())?;
     fs::rename(&tmp, &dst).with_context(|| format!("replace {}", dst.display()))?;
     Ok(())

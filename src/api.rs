@@ -1,10 +1,10 @@
 use crate::auth;
-use crate::cluster::Role;
 use crate::backup::{
     dir_size, project_dir_size, remove_dir_if_exists, restore_compose_file, restore_directory,
     restore_directory_with_progress, snapshot_compose_file, snapshot_directory,
     snapshot_directory_with_progress,
 };
+use crate::cluster::Role;
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
 use crate::error::AppError;
@@ -209,8 +209,14 @@ pub fn router(state: AppState) -> Router {
                 .put(crate::storage::update_storage)
                 .delete(crate::storage::delete_storage),
         )
-        .route("/api/storages/{id}/deploy", post(crate::storage::deploy_storage))
-        .route("/api/storages/{id}/unmount", post(crate::storage::unmount_storage))
+        .route(
+            "/api/storages/{id}/deploy",
+            post(crate::storage::deploy_storage),
+        )
+        .route(
+            "/api/storages/{id}/unmount",
+            post(crate::storage::unmount_storage),
+        )
         .route(
             "/api/storages/{id}/start-share",
             post(crate::storage::start_share),
@@ -533,7 +539,9 @@ fn create_subdirectory(parent: &str, name: &str) -> Result<PathBuf, AppError> {
     }
     let path = parent.join(name);
     std::fs::create_dir(&path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::AlreadyExists => AppError::conflict(format!("目录已存在：{}", path.display())),
+        std::io::ErrorKind::AlreadyExists => {
+            AppError::conflict(format!("目录已存在：{}", path.display()))
+        }
         _ => AppError::internal(format!("无法创建目录 {}：{error}", path.display())),
     })?;
     Ok(path.canonicalize().unwrap_or(path))
@@ -547,7 +555,10 @@ async fn list_projects(State(state): State<AppState>) -> Result<Json<Vec<Project
 fn np4_arch() -> Result<(&'static str, &'static [&'static str]), AppError> {
     match std::env::consts::ARCH {
         "x86_64" => Ok(("x86", &["x86", "amd64", "linux-x86", "linux-amd64"])),
-        "aarch64" => Ok(("arm", &["arm", "arm64", "aarch64", "linux-arm64", "kylin-arm"])),
+        "aarch64" => Ok((
+            "arm",
+            &["arm", "arm64", "aarch64", "linux-arm64", "kylin-arm"],
+        )),
         arch => Err(AppError::bad(format!("NP4 部署暂不支持本机架构 {arch}"))),
     }
 }
@@ -558,11 +569,11 @@ fn np4_template_dir(exe_dir: &FsPath) -> Option<PathBuf> {
         repo.join("cangling-np4"),
         repo.join("np4").join("cangling-np4"),
     ]
-        .into_iter()
-        .find(|dir| {
-            dir.join("docker-compose-x86.yaml").is_file()
-                && dir.join("docker-compose-arm.yaml").is_file()
-        })
+    .into_iter()
+    .find(|dir| {
+        dir.join("docker-compose-x86.yaml").is_file()
+            && dir.join("docker-compose-arm.yaml").is_file()
+    })
 }
 
 /// NP4 images are published as their own software package, separate from the
@@ -779,7 +790,9 @@ async fn np4_deploy_status(
     } else if template.is_none() {
         Some("本地软件仓库未找到 cangling-np4 模板；请先通过维护中心同步。".into())
     } else if archives.is_empty() {
-        Some(format!("NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包。"))
+        Some(format!(
+            "NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包。"
+        ))
     } else {
         None
     };
@@ -805,7 +818,10 @@ async fn deploy_np4(
     let (arch, aliases) = np4_arch()?;
     let dest = PathBuf::from(NP4_PROJECT_DIR);
     if dest.exists() {
-        return Err(AppError::Conflict(format!("{} 已存在，已取消部署", dest.display())));
+        return Err(AppError::Conflict(format!(
+            "{} 已存在，已取消部署",
+            dest.display()
+        )));
     }
     let template = np4_template_dir(&state.paths.exe_dir).ok_or_else(|| {
         AppError::bad("本地软件仓库未找到 cangling-np4 模板；请先通过维护中心同步")
@@ -815,7 +831,9 @@ async fn deploy_np4(
     })?;
     let archives = np4_image_archives(&image_package, aliases);
     if archives.is_empty() {
-        return Err(AppError::bad(format!("NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包")));
+        return Err(AppError::bad(format!(
+            "NP4 基础镜像包中未找到 {arch} 架构的 base-images 镜像包"
+        )));
     }
     let jars = np4_jar_files(&image_package).map_err(AppError::from)?;
     let master_ip = hostinfo::primary_ip();
@@ -834,10 +852,11 @@ async fn deploy_np4(
     let source = template.clone();
     let target = dest.clone();
     let arch = arch.to_string();
-    if let Err(err) = tokio::task::spawn_blocking(move || copy_np4_template(&source, &target, &arch))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-        .and_then(|result| result.map_err(AppError::from))
+    if let Err(err) =
+        tokio::task::spawn_blocking(move || copy_np4_template(&source, &target, &arch))
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))
+            .and_then(|result| result.map_err(AppError::from))
     {
         job_err(&state, body.job_id.as_deref(), &err.to_string());
         return Err(err);
@@ -852,10 +871,11 @@ async fn deploy_np4(
         archives.len() as u64 + 4,
     );
     let target = dest.clone();
-    if let Err(err) = tokio::task::spawn_blocking(move || initialize_np4_project(&target, &jars, &master_ip))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
-        .and_then(|result| result.map_err(AppError::from))
+    if let Err(err) =
+        tokio::task::spawn_blocking(move || initialize_np4_project(&target, &jars, &master_ip))
+            .await
+            .map_err(|e| AppError::internal(e.to_string()))
+            .and_then(|result| result.map_err(AppError::from))
     {
         job_err(&state, body.job_id.as_deref(), &err.to_string());
         return Err(err);
@@ -866,7 +886,10 @@ async fn deploy_np4(
             &state,
             body.job_id.as_deref(),
             "np4-images",
-            &format!("正在导入基础镜像：{}", archive.file_name().unwrap_or_default().to_string_lossy()),
+            &format!(
+                "正在导入基础镜像：{}",
+                archive.file_name().unwrap_or_default().to_string_lossy()
+            ),
             index as u64 + 2,
             archives.len() as u64 + 4,
         );
@@ -948,9 +971,7 @@ fn harbor_arch() -> Result<(&'static str, &'static str), AppError> {
     match std::env::consts::ARCH {
         "x86_64" => Ok(("amd64", "zot-image-amd64.tar.gz")),
         "aarch64" => Ok(("arm64", "zot-image-arm64.tar.gz")),
-        arch => Err(AppError::bad(format!(
-            "Harbor 部署暂不支持本机架构 {arch}"
-        ))),
+        arch => Err(AppError::bad(format!("Harbor 部署暂不支持本机架构 {arch}"))),
     }
 }
 
@@ -1090,7 +1111,10 @@ fn update_harbor_project_from_template(archive: &FsPath, dest: &FsPath) -> anyho
             if relative.as_os_str().is_empty() {
                 continue;
             }
-            let first = relative.components().next().and_then(|item| item.as_os_str().to_str());
+            let first = relative
+                .components()
+                .next()
+                .and_then(|item| item.as_os_str().to_str());
             if matches!(first, Some("data") | Some(".git")) {
                 continue;
             }
@@ -1152,7 +1176,9 @@ async fn deploy_harbor(
     Json(body): Json<DeployHarborBody>,
 ) -> Result<Json<Project>, AppError> {
     if state.cluster.role == Role::Worker {
-        return Err(AppError::bad("工作节点不能部署 Harbor 项目，请在主节点操作"));
+        return Err(AppError::bad(
+            "工作节点不能部署 Harbor 项目，请在主节点操作",
+        ));
     }
     let (arch, image_filename) = harbor_arch()?;
     {
@@ -1292,7 +1318,10 @@ fn update_zot_hosts(content: &str, master_ip: &str) -> String {
         .lines()
         .filter(|line| {
             let active = line.split('#').next().unwrap_or_default();
-            !active.split_whitespace().skip(1).any(|host| host == "hub.cangling.cn")
+            !active
+                .split_whitespace()
+                .skip(1)
+                .any(|host| host == "hub.cangling.cn")
         })
         .collect();
     while lines.last().is_some_and(|line| line.trim().is_empty()) {
@@ -1394,7 +1423,8 @@ fn restart_k3s_for_role(role: Role) -> anyhow::Result<String> {
         &["k3s", "k3s-agent"]
     };
     for service in candidates {
-        let known = std::path::Path::new(&format!("/etc/systemd/system/{service}.service")).exists()
+        let known = std::path::Path::new(&format!("/etc/systemd/system/{service}.service"))
+            .exists()
             || std::process::Command::new("systemctl")
                 .args(["is-active", "--quiet", service])
                 .status()
@@ -1440,11 +1470,10 @@ pub(crate) async fn apply_zot_environment_on_node(
     let role = state.cluster.role;
     let master_ip = body.master_ip;
     let ca_pem = body.ca_pem;
-    let result = tokio::task::spawn_blocking(move || {
-        apply_zot_environment_local(role, &master_ip, &ca_pem)
-    })
-    .await
-    .map_err(|error| AppError::internal(error.to_string()))?;
+    let result =
+        tokio::task::spawn_blocking(move || apply_zot_environment_local(role, &master_ip, &ca_pem))
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
     match result {
         Ok(message) => Ok(Json(ZotNodeEnvironmentResult {
             node,
@@ -1495,9 +1524,8 @@ async fn check_zot_environment(
     .map_err(|error| AppError::internal(error.to_string()))?
     .map_err(|error| AppError::bad(format!("更新 cangling-zot 失败：{error}")))?;
     let (_, image_filename) = harbor_arch()?;
-    let zot_image = harbor_image_archive(&deployed, image_filename).ok_or_else(|| {
-        AppError::bad(format!("更新后的 cangling-zot 缺少 {image_filename}"))
-    })?;
+    let zot_image = harbor_image_archive(&deployed, image_filename)
+        .ok_or_else(|| AppError::bad(format!("更新后的 cangling-zot 缺少 {image_filename}")))?;
     state
         .docker
         .load_archive(&zot_image)
@@ -1637,7 +1665,10 @@ async fn check_zot_environment(
             Err(error) => (false, format!("无法执行 {script_display}：{error}")),
         }
     } else {
-        (false, "部分节点环境配置失败，已跳过 hello-world 集群测试".into())
+        (
+            false,
+            "部分节点环境配置失败，已跳过 hello-world 集群测试".into(),
+        )
     };
     let ok = environment_ok && image_test_ok;
     let message = if ok {
@@ -1674,20 +1705,44 @@ async fn get_project(
 const MAX_PROJECT_TEXT_SIZE: u64 = 2 * 1024 * 1024;
 
 fn project_file_is_editable(path: &FsPath) -> bool {
-    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or_default().to_ascii_lowercase();
+    let name = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if name == ".env" || name.starts_with(".env.") {
         return true;
     }
     matches!(
         FsPath::new(&name).extension().and_then(|v| v.to_str()),
-        Some("txt" | "yaml" | "yml" | "ini" | "conf" | "cfg" | "json" | "xml" | "properties" | "toml" | "md" | "sh" | "service" | "log")
+        Some(
+            "txt"
+                | "yaml"
+                | "yml"
+                | "ini"
+                | "conf"
+                | "cfg"
+                | "json"
+                | "xml"
+                | "properties"
+                | "toml"
+                | "md"
+                | "sh"
+                | "service"
+                | "log"
+        )
     )
 }
 
 fn clean_project_relative(path: &str) -> Result<PathBuf, AppError> {
     let path = FsPath::new(path.trim());
     if path.is_absolute()
-        || path.components().any(|part| matches!(part, std::path::Component::ParentDir | std::path::Component::Prefix(_)))
+        || path.components().any(|part| {
+            matches!(
+                part,
+                std::path::Component::ParentDir | std::path::Component::Prefix(_)
+            )
+        })
     {
         return Err(AppError::bad("项目文件路径无效"));
     }
@@ -1732,20 +1787,34 @@ async fn project_files_list(
         .map_err(|e| AppError::internal(format!("无法读取目录 {}：{e}", directory.display())))?;
     let mut entries = Vec::new();
     for entry in rd.flatten() {
-        let Ok(resolved) = entry.path().canonicalize() else { continue };
-        if !resolved.starts_with(&root) { continue; }
-        let Ok(metadata) = resolved.metadata() else { continue };
+        let Ok(resolved) = entry.path().canonicalize() else {
+            continue;
+        };
+        if !resolved.starts_with(&root) {
+            continue;
+        }
+        let Ok(metadata) = resolved.metadata() else {
+            continue;
+        };
         let name = entry.file_name().to_string_lossy().into_owned();
         let rel = relative.join(&name);
         entries.push(ProjectFileEntry {
             name,
             path: rel.to_string_lossy().replace('\\', "/"),
             is_dir: metadata.is_dir(),
-            size: if metadata.is_file() { metadata.len() } else { 0 },
+            size: if metadata.is_file() {
+                metadata.len()
+            } else {
+                0
+            },
             editable: metadata.is_file() && project_file_is_editable(&rel),
         });
     }
-    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    entries.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     Ok(Json(entries))
 }
 
@@ -1756,10 +1825,17 @@ async fn project_file_get(
 ) -> Result<Json<ProjectFileView>, AppError> {
     let root = project_root(&state, &id)?;
     let (relative, file) = project_file_path(&root, &query.path)?;
-    let metadata = file.metadata().map_err(|e| AppError::internal(format!("无法读取文件信息：{e}")))?;
-    if !metadata.is_file() { return Err(AppError::bad("目标不是文件")); }
+    let metadata = file
+        .metadata()
+        .map_err(|e| AppError::internal(format!("无法读取文件信息：{e}")))?;
+    if !metadata.is_file() {
+        return Err(AppError::bad("目标不是文件"));
+    }
     if metadata.len() > MAX_PROJECT_TEXT_SIZE {
-        return Err(AppError::bad(format!("文件超过 {} MB，无法预览", MAX_PROJECT_TEXT_SIZE / 1024 / 1024)));
+        return Err(AppError::bad(format!(
+            "文件超过 {} MB，无法预览",
+            MAX_PROJECT_TEXT_SIZE / 1024 / 1024
+        )));
     }
     let content = std::fs::read_to_string(&file)
         .map_err(|e| AppError::bad(format!("文件不是可预览的 UTF-8 文本：{e}")))?;
@@ -1777,14 +1853,23 @@ async fn project_file_put(
     Json(body): Json<SaveProjectFileBody>,
 ) -> Result<Json<ProjectFileView>, AppError> {
     if body.content.len() as u64 > MAX_PROJECT_TEXT_SIZE {
-        return Err(AppError::bad(format!("文件超过 {} MB，无法保存", MAX_PROJECT_TEXT_SIZE / 1024 / 1024)));
+        return Err(AppError::bad(format!(
+            "文件超过 {} MB，无法保存",
+            MAX_PROJECT_TEXT_SIZE / 1024 / 1024
+        )));
     }
     let root = project_root(&state, &id)?;
     let (relative, file) = project_file_path(&root, &body.path)?;
-    if !project_file_is_editable(&relative) { return Err(AppError::bad("该文件类型不允许编辑")); }
-    if !file.is_file() { return Err(AppError::bad("目标不是文件")); }
+    if !project_file_is_editable(&relative) {
+        return Err(AppError::bad("该文件类型不允许编辑"));
+    }
+    if !file.is_file() {
+        return Err(AppError::bad("目标不是文件"));
+    }
     write_text_atomic(&file, &body.content).map_err(AppError::from)?;
-    let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(body.content.len() as u64);
+    let size = std::fs::metadata(&file)
+        .map(|m| m.len())
+        .unwrap_or(body.content.len() as u64);
     Ok(Json(ProjectFileView {
         path: relative.to_string_lossy().replace('\\', "/"),
         size,
@@ -1826,7 +1911,10 @@ async fn create_project(
 
     let version_id = Uuid::new_v4().to_string();
     let tree = if body.compose_only {
-        state.paths.version_dir(&id, &version_id).join("compose-only")
+        state
+            .paths
+            .version_dir(&id, &version_id)
+            .join("compose-only")
     } else {
         state.paths.version_tree(&id, &version_id)
     };
@@ -2340,10 +2428,7 @@ fn np4_repo_manifest_matches(
     Ok(Some(saved == stamps))
 }
 
-fn save_np4_repo_manifest(
-    path: &FsPath,
-    stamps: &[Np4RepoFileStamp],
-) -> Result<(), AppError> {
+fn save_np4_repo_manifest(path: &FsPath, stamps: &[Np4RepoFileStamp]) -> Result<(), AppError> {
     let parent = path
         .parent()
         .ok_or_else(|| AppError::internal("NP4 更新指纹目录无效"))?;
@@ -2391,7 +2476,8 @@ async fn update_np4_from_repo(
         .await
         .map_err(|e| AppError::internal(e.to_string()))??;
     let Some(files) = files else {
-        let message = "软件仓库 np4/np4-jars/latest/all/all 中没有找到 JAR 或 tar.gz 更新包，无需更新";
+        let message =
+            "软件仓库 np4/np4-jars/latest/all/all 中没有找到 JAR 或 tar.gz 更新包，无需更新";
         job_ok(&state, body.job_id.as_deref(), message);
         return Ok(Json(Np4RepoUpdateResult {
             updated: false,
@@ -2433,7 +2519,11 @@ async fn update_np4_from_repo(
                 .await
                 .map_err(|e| AppError::internal(e.to_string()))??;
         }
-        job_ok(&state, body.job_id.as_deref(), "软件仓库中的 NP4 更新包没有变化");
+        job_ok(
+            &state,
+            body.job_id.as_deref(),
+            "软件仓库中的 NP4 更新包没有变化",
+        );
         return Ok(Json(Np4RepoUpdateResult {
             updated: false,
             message: "软件仓库中的 JAR 和镜像包没有变化，无需更新".into(),
@@ -2896,11 +2986,20 @@ async fn apply_update(
     let live = PathBuf::from(&project.directory);
     let version_dir = state.paths.version_dir(&project.id, &version_id);
 
-    job_set(&state, job_id.as_deref(), "database-backup", "正在执行升级前数据库备份…", 0, 0);
+    job_set(
+        &state,
+        job_id.as_deref(),
+        "database-backup",
+        "正在执行升级前数据库备份…",
+        0,
+        0,
+    );
     if let Err(err) = crate::dbbackup::create_before_update(&state, &project).await {
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         job_err(&state, job_id.as_deref(), &err.to_string());
-        return Err(AppError::bad(format!("升级前数据库备份失败，已取消升级：{err}")));
+        return Err(AppError::bad(format!(
+            "升级前数据库备份失败，已取消升级：{err}"
+        )));
     }
 
     let stopped = compose_down_for_backup(&state, &live, job_id.as_deref(), stop_compose).await;
@@ -3148,11 +3247,20 @@ async fn apply_replace(
         return Err(AppError::bad("请上传镜像包或 JAR"));
     }
 
-    job_set(&state, job_id.as_deref(), "database-backup", "正在执行升级前数据库备份…", 0, 0);
+    job_set(
+        &state,
+        job_id.as_deref(),
+        "database-backup",
+        "正在执行升级前数据库备份…",
+        0,
+        0,
+    );
     if let Err(err) = crate::dbbackup::create_before_update(&state, &project).await {
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         job_err(&state, job_id.as_deref(), &err.to_string());
-        return Err(AppError::bad(format!("升级前数据库备份失败，已取消替换：{err}")));
+        return Err(AppError::bad(format!(
+            "升级前数据库备份失败，已取消替换：{err}"
+        )));
     }
 
     // Keep direct replacement lightweight: save only the live JAR files that
@@ -3169,21 +3277,15 @@ async fn apply_replace(
         let jars_dir = state.paths.version_jars(&project.id, &version_id);
         let version_dir = state.paths.version_dir(&project.id, &version_id);
 
-        stopped = match compose_down_for_backup(
-            &state,
-            &live,
-            job_id.as_deref(),
-            stop_compose,
-        )
-        .await
-        {
-            Ok(value) => value,
-            Err(err) => {
-                let _ = tokio::fs::remove_dir_all(&tmp).await;
-                job_err(&state, job_id.as_deref(), &err.to_string());
-                return Err(err);
-            }
-        };
+        stopped =
+            match compose_down_for_backup(&state, &live, job_id.as_deref(), stop_compose).await {
+                Ok(value) => value,
+                Err(err) => {
+                    let _ = tokio::fs::remove_dir_all(&tmp).await;
+                    job_err(&state, job_id.as_deref(), &err.to_string());
+                    return Err(err);
+                }
+            };
 
         job_set(
             &state,
@@ -3193,13 +3295,7 @@ async fn apply_replace(
             0,
             jar_files.len() as u64,
         );
-        let backed_up_jars = match backup_replaced_jars(
-            &jar_files,
-            &jars_dir,
-            &live,
-            &mounts,
-        )
-        .await
+        let backed_up_jars = match backup_replaced_jars(&jar_files, &jars_dir, &live, &mounts).await
         {
             Ok(jars) => jars,
             Err(err) => {
@@ -3446,8 +3542,8 @@ async fn restore_jar_backup(
     jars: &[DeployedJar],
 ) -> Result<(), AppError> {
     for jar in jars {
-        let backup_name = safe_filename(&jar.backup_file)
-            .map_err(|err| AppError::bad(err.to_string()))?;
+        let backup_name =
+            safe_filename(&jar.backup_file).map_err(|err| AppError::bad(err.to_string()))?;
         let src = backup_dir.join(backup_name);
         if !src.is_file() {
             return Err(AppError::bad(format!("JAR 备份不存在：{}", src.display())));
@@ -3596,13 +3692,8 @@ async fn rollback_jar_version(
     body: &RollbackBody,
 ) -> Result<Json<UpdateResult>, AppError> {
     let live = PathBuf::from(&project.directory);
-    let stopped = compose_down_for_backup(
-        state,
-        &live,
-        body.job_id.as_deref(),
-        body.stop_compose,
-    )
-    .await?;
+    let stopped =
+        compose_down_for_backup(state, &live, body.job_id.as_deref(), body.stop_compose).await?;
     let safety_id = Uuid::new_v4().to_string();
     let safety_no = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
@@ -4968,7 +5059,10 @@ async fn db_backup_create(
         match result {
             Ok(backup) => run_state.jobs.finish_ok(
                 &job_id,
-                &format!("数据库备份完成：{}（{} 字节）", backup.database, backup.dump_bytes),
+                &format!(
+                    "数据库备份完成：{}（{} 字节）",
+                    backup.database, backup.dump_bytes
+                ),
             ),
             Err(error) => run_state.jobs.finish_err(&job_id, &error.to_string()),
         }
@@ -5016,7 +5110,12 @@ async fn db_backup_schedule_run(
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         if let Ok(conn) = run_state.db.lock() {
             let _ = crate::dbbackup::set_run_status(
-                &conn, &id, Some(&today), "running", "自动备份正在执行", false,
+                &conn,
+                &id,
+                Some(&today),
+                "running",
+                "自动备份正在执行",
+                false,
             );
         }
         run_state.jobs.set(
@@ -5029,12 +5128,32 @@ async fn db_backup_schedule_run(
         let result = crate::dbbackup::run_schedule(&run_state, &project, &schedule).await;
         if let Ok(conn) = run_state.db.lock() {
             match &result {
-                Ok(backup) => { let _ = crate::dbbackup::set_run_status(&conn, &id, None, "success", &format!("备份完成：{}", backup.id), true); }
-                Err(error) => { let _ = crate::dbbackup::set_run_status(&conn, &id, None, "failed", &error.to_string(), true); }
+                Ok(backup) => {
+                    let _ = crate::dbbackup::set_run_status(
+                        &conn,
+                        &id,
+                        None,
+                        "success",
+                        &format!("备份完成：{}", backup.id),
+                        true,
+                    );
+                }
+                Err(error) => {
+                    let _ = crate::dbbackup::set_run_status(
+                        &conn,
+                        &id,
+                        None,
+                        "failed",
+                        &error.to_string(),
+                        true,
+                    );
+                }
             }
         }
         match result {
-            Ok(backup) => run_state.jobs.finish_ok(&job_id, &format!("自动备份完成：{}", backup.id)),
+            Ok(backup) => run_state
+                .jobs
+                .finish_ok(&job_id, &format!("自动备份完成：{}", backup.id)),
             Err(error) => run_state.jobs.finish_err(&job_id, &error.to_string()),
         }
     });
@@ -5255,7 +5374,10 @@ mod tests {
         assert!(fs::read_to_string(live.join("docker-compose.yml"))
             .unwrap()
             .contains("ghcr.io/project-zot/zot"));
-        assert_eq!(fs::read_to_string(live.join("data/blob")).unwrap(), "keep me");
+        assert_eq!(
+            fs::read_to_string(live.join("data/blob")).unwrap(),
+            "keep me"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -5277,7 +5399,9 @@ mod tests {
     fn harbor_template_rejects_unsafe_archive_paths() {
         assert!(unsafe_archive_path(FsPath::new("../outside")));
         assert!(unsafe_archive_path(FsPath::new("/absolute")));
-        assert!(!unsafe_archive_path(FsPath::new("cangling-zot/compose.yaml")));
+        assert!(!unsafe_archive_path(FsPath::new(
+            "cangling-zot/compose.yaml"
+        )));
     }
 
     #[test]
@@ -5346,11 +5470,9 @@ mod tests {
     #[test]
     fn zot_registry_injection_preserves_other_registries() {
         let existing = "mirrors:\n  registry.local:\n    endpoint:\n      - http://registry.local\nconfigs:\n  registry.local:\n    tls:\n      insecure_skip_verify: true\n  hub.cangling.cn:\n    auth:\n      username: existing-user\n";
-        let rendered = update_zot_registries(
-            existing,
-            FsPath::new("/etc/rancher/k3s/cangling-ca.crt"),
-        )
-        .unwrap();
+        let rendered =
+            update_zot_registries(existing, FsPath::new("/etc/rancher/k3s/cangling-ca.crt"))
+                .unwrap();
         let yaml: serde_yaml::Value = serde_yaml::from_str(&rendered).unwrap();
         assert_eq!(
             yaml["mirrors"]["hub.cangling.cn"]["endpoint"][0],
@@ -5398,7 +5520,9 @@ mod tests {
         assert!(fs::read_to_string(registries)
             .unwrap()
             .contains("hub.cangling.cn"));
-        assert!(fs::read_to_string(ca).unwrap().contains("BEGIN CERTIFICATE"));
+        assert!(fs::read_to_string(ca)
+            .unwrap()
+            .contains("BEGIN CERTIFICATE"));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -5485,12 +5609,21 @@ mod tests {
         fs::write(source.join("docker-compose-x86.yaml"), b"x86 compose").unwrap();
         fs::write(source.join("docker-compose-arm.yaml"), b"arm compose").unwrap();
         fs::write(source.join("config").join("app.conf"), b"config").unwrap();
-        fs::write(source.join("base-images").join("x86").join("image.tar.gz"), b"image")
-            .unwrap();
+        fs::write(
+            source.join("base-images").join("x86").join("image.tar.gz"),
+            b"image",
+        )
+        .unwrap();
 
         copy_np4_template(&source, &target, "x86").unwrap();
-        assert_eq!(fs::read(target.join("docker-compose.yaml")).unwrap(), b"x86 compose");
-        assert_eq!(fs::read(target.join("config").join("app.conf")).unwrap(), b"config");
+        assert_eq!(
+            fs::read(target.join("docker-compose.yaml")).unwrap(),
+            b"x86 compose"
+        );
+        assert_eq!(
+            fs::read(target.join("config").join("app.conf")).unwrap(),
+            b"config"
+        );
         assert!(!target.join("docker-compose-arm.yaml").exists());
         assert!(!target.join("base-images").exists());
         let _ = fs::remove_dir_all(&root);
@@ -5510,7 +5643,10 @@ mod tests {
             fs::read_to_string(project.join(".env")).unwrap(),
             "PORT=8080\nHOST=192.168.3.10\n"
         );
-        assert_eq!(fs::read(project.join("jars").join("source.jar")).unwrap(), b"jar");
+        assert_eq!(
+            fs::read(project.join("jars").join("source.jar")).unwrap(),
+            b"jar"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -5542,8 +5678,7 @@ mod tests {
     #[test]
     fn np4_repo_update_selects_jars_and_tar_gz_and_detects_changes() {
         let root = temp_root();
-        let source = root
-            .join("repo/np4/np4-jars/latest/all/all");
+        let source = root.join("repo/np4/np4-jars/latest/all/all");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("api.jar"), b"jar-v1").unwrap();
         fs::write(source.join("broker.tar.gz"), b"image-v1").unwrap();
@@ -5556,11 +5691,7 @@ mod tests {
         fs::create_dir_all(&images).unwrap();
         fs::create_dir_all(&jars).unwrap();
         fs::copy(source.join("api.jar"), jars.join("api.jar")).unwrap();
-        fs::copy(
-            source.join("broker.tar.gz"),
-            images.join("broker.tar.gz"),
-        )
-        .unwrap();
+        fs::copy(source.join("broker.tar.gz"), images.join("broker.tar.gz")).unwrap();
         assert!(np4_repo_files_unchanged(&files, &images, &jars).unwrap());
         fs::write(source.join("api.jar"), b"jar-v2").unwrap();
         assert!(!np4_repo_files_unchanged(&files, &images, &jars).unwrap());
@@ -5597,7 +5728,10 @@ mod tests {
 
     #[test]
     fn project_file_paths_reject_parent_traversal() {
-        assert_eq!(clean_project_relative("config/app.yaml").unwrap(), PathBuf::from("config/app.yaml"));
+        assert_eq!(
+            clean_project_relative("config/app.yaml").unwrap(),
+            PathBuf::from("config/app.yaml")
+        );
         assert!(clean_project_relative("../etc/passwd").is_err());
         assert!(clean_project_relative("config/../../etc/passwd").is_err());
         assert!(clean_project_relative("/etc/passwd").is_err());
@@ -5605,7 +5739,14 @@ mod tests {
 
     #[test]
     fn project_file_editability_covers_configuration_files() {
-        for path in ["README.txt", "docker-compose.yaml", "app.ini", ".env", ".env.prod", "nginx/app.conf"] {
+        for path in [
+            "README.txt",
+            "docker-compose.yaml",
+            "app.ini",
+            ".env",
+            ".env.prod",
+            "nginx/app.conf",
+        ] {
             assert!(project_file_is_editable(FsPath::new(path)), "{path}");
         }
         assert!(!project_file_is_editable(FsPath::new("image.tar.gz")));
@@ -5619,7 +5760,10 @@ mod tests {
         assert_eq!(child, root.join("volume-data"));
         assert!(child.is_dir());
         for invalid in ["", "..", "../escape", "nested/path", ".hidden"] {
-            assert!(create_subdirectory(root.to_str().unwrap(), invalid).is_err(), "{invalid}");
+            assert!(
+                create_subdirectory(root.to_str().unwrap(), invalid).is_err(),
+                "{invalid}"
+            );
         }
         let _ = fs::remove_dir_all(&root);
     }
@@ -5627,7 +5771,10 @@ mod tests {
     #[test]
     fn temp_upload_id_must_be_a_uuid() {
         let id = Uuid::new_v4();
-        assert_eq!(checked_temp_upload_id(&id.to_string()).unwrap(), id.to_string());
+        assert_eq!(
+            checked_temp_upload_id(&id.to_string()).unwrap(),
+            id.to_string()
+        );
         for invalid in ["", "../escape", "not-a-uuid"] {
             assert!(checked_temp_upload_id(invalid).is_err(), "{invalid}");
         }

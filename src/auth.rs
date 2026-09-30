@@ -403,7 +403,10 @@ fn token_from_query(query: Option<&str>) -> Option<String> {
 }
 
 fn read_token(headers: &HeaderMap) -> Option<String> {
-    if let Some(auth) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+    if let Some(auth) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
         let auth = auth.trim();
         let token = auth
             .strip_prefix("Bearer ")
@@ -445,8 +448,7 @@ fn normalize_username(raw: &str) -> Result<String, AppError> {
 }
 
 pub fn validate_password(password: &str) -> Result<(), AppError> {
-    let policy = crate::password_policy::PasswordPolicy::from_env()
-        .map_err(AppError::internal)?;
+    let policy = crate::password_policy::PasswordPolicy::from_env().map_err(AppError::internal)?;
     policy.validate(password).map_err(AppError::bad)
 }
 
@@ -505,10 +507,7 @@ mod tests {
         assert!(is_public(&Method::POST, "/api/cluster/storage/start-share"));
         assert!(is_public(&Method::POST, "/api/cluster/storage/mount"));
         assert!(is_public(&Method::POST, "/api/cluster/storage/unmount"));
-        assert!(is_public(
-            &Method::POST,
-            "/api/cluster/zot/environment"
-        ));
+        assert!(is_public(&Method::POST, "/api/cluster/zot/environment"));
         assert!(is_public(&Method::GET, "/api/cluster/self-update"));
         assert!(is_public(
             &Method::GET,
@@ -521,10 +520,7 @@ mod tests {
         assert!(is_public(&Method::GET, "/api/cluster/images"));
         assert!(is_public(&Method::POST, "/api/cluster/images/import"));
         assert!(is_public(&Method::POST, "/api/cluster/images/delete"));
-        assert!(is_public(
-            &Method::GET,
-            "/api/cluster/images/jobs/1234"
-        ));
+        assert!(is_public(&Method::GET, "/api/cluster/images/jobs/1234"));
         assert!(is_public(
             &Method::GET,
             "/api/cluster/images/archive/images.tar.gz"

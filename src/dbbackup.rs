@@ -86,7 +86,9 @@ pub struct BackupScheduleBody {
     pub backup_before_update: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Deserialize)]
 pub struct BackupBody {
@@ -162,9 +164,19 @@ pub fn list(root: &Path, project_id: &str) -> Result<Vec<BackupManifest>, AppErr
                 if let Ok(mut manifest) = read_manifest(&entry.path()) {
                     manifest.valid = manifest.dump_bytes > 0
                         && manifest.globals_bytes > 0
-                        && entry.path().join("database.dump").metadata().map(|m| m.len()).ok()
+                        && entry
+                            .path()
+                            .join("database.dump")
+                            .metadata()
+                            .map(|m| m.len())
+                            .ok()
                             == Some(manifest.dump_bytes)
-                        && entry.path().join("globals.sql").metadata().map(|m| m.len()).ok()
+                        && entry
+                            .path()
+                            .join("globals.sql")
+                            .metadata()
+                            .map(|m| m.len())
+                            .ok()
                             == Some(manifest.globals_bytes);
                     backups.push(manifest);
                 }
@@ -659,7 +671,9 @@ fn validate_time(value: &str) -> Result<(u32, u32), AppError> {
         return Err(AppError::bad("备份时间格式必须为 HH:MM"));
     };
     let hour: u32 = hour.parse().map_err(|_| AppError::bad("无效的备份小时"))?;
-    let minute: u32 = minute.parse().map_err(|_| AppError::bad("无效的备份分钟"))?;
+    let minute: u32 = minute
+        .parse()
+        .map_err(|_| AppError::bad("无效的备份分钟"))?;
     if hour > 23 || minute > 59 || value.len() != 5 {
         return Err(AppError::bad("备份时间必须介于 00:00 和 23:59"));
     }
@@ -668,41 +682,81 @@ fn validate_time(value: &str) -> Result<(u32, u32), AppError> {
 
 fn map_schedule(row: &rusqlite::Row<'_>) -> rusqlite::Result<BackupSchedule> {
     Ok(BackupSchedule {
-        project_id: row.get(0)?, enabled: row.get::<_, i64>(1)? != 0,
-        service: row.get(2)?, database: row.get(3)?, time_of_day: row.get(4)?,
-        retain_count: row.get::<_, i64>(5)?.max(1) as u32, storage_id: row.get(6)?,
-        backup_before_update: row.get::<_, i64>(7)? != 0, last_run_date: row.get(8)?,
-        last_started_at: row.get(9)?, last_finished_at: row.get(10)?,
-        last_status: row.get(11)?, last_message: row.get(12)?, updated_at: row.get(13)?,
+        project_id: row.get(0)?,
+        enabled: row.get::<_, i64>(1)? != 0,
+        service: row.get(2)?,
+        database: row.get(3)?,
+        time_of_day: row.get(4)?,
+        retain_count: row.get::<_, i64>(5)?.max(1) as u32,
+        storage_id: row.get(6)?,
+        backup_before_update: row.get::<_, i64>(7)? != 0,
+        last_run_date: row.get(8)?,
+        last_started_at: row.get(9)?,
+        last_finished_at: row.get(10)?,
+        last_status: row.get(11)?,
+        last_message: row.get(12)?,
+        updated_at: row.get(13)?,
     })
 }
 
 const SCHEDULE_COLUMNS: &str = "project_id, enabled, service, database_name, time_of_day, retain_count, storage_id, backup_before_update, last_run_date, last_started_at, last_finished_at, last_status, last_message, updated_at";
 
 pub fn get_schedule(conn: &Connection, project_id: &str) -> Result<BackupSchedule, AppError> {
-    let mut stmt = conn.prepare(&format!("SELECT {SCHEDULE_COLUMNS} FROM db_backup_schedules WHERE project_id=?1"))
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {SCHEDULE_COLUMNS} FROM db_backup_schedules WHERE project_id=?1"
+        ))
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let found = stmt.query_row([project_id], map_schedule).optional()
+    let found = stmt
+        .query_row([project_id], map_schedule)
+        .optional()
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(found.unwrap_or_else(|| BackupSchedule {
-        project_id: project_id.into(), enabled: false, service: String::new(), database: String::new(),
-        time_of_day: "03:00".into(), retain_count: 7, storage_id: String::new(),
-        backup_before_update: true, last_run_date: String::new(), last_started_at: String::new(),
-        last_finished_at: String::new(), last_status: String::new(), last_message: String::new(),
+        project_id: project_id.into(),
+        enabled: false,
+        service: String::new(),
+        database: String::new(),
+        time_of_day: "03:00".into(),
+        retain_count: 7,
+        storage_id: String::new(),
+        backup_before_update: true,
+        last_run_date: String::new(),
+        last_started_at: String::new(),
+        last_finished_at: String::new(),
+        last_status: String::new(),
+        last_message: String::new(),
         updated_at: String::new(),
     }))
 }
 
-pub fn save_schedule(conn: &Connection, project_id: &str, body: &BackupScheduleBody) -> Result<BackupSchedule, AppError> {
+pub fn save_schedule(
+    conn: &Connection,
+    project_id: &str,
+    body: &BackupScheduleBody,
+) -> Result<BackupSchedule, AppError> {
     validate_time(&body.time_of_day)?;
-    if body.retain_count == 0 || body.retain_count > 365 { return Err(AppError::bad("定时备份保留份数必须介于 1 和 365")); }
-    if body.enabled && (body.service.trim().is_empty() || body.database.trim().is_empty()) {
-        return Err(AppError::bad("启用自动备份前必须选择 PostgreSQL 容器和数据库"));
+    if body.retain_count == 0 || body.retain_count > 365 {
+        return Err(AppError::bad("定时备份保留份数必须介于 1 和 365"));
     }
-    if !body.service.is_empty() { crate::docker::validate_service_name(&body.service).map_err(|e| AppError::bad(e.to_string()))?; }
-    if !body.database.is_empty() { let _ = quote_ident(&body.database)?; }
-    if !body.storage_id.is_empty() && crate::storage::get_storage_db(conn, &body.storage_id)
-        .map_err(|e| AppError::internal(e.to_string()))?.is_none() { return Err(AppError::bad("选择的存储不存在")); }
+    if body.enabled && (body.service.trim().is_empty() || body.database.trim().is_empty()) {
+        return Err(AppError::bad(
+            "启用自动备份前必须选择 PostgreSQL 容器和数据库",
+        ));
+    }
+    if !body.service.is_empty() {
+        crate::docker::validate_service_name(&body.service)
+            .map_err(|e| AppError::bad(e.to_string()))?;
+    }
+    if !body.database.is_empty() {
+        let _ = quote_ident(&body.database)?;
+    }
+    if !body.storage_id.is_empty()
+        && crate::storage::get_storage_db(conn, &body.storage_id)
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .is_none()
+    {
+        return Err(AppError::bad("选择的存储不存在"));
+    }
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute("INSERT INTO db_backup_schedules (project_id,enabled,service,database_name,time_of_day,retain_count,storage_id,backup_before_update,last_run_date,last_started_at,last_finished_at,last_status,last_message,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'','','','','',?9) ON CONFLICT(project_id) DO UPDATE SET enabled=excluded.enabled,service=excluded.service,database_name=excluded.database_name,time_of_day=excluded.time_of_day,retain_count=excluded.retain_count,storage_id=excluded.storage_id,backup_before_update=excluded.backup_before_update,updated_at=excluded.updated_at",
         params![project_id, body.enabled as i64, body.service.trim(), body.database.trim(), body.time_of_day, body.retain_count, body.storage_id, body.backup_before_update as i64, now])
@@ -711,13 +765,26 @@ pub fn save_schedule(conn: &Connection, project_id: &str, body: &BackupScheduleB
 }
 
 fn enabled_schedules(conn: &Connection) -> Result<Vec<BackupSchedule>, AppError> {
-    let mut stmt = conn.prepare(&format!("SELECT {SCHEDULE_COLUMNS} FROM db_backup_schedules WHERE enabled=1"))
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {SCHEDULE_COLUMNS} FROM db_backup_schedules WHERE enabled=1"
+        ))
         .map_err(|e| AppError::internal(e.to_string()))?;
-    let rows = stmt.query_map([], map_schedule).map_err(|e| AppError::internal(e.to_string()))?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| AppError::internal(e.to_string()))
+    let rows = stmt
+        .query_map([], map_schedule)
+        .map_err(|e| AppError::internal(e.to_string()))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| AppError::internal(e.to_string()))
 }
 
-pub(crate) fn set_run_status(conn: &Connection, project_id: &str, run_date: Option<&str>, status: &str, message: &str, finished: bool) -> Result<(), AppError> {
+pub(crate) fn set_run_status(
+    conn: &Connection,
+    project_id: &str,
+    run_date: Option<&str>,
+    status: &str,
+    message: &str,
+    finished: bool,
+) -> Result<(), AppError> {
     let now = chrono::Utc::now().to_rfc3339();
     if finished {
         conn.execute("UPDATE db_backup_schedules SET last_finished_at=?2,last_status=?3,last_message=?4 WHERE project_id=?1", params![project_id, now, status, message])
@@ -727,21 +794,41 @@ pub(crate) fn set_run_status(conn: &Connection, project_id: &str, run_date: Opti
     Ok(())
 }
 
-fn copy_to_storage(state: &AppState, schedule: &BackupSchedule, manifest: &BackupManifest) -> Result<Option<PathBuf>, AppError> {
-    if schedule.storage_id.is_empty() { return Ok(None); }
-    let storage = { let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-        crate::storage::get_storage_db(&conn, &schedule.storage_id).map_err(|e| AppError::internal(e.to_string()))?
-            .ok_or_else(|| AppError::bad("自动备份存储不存在"))? };
-    let root = PathBuf::from(&storage.target_dir);
-    if storage.target_dir.is_empty() || !root.is_dir() { return Err(AppError::bad(format!("备份存储 {} 尚未挂载", storage.name))); }
-    let source = backup_dir(&state.paths.db_backups_dir, &manifest.project_id, &manifest.id)?;
-    let parent = root.join("cangling-update-db-backups").join(&manifest.project_id);
-    fs::create_dir_all(&parent).map_err(|e| AppError::internal(e.to_string()))?;
-    let target = parent.join(&manifest.id); let staging = parent.join(format!(".{}.part", manifest.id));
-    fs::create_dir(&staging).map_err(|e| AppError::internal(e.to_string()))?;
-    let result = (|| { for name in ["database.dump", "globals.sql", "manifest.json"] {
-        fs::copy(source.join(name), staging.join(name)).map_err(|e| AppError::internal(e.to_string()))?;
+fn copy_to_storage(
+    state: &AppState,
+    schedule: &BackupSchedule,
+    manifest: &BackupManifest,
+) -> Result<Option<PathBuf>, AppError> {
+    if schedule.storage_id.is_empty() {
+        return Ok(None);
     }
+    let storage = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        crate::storage::get_storage_db(&conn, &schedule.storage_id)
+            .map_err(|e| AppError::internal(e.to_string()))?
+            .ok_or_else(|| AppError::bad("自动备份存储不存在"))?
+    };
+    let root = PathBuf::from(&storage.target_dir);
+    if storage.target_dir.is_empty() || !root.is_dir() {
+        return Err(AppError::bad(format!("备份存储 {} 尚未挂载", storage.name)));
+    }
+    let source = backup_dir(
+        &state.paths.db_backups_dir,
+        &manifest.project_id,
+        &manifest.id,
+    )?;
+    let parent = root
+        .join("cangling-update-db-backups")
+        .join(&manifest.project_id);
+    fs::create_dir_all(&parent).map_err(|e| AppError::internal(e.to_string()))?;
+    let target = parent.join(&manifest.id);
+    let staging = parent.join(format!(".{}.part", manifest.id));
+    fs::create_dir(&staging).map_err(|e| AppError::internal(e.to_string()))?;
+    let result = (|| {
+        for name in ["database.dump", "globals.sql", "manifest.json"] {
+            fs::copy(source.join(name), staging.join(name))
+                .map_err(|e| AppError::internal(e.to_string()))?;
+        }
         if sha256_file(&staging.join("database.dump"))? != manifest.dump_sha256
             || sha256_file(&staging.join("globals.sql"))? != manifest.globals_sha256
         {
@@ -750,52 +837,106 @@ fn copy_to_storage(state: &AppState, schedule: &BackupSchedule, manifest: &Backu
         fs::rename(&staging, &target).map_err(|e| AppError::internal(e.to_string()))?;
         Ok(target)
     })();
-    if result.is_err() { let _ = fs::remove_dir_all(&staging); } result.map(Some)
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    result.map(Some)
 }
 
-fn apply_retention(root: &Path, project_id: &str, service: &str, database: &str, retain: u32) -> Result<(), AppError> {
-    let scheduled: Vec<_> = list(root, project_id)?.into_iter()
-        .filter(|x| x.kind == "scheduled" && x.service == service && x.database == database).collect();
+fn apply_retention(
+    root: &Path,
+    project_id: &str,
+    service: &str,
+    database: &str,
+    retain: u32,
+) -> Result<(), AppError> {
+    let scheduled: Vec<_> = list(root, project_id)?
+        .into_iter()
+        .filter(|x| x.kind == "scheduled" && x.service == service && x.database == database)
+        .collect();
     for old in scheduled.into_iter().skip(retain as usize) {
-        fs::remove_dir_all(backup_dir(root, project_id, &old.id)?).map_err(|e| AppError::internal(e.to_string()))?;
-    } Ok(())
+        fs::remove_dir_all(backup_dir(root, project_id, &old.id)?)
+            .map_err(|e| AppError::internal(e.to_string()))?;
+    }
+    Ok(())
 }
 
-pub async fn run_schedule(state: &AppState, project: &Project, schedule: &BackupSchedule) -> Result<BackupManifest, AppError> {
-    let manifest = create(&state.docker, Path::new(&project.directory), &state.paths.db_backups_dir,
-        &project.id, &schedule.service, &schedule.database, "scheduled").await?;
-    let state_copy = state.clone(); let schedule_copy = schedule.clone(); let manifest_copy = manifest.clone();
+pub async fn run_schedule(
+    state: &AppState,
+    project: &Project,
+    schedule: &BackupSchedule,
+) -> Result<BackupManifest, AppError> {
+    let manifest = create(
+        &state.docker,
+        Path::new(&project.directory),
+        &state.paths.db_backups_dir,
+        &project.id,
+        &schedule.service,
+        &schedule.database,
+        "scheduled",
+    )
+    .await?;
+    let state_copy = state.clone();
+    let schedule_copy = schedule.clone();
+    let manifest_copy = manifest.clone();
     tokio::task::spawn_blocking(move || {
         let mirrored = copy_to_storage(&state_copy, &schedule_copy, &manifest_copy)?;
-        apply_retention(&state_copy.paths.db_backups_dir, &manifest_copy.project_id, &manifest_copy.service,
-            &manifest_copy.database, schedule_copy.retain_count)?;
+        apply_retention(
+            &state_copy.paths.db_backups_dir,
+            &manifest_copy.project_id,
+            &manifest_copy.service,
+            &manifest_copy.database,
+            schedule_copy.retain_count,
+        )?;
         if let Some(target) = mirrored {
             if let Some(remote_root) = target.parent().and_then(Path::parent) {
-                apply_retention(remote_root, &manifest_copy.project_id, &manifest_copy.service,
-                    &manifest_copy.database, schedule_copy.retain_count)?;
+                apply_retention(
+                    remote_root,
+                    &manifest_copy.project_id,
+                    &manifest_copy.service,
+                    &manifest_copy.database,
+                    schedule_copy.retain_count,
+                )?;
             }
         }
         Ok::<(), AppError>(())
-    }).await.map_err(|e| AppError::internal(e.to_string()))??;
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))??;
     Ok(manifest)
 }
 
-pub async fn create_before_update(state: &AppState, project: &Project) -> Result<Option<BackupManifest>, AppError> {
+pub async fn create_before_update(
+    state: &AppState,
+    project: &Project,
+) -> Result<Option<BackupManifest>, AppError> {
     let schedule = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         get_schedule(&conn, &project.id)?
     };
-    if !schedule.backup_before_update || schedule.service.is_empty() || schedule.database.is_empty() {
+    if !schedule.backup_before_update || schedule.service.is_empty() || schedule.database.is_empty()
+    {
         return Ok(None);
     }
     let manifest = create(
-        &state.docker, Path::new(&project.directory), &state.paths.db_backups_dir,
-        &project.id, &schedule.service, &schedule.database, "pre-update",
-    ).await?;
+        &state.docker,
+        Path::new(&project.directory),
+        &state.paths.db_backups_dir,
+        &project.id,
+        &schedule.service,
+        &schedule.database,
+        "pre-update",
+    )
+    .await?;
     if !schedule.storage_id.is_empty() {
-        let state_copy = state.clone(); let schedule_copy = schedule; let manifest_copy = manifest.clone();
-        tokio::task::spawn_blocking(move || copy_to_storage(&state_copy, &schedule_copy, &manifest_copy))
-            .await.map_err(|e| AppError::internal(e.to_string()))??;
+        let state_copy = state.clone();
+        let schedule_copy = schedule;
+        let manifest_copy = manifest.clone();
+        tokio::task::spawn_blocking(move || {
+            copy_to_storage(&state_copy, &schedule_copy, &manifest_copy)
+        })
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))??;
     }
     Ok(Some(manifest))
 }
@@ -811,24 +952,75 @@ pub async fn scheduler(state: AppState) {
     let mut timer = tokio::time::interval(Duration::from_secs(30));
     loop {
         timer.tick().await;
-        let now = Local::now(); let today = now.format("%Y-%m-%d").to_string();
-        let schedules = match state.db.lock() { Ok(conn) => enabled_schedules(&conn), Err(_) => Err(AppError::internal("db lock")) };
-        let Ok(schedules) = schedules else { tracing::error!("读取数据库自动备份计划失败"); continue; };
+        let now = Local::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        let schedules = match state.db.lock() {
+            Ok(conn) => enabled_schedules(&conn),
+            Err(_) => Err(AppError::internal("db lock")),
+        };
+        let Ok(schedules) = schedules else {
+            tracing::error!("读取数据库自动备份计划失败");
+            continue;
+        };
         for schedule in schedules {
-            let Ok((hour, minute)) = validate_time(&schedule.time_of_day) else { continue };
-            if schedule.last_run_date == today || (now.hour(), now.minute()) < (hour, minute) { continue; }
-            let project = match state.db.lock() { Ok(conn) => crate::db::get_project(&conn, &schedule.project_id).ok().flatten(), Err(_) => None };
+            let Ok((hour, minute)) = validate_time(&schedule.time_of_day) else {
+                continue;
+            };
+            if schedule.last_run_date == today || (now.hour(), now.minute()) < (hour, minute) {
+                continue;
+            }
+            let project = match state.db.lock() {
+                Ok(conn) => crate::db::get_project(&conn, &schedule.project_id)
+                    .ok()
+                    .flatten(),
+                Err(_) => None,
+            };
             let Some(project) = project else { continue };
-            let lock = state.lock_project(&project.id); let _guard = lock.lock().await;
-            let current = match state.db.lock() { Ok(conn) => get_schedule(&conn, &project.id).ok(), Err(_) => None };
+            let lock = state.lock_project(&project.id);
+            let _guard = lock.lock().await;
+            let current = match state.db.lock() {
+                Ok(conn) => get_schedule(&conn, &project.id).ok(),
+                Err(_) => None,
+            };
             let Some(current) = current else { continue };
-            if !current.enabled || current.last_run_date == today { continue; }
-            if let Ok(conn) = state.db.lock() { let _ = set_run_status(&conn, &project.id, Some(&today), "running", "自动备份正在执行", false); }
+            if !current.enabled || current.last_run_date == today {
+                continue;
+            }
+            if let Ok(conn) = state.db.lock() {
+                let _ = set_run_status(
+                    &conn,
+                    &project.id,
+                    Some(&today),
+                    "running",
+                    "自动备份正在执行",
+                    false,
+                );
+            }
             let result = run_schedule(&state, &project, &current).await;
-            if let Ok(conn) = state.db.lock() { match result {
-                Ok(ref backup) => { let _ = set_run_status(&conn, &project.id, None, "success", &format!("备份完成：{}", backup.id), true); }
-                Err(ref error) => { let _ = set_run_status(&conn, &project.id, None, "failed", &error.to_string(), true); }
-            }}
+            if let Ok(conn) = state.db.lock() {
+                match result {
+                    Ok(ref backup) => {
+                        let _ = set_run_status(
+                            &conn,
+                            &project.id,
+                            None,
+                            "success",
+                            &format!("备份完成：{}", backup.id),
+                            true,
+                        );
+                    }
+                    Err(ref error) => {
+                        let _ = set_run_status(
+                            &conn,
+                            &project.id,
+                            None,
+                            "failed",
+                            &error.to_string(),
+                            true,
+                        );
+                    }
+                }
+            }
         }
     }
 }
