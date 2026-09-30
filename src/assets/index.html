@@ -1169,7 +1169,7 @@
     const clusterPoll = { timer: null, inflight: false };
     const k3sPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
-    const KIND = { baseline: "基线", update: "升级", "pre-replace": "JAR 替换前备份", "pre-rollback": "回滚前快照" };
+    const KIND = { baseline: "基线", "baseline-compose": "Compose 基线", update: "升级", "pre-replace": "JAR 替换前备份", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
     const FILE_EDIT = {
@@ -3546,8 +3546,9 @@
             </div>
           </div>
           <div class="hint" id="dir-hint">目录必须已存在于本机，并且包含 Compose 文件。</div>
-          <p class="hint">创建时会全量备份该目录（含数据库数据）。正在运行的应用可能锁住文件，导致备份失败或不完整。</p>
-          <label class="check"><input type="checkbox" id="f-stop" checked /> 备份前先执行 Compose Down（推荐）。备份结束后会再启动。</label>
+          <p class="hint">默认会全量备份该目录（含数据库数据）。已有大型数据目录时，可只保存 Compose 文件作为首次基线。</p>
+          <label class="check"><input type="checkbox" id="f-compose-only" /> 首次基线仅备份 Compose 文件，不复制目录中的数据库及其他数据</label>
+          <label class="check"><input type="checkbox" id="f-stop" checked /> 全量备份前先执行 Compose Down（推荐）。备份结束后会再启动。</label>
           <div class="progress-wrap" id="create-prog" hidden>
             <div class="progress-meta"><span id="create-prog-msg">准备中</span><span id="create-prog-pct">0%</span></div>
             <div class="progress" id="create-prog-bar"><span></span></div>
@@ -3562,6 +3563,11 @@
       $("#btn-check").onclick = checkDir;
       $("#btn-create").onclick = createProject;
       $("#btn-browse-dir").onclick = openDirPicker;
+      $("#f-compose-only").onchange = (event) => {
+        const stop = $("#f-stop");
+        stop.disabled = event.target.checked;
+        if (event.target.checked) stop.checked = false;
+      };
       $("#f-dir").addEventListener("blur", checkDir);
       $("#f-dir").addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -3974,10 +3980,13 @@
     }
 
     async function createProject() {
-      const stopFirst = $("#f-stop") ? $("#f-stop").checked : true;
+      const composeOnly = $("#f-compose-only") ? $("#f-compose-only").checked : false;
+      const stopFirst = !composeOnly && ($("#f-stop") ? $("#f-stop").checked : true);
       if (!(await confirmDialog(
-        "将全量备份该目录（包含 PostGIS 等数据库文件）。\n" +
-        (stopFirst ? "会先停止 Compose，备份完成后再启动。\n" : "请先手动停止当前应用，否则备份可能失败或不完整。\n") +
+        (composeOnly
+          ? "首次基线只备份 Compose 文件，不会复制或修改数据库及其他数据。\n"
+          : "将全量备份该目录（包含 PostGIS 等数据库文件）。\n" +
+            (stopFirst ? "会先停止 Compose，备份完成后再启动。\n" : "请先手动停止当前应用，否则备份可能失败或不完整。\n")) +
         "确定继续？"
       ))) return;
       const btn = $("#btn-create");
@@ -3994,6 +4003,7 @@
           directory: $("#f-dir").value,
           job_id: job.id,
           stop_compose: stopFirst,
+          compose_only: composeOnly,
         };
         const p = await api("/api/projects", {
           method: "POST",
@@ -6279,9 +6289,12 @@
       const stopFirst = $("#f-stop") ? $("#f-stop").checked : false;
       const restoreVersion = state.versions.find(version => version.id === versionId);
       const jarOnly = restoreVersion && restoreVersion.kind === "pre-replace";
+      const composeOnly = restoreVersion && restoreVersion.kind === "baseline-compose";
       if (!(await confirmDialog(
         (jarOnly
           ? "确定恢复这组 JAR？恢复前只备份当前对应的 JAR，不会复制或改动目录中的其他数据。\n"
+          : composeOnly
+            ? "确定恢复此 Compose 基线？目标操作只覆盖 Compose 文件，不会删除或覆盖其他数据；恢复前仍会全量备份当前目录作为安全快照。\n"
           : "确定恢复此版本？恢复前会先全量备份当前目录。\n") +
         (stopFirst ? "会先停止 Compose，再备份并恢复。\n" : "请先手动停止当前应用。\n") +
         "确定继续？",

@@ -69,6 +69,40 @@ pub fn restore_directory_with_progress(
     bail!("snapshot is missing: {}", snapshot.display());
 }
 
+/// Create a lightweight baseline containing only one Compose file.
+pub fn snapshot_compose_file(src: &Path, dst_dir: &Path) -> Result<u64> {
+    if !src.is_file() {
+        bail!("Compose file is missing: {}", src.display());
+    }
+    let name = src.file_name().context("Compose file has no filename")?;
+    fs::create_dir_all(dst_dir)
+        .with_context(|| format!("create snapshot dir {}", dst_dir.display()))?;
+    let dst = dst_dir.join(name);
+    let bytes = fs::copy(src, &dst)
+        .with_context(|| format!("copy {} to {}", src.display(), dst.display()))?;
+    fs::set_permissions(&dst, fs::metadata(src)?.permissions())?;
+    Ok(bytes)
+}
+
+/// Restore a Compose-only baseline without deleting or touching any other
+/// file in the live application directory.
+pub fn restore_compose_file(snapshot_dir: &Path, live: &Path) -> Result<()> {
+    let src = crate::paths::COMPOSE_FILENAMES
+        .iter()
+        .map(|name| snapshot_dir.join(name))
+        .find(|path| path.is_file())
+        .with_context(|| format!("Compose baseline is missing in {}", snapshot_dir.display()))?;
+    fs::create_dir_all(live)?;
+    let name = src.file_name().context("Compose baseline has no filename")?;
+    let dst = live.join(name);
+    let tmp = live.join(format!(".{}.cangling-update.tmp", name.to_string_lossy()));
+    fs::copy(&src, &tmp)
+        .with_context(|| format!("copy {} to {}", src.display(), tmp.display()))?;
+    fs::set_permissions(&tmp, fs::metadata(&src)?.permissions())?;
+    fs::rename(&tmp, &dst).with_context(|| format!("replace {}", dst.display()))?;
+    Ok(())
+}
+
 fn looks_like_gitref(path: &Path) -> bool {
     path.extension()
         .and_then(|s| s.to_str())
@@ -996,6 +1030,38 @@ mod tests {
         assert_eq!(fs::read(&restored).unwrap(), b"hello-jar");
         let mode = fs::metadata(&restored).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn compose_only_roundtrip_does_not_touch_other_data() {
+        let root = std::env::temp_dir().join(format!(
+            "cangling-compose-only-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("source");
+        let snapshot = root.join("snapshot");
+        let live = root.join("live");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(live.join("database")).unwrap();
+        fs::write(source.join("docker-compose.yaml"), b"services: {}\n").unwrap();
+        fs::write(live.join("docker-compose.yaml"), b"old\n").unwrap();
+        fs::write(live.join("database/data.bin"), b"important").unwrap();
+
+        snapshot_compose_file(&source.join("docker-compose.yaml"), &snapshot).unwrap();
+        restore_compose_file(&snapshot, &live).unwrap();
+
+        assert_eq!(
+            fs::read(live.join("docker-compose.yaml")).unwrap(),
+            b"services: {}\n"
+        );
+        assert_eq!(
+            fs::read(live.join("database/data.bin")).unwrap(),
+            b"important"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

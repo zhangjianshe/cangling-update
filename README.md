@@ -290,7 +290,9 @@ sudo ./cangling-update update --proxy http://10.1.1.2:7890
 4. **新建项目**，填写名称、说明（会出现在左侧项目列表里）和本机**绝对路径**，目录里必须有：
    - `docker-compose.yml` / `docker-compose.yaml` / `compose.yml` / `compose.yaml`
 
-创建项目时会打一份 **v1 全量基线快照**（含数据库数据目录，可能很大，页面会显示备份进度）。请先停止应用；默认会先执行 Compose Down，备份完成后再启动。
+创建项目时默认会打一份 **v1 全量基线快照**（含数据库数据目录，可能很大，页面会显示备份进度）。请先停止应用；默认会先执行 Compose Down，备份完成后再启动。
+
+如果登记的是已经运行且数据量很大的应用，可以勾选“首次基线仅备份 Compose 文件”。该模式只保存检测到的 `docker-compose.yml` / `docker-compose.yaml` / `compose.yml` / `compose.yaml`，不会停止 Compose，也不会复制数据库或其他数据目录。恢复这类基线时只覆盖对应 Compose 文件，绝不会删除目录中的其他文件；恢复前仍会创建一次全量安全快照，以便撤销操作。
 
 如果首次备份失败或进程中断，磁盘上可能留下没有项目记录的 `config/backups/<编号>/`。首页和「新建项目」页会列出这些残留，可在页面上清理。
 

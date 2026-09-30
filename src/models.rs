@@ -123,6 +123,10 @@ pub struct CreateProject {
     pub job_id: Option<String>,
     #[serde(default)]
     pub stop_compose: bool,
+    /// Only keep the Compose file in the initial baseline. This is intended
+    /// for existing applications with large data directories.
+    #[serde(default)]
+    pub compose_only: bool,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,8 +1,9 @@
 use crate::auth;
 use crate::cluster::Role;
 use crate::backup::{
-    dir_size, project_dir_size, remove_dir_if_exists, restore_directory,
-    restore_directory_with_progress, snapshot_directory, snapshot_directory_with_progress,
+    dir_size, project_dir_size, remove_dir_if_exists, restore_compose_file, restore_directory,
+    restore_directory_with_progress, snapshot_compose_file, snapshot_directory,
+    snapshot_directory_with_progress,
 };
 use crate::db;
 use crate::docker::{parse_compose_ps, to_latest_tag};
@@ -16,6 +17,7 @@ use crate::paths::{
     safe_filename, validate_compose_text, validate_env_text, write_text_atomic, JarMount,
 };
 use crate::state::AppState;
+use anyhow::Context;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{header, HeaderValue};
@@ -909,6 +911,7 @@ async fn deploy_np4(
             directory: NP4_PROJECT_DIR.into(),
             job_id: body.job_id.clone(),
             stop_compose: false,
+            compose_only: false,
         }),
     )
     .await?;
@@ -1249,6 +1252,7 @@ async fn deploy_harbor(
             directory: HARBOR_PROJECT_DIR.into(),
             job_id: body.job_id.clone(),
             stop_compose: false,
+            compose_only: false,
         }),
     )
     .await?;
@@ -1821,14 +1825,25 @@ async fn create_project(
     };
 
     let version_id = Uuid::new_v4().to_string();
-    let tree = state.paths.version_tree(&id, &version_id);
+    let tree = if body.compose_only {
+        state.paths.version_dir(&id, &version_id).join("compose-only")
+    } else {
+        state.paths.version_tree(&id, &version_id)
+    };
     let live = PathBuf::from(&inspected.directory);
-    let stopped =
-        compose_down_for_backup(&state, &live, body.job_id.as_deref(), body.stop_compose).await?;
+    let stopped = compose_down_for_backup(
+        &state,
+        &live,
+        body.job_id.as_deref(),
+        body.stop_compose && !body.compose_only,
+    )
+    .await?;
     let tree_clone = tree.clone();
     let jobs = state.jobs.clone();
     let job_id = body.job_id.clone();
     let live_for_snap = live.clone();
+    let compose_file = inspected.compose_file.clone();
+    let compose_only = body.compose_only;
     job_set(
         &state,
         job_id.as_deref(),
@@ -1838,7 +1853,12 @@ async fn create_project(
         0,
     );
     if let Err(err) = tokio::task::spawn_blocking(move || {
-        snapshot_blocking(live_for_snap, tree_clone, jobs, job_id)
+        if compose_only {
+            let name = compose_file.context("未找到 Compose 文件")?;
+            snapshot_compose_file(&live_for_snap.join(name), &tree_clone)
+        } else {
+            snapshot_blocking(live_for_snap, tree_clone, jobs, job_id)
+        }
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))
@@ -1869,12 +1889,20 @@ async fn create_project(
                 project_id: id.clone(),
                 version_no: 1,
                 label: "v1".into(),
-                note: "基线快照".into(),
+                note: if body.compose_only {
+                    "Compose 文件基线".into()
+                } else {
+                    "基线快照".into()
+                },
                 backup_path: tree.display().to_string(),
                 images: Vec::new(),
                 jars: Vec::new(),
                 is_current: true,
-                kind: "baseline".into(),
+                kind: if body.compose_only {
+                    "baseline-compose".into()
+                } else {
+                    "baseline".into()
+                },
                 created_at: now,
                 app_bytes: 0,
                 backup_bytes: 0,
@@ -1917,7 +1945,15 @@ async fn create_project(
         )
         .await;
     }
-    job_ok(&state, body.job_id.as_deref(), "基线快照已建立");
+    job_ok(
+        &state,
+        body.job_id.as_deref(),
+        if body.compose_only {
+            "Compose 文件基线已建立"
+        } else {
+            "基线快照已建立"
+        },
+    );
 
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     db::get_project(&conn, &id)?
@@ -3780,6 +3816,7 @@ async fn rollback(
     }
 
     let snapshot = PathBuf::from(&target.backup_path);
+    let compose_only_restore = target.kind == "baseline-compose";
     let live_restore = live.clone();
     job_set(
         &state,
@@ -3792,7 +3829,11 @@ async fn rollback(
     let jobs = state.jobs.clone();
     let job_for_restore = body.job_id.clone();
     if let Err(err) = tokio::task::spawn_blocking(move || {
-        restore_blocking(snapshot, live_restore, jobs, job_for_restore)
+        if compose_only_restore {
+            restore_compose_file(&snapshot, &live_restore)
+        } else {
+            restore_blocking(snapshot, live_restore, jobs, job_for_restore)
+        }
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))
