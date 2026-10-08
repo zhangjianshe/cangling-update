@@ -534,6 +534,67 @@ docker compose up -d       # http://<主机>:8088 应显示 1.0.0
 
 在苍灵更新里把项目目录指到 `test-docker/`，上传新的 tar.gz，刷新 8088 应看到新版本号。
 
+## WebSocket SSH 隧道
+
+服务端隧道默认关闭。启用后，经过现有控制台登录会话认证的 WebSocket
+连接会被固定转发到本机 `127.0.0.1:22`；客户端不能指定其他目标。
+
+```bash
+cangling-update --tunnel-enabled
+```
+
+可选环境变量：
+
+- `CANGLING_TUNNEL_MAX_CONNECTIONS`：并发连接上限，默认 `4`。
+- `CANGLING_TUNNEL_IDLE_SECS`：双向无流量空闲超时，默认 `900`，最小 `30`。
+
+使用 systemd 时重新执行安装命令即可把参数持久化到服务单元：
+
+```bash
+sudo cangling-update --tunnel-enabled \
+  --tunnel-max-connections 4 \
+  --tunnel-idle-secs 900 \
+  install-service
+```
+
+先签发控制台会话并把令牌单独保存到权限为 `0600` 的文件。不要把令牌放在
+URL 或命令行参数中，以免进入访问日志或进程列表。
+
+```bash
+umask 077
+cangling-update issue-session > /tmp/session.txt
+sed -n 's/.*token=//p' /tmp/session.txt > /secure/cangling-tunnel.token
+chmod 600 /secure/cangling-tunnel.token
+
+cangling-update tunnel-client \
+  --url wss://example.com/update/api/tunnel/ws \
+  --listen 127.0.0.1:10022 \
+  --token-file /secure/cangling-tunnel.token
+
+ssh -p 10022 diagnostic@127.0.0.1
+```
+
+也可以使用 OpenSSH Ed25519 密钥进行长期、可撤销的客户端认证，不需要签发登录 Token：
+
+```bash
+# 客户端生成专用密钥
+ssh-keygen -t ed25519 -f ~/.config/cangling/tunnel_ed25519
+
+# 将 .pub 文件复制到服务端后授权
+cangling-update authorize-tunnel-key \
+  --public-key /path/to/tunnel_ed25519.pub
+
+# 客户端建立隧道
+cangling-update tunnel-client \
+  --url wss://example.com/update/api/tunnel/ws \
+  --listen 127.0.0.1:10022 \
+  --identity ~/.config/cangling/tunnel_ed25519
+```
+
+私钥必须为 0600 权限。客户端为每次 WebSocket 握手签署时间戳和随机 nonce；服务端公钥列表位于 `config/tunnel_authorized_keys`，签名有效期 60 秒且不可重放。登录 Token 模式继续兼容。
+
+隧道认证之外仍应在 SSH 层使用专用诊断账号和密钥，并关闭密码及 root 直接登录。
+
 ## 命令一览
 
 ```
@@ -566,6 +627,13 @@ cangling-update [选项] [命令]
                        --listen-port     监听端口（默认 7600）
                        --target-host     目标地址（默认 127.0.0.1）
                        --target-port     目标端口（默认 22）
+  tunnel-client        通过认证 WebSocket 建立本地 SSH 入口
+                       --url             服务端 WebSocket 地址
+                       --listen          本地监听地址（默认 127.0.0.1:10022）
+                       --token-file      登录会话令牌文件（权限必须为 0600）
+                       --identity        OpenSSH Ed25519 私钥（与 token-file 二选一）
+  authorize-tunnel-key 授权隧道客户端 Ed25519 公钥
+                       --public-key      OpenSSH 公钥文件
 
 选项：
   --bind               监听地址（环境变量 CANGLING_BIND，默认 0.0.0.0）
@@ -575,6 +643,9 @@ cangling-update [选项] [命令]
   --master             master 地址（环境变量 CANGLING_MASTER；worker 不填则 UDP 广播发现）
   --cluster-token      集群共享令牌（环境变量 CANGLING_CLUSTER_TOKEN）
   --discovery-port     UDP 发现端口（环境变量 CANGLING_DISCOVERY_PORT，默认 5401）
+  --tunnel-enabled     启用认证 WebSocket SSH 隧道（默认关闭）
+  --tunnel-max-connections  隧道最大并发连接数（默认 4）
+  --tunnel-idle-secs   隧道空闲超时秒数（默认 900）
 ```
 
 例如，将本机所有网卡的 TCP 7600 端口转发到本机 SSH 端口：

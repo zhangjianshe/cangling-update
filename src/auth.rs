@@ -32,6 +32,11 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     ) {
         return true;
     }
+    // This single endpoint authenticates either a login session or an
+    // Ed25519 signature inside the tunnel handler.
+    if method == Method::GET && path == "/api/tunnel/ws" {
+        return true;
+    }
     // 机器间接口由 cluster::require_cluster_token 单独认证，不走登录会话。
     if matches!(path, "/api/cluster/register" | "/api/cluster/heartbeat")
         || path == "/api/cluster/repo"
@@ -490,6 +495,8 @@ mod tests {
         assert!(is_public(&Method::GET, "/media/portal/background"));
         assert!(is_public(&Method::GET, "/media/portal/icon/abc"));
         assert!(is_public(&Method::GET, "/api/auth/status"));
+        assert!(is_public(&Method::GET, "/api/tunnel/ws"));
+        assert!(!is_public(&Method::POST, "/api/tunnel/ws"));
         assert!(!is_public(&Method::GET, "/hostinfo"));
         assert!(!is_public(&Method::GET, "/hostinfo.md"));
         assert!(is_hostinfo_path("/hostinfo"));

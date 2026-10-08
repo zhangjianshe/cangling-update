@@ -26,6 +26,7 @@ mod service;
 mod state;
 mod storage;
 mod term;
+mod tunnel;
 mod update;
 
 use anyhow::{bail, Context};
@@ -85,6 +86,18 @@ struct Cli {
     /// UDP 发现端口（默认 5401）
     #[arg(long, env = "CANGLING_DISCOVERY_PORT", default_value_t = cluster::DEFAULT_DISCOVERY_PORT)]
     discovery_port: u16,
+
+    /// 启用经过登录认证的 WebSocket SSH 隧道（固定目标 127.0.0.1:22）
+    #[arg(long, env = "CANGLING_TUNNEL_ENABLED", default_value_t = false)]
+    tunnel_enabled: bool,
+
+    /// WebSocket SSH 隧道最大并发连接数
+    #[arg(long, env = "CANGLING_TUNNEL_MAX_CONNECTIONS", default_value_t = 4)]
+    tunnel_max_connections: usize,
+
+    /// WebSocket SSH 隧道双向无流量空闲超时（秒）
+    #[arg(long, env = "CANGLING_TUNNEL_IDLE_SECS", default_value_t = 900)]
+    tunnel_idle_secs: u64,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -169,11 +182,47 @@ enum Command {
         #[arg(long, default_value_t = 22)]
         target_port: u16,
     },
+    /// 通过认证 WebSocket 建立本地 TCP 入口（服务端固定连接 127.0.0.1:22）
+    TunnelClient {
+        /// WebSocket 地址，例如 wss://host/update/api/tunnel/ws
+        #[arg(long)]
+        url: String,
+        /// 本地监听地址
+        #[arg(long, default_value = "127.0.0.1:10022")]
+        listen: String,
+        /// 控制台登录会话令牌文件（权限必须为 0600）；与 --identity 二选一
+        #[arg(long, conflicts_with = "identity")]
+        token_file: Option<PathBuf>,
+        /// OpenSSH Ed25519 私钥（权限必须为 0600）；与 --token-file 二选一
+        #[arg(long, conflicts_with = "token_file")]
+        identity: Option<PathBuf>,
+    },
+    /// 将 OpenSSH Ed25519 公钥加入隧道授权列表
+    AuthorizeTunnelKey {
+        /// 公钥文件（ssh-keygen 生成的 .pub 文件）
+        #[arg(long)]
+        public_key: PathBuf,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // The HTTP handler reads these process-wide settings. Mirror parsed CLI values so
+    // command-line flags and environment variables have exactly the same behavior.
+    std::env::set_var(
+        "CANGLING_TUNNEL_ENABLED",
+        if cli.tunnel_enabled { "true" } else { "false" },
+    );
+    std::env::set_var(
+        "CANGLING_TUNNEL_MAX_CONNECTIONS",
+        cli.tunnel_max_connections.to_string(),
+    );
+    std::env::set_var(
+        "CANGLING_TUNNEL_IDLE_SECS",
+        cli.tunnel_idle_secs.to_string(),
+    );
 
     match cli.command {
         Some(Command::IssueSession { username }) => {
@@ -220,6 +269,9 @@ async fn main() -> anyhow::Result<()> {
                 master: cli.master.as_deref(),
                 cluster_token: cli.cluster_token.as_deref(),
                 discovery_port: cli.discovery_port,
+                tunnel_enabled: cli.tunnel_enabled,
+                tunnel_max_connections: cli.tunnel_max_connections,
+                tunnel_idle_secs: cli.tunnel_idle_secs,
             });
         }
         Some(Command::UninstallService) => {
@@ -257,6 +309,18 @@ async fn main() -> anyhow::Result<()> {
             target_port,
         }) => {
             return port_forward::run(&listen_host, listen_port, &target_host, target_port).await;
+        }
+        Some(Command::TunnelClient {
+            url,
+            listen,
+            token_file,
+            identity,
+        }) => {
+            return tunnel::client(&url, &listen, token_file.as_deref(), identity.as_deref()).await;
+        }
+        Some(Command::AuthorizeTunnelKey { public_key }) => {
+            let paths = AppPaths::resolve(cli.data_dir)?;
+            return tunnel::authorize_key(&paths.config_dir, &public_key);
         }
         None => {
             if service::is_installed() && !service::running_as_systemd_service() {

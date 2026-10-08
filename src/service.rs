@@ -16,6 +16,9 @@ pub struct InstallOptions<'a> {
     pub master: Option<&'a str>,
     pub cluster_token: Option<&'a str>,
     pub discovery_port: u16,
+    pub tunnel_enabled: bool,
+    pub tunnel_max_connections: usize,
+    pub tunnel_idle_secs: u64,
 }
 
 pub fn install(options: InstallOptions<'_>) -> Result<()> {
@@ -109,6 +112,13 @@ fn service_exec(exe: &Path, workdir: &Path, options: &InstallOptions<'_>) -> Str
     }
     exec.push_str(" --discovery-port ");
     exec.push_str(&options.discovery_port.to_string());
+    if options.tunnel_enabled {
+        exec.push_str(" --tunnel-enabled");
+    }
+    exec.push_str(" --tunnel-max-connections ");
+    exec.push_str(&options.tunnel_max_connections.to_string());
+    exec.push_str(" --tunnel-idle-secs ");
+    exec.push_str(&options.tunnel_idle_secs.to_string());
     exec
 }
 
@@ -630,6 +640,9 @@ mod tests {
             master: None,
             cluster_token: Some("12345678hgtfd"),
             discovery_port: 5401,
+            tunnel_enabled: true,
+            tunnel_max_connections: 4,
+            tunnel_idle_secs: 900,
         };
         assert_eq!(
             service_exec(
@@ -639,7 +652,8 @@ mod tests {
             ),
             "/opt/cangling-update/cangling-update --bind 0.0.0.0 --port 80 \
 --images-dir /opt/cangling/images --data-dir /opt/cangling-update/relative-config-test \
---role master --cluster-token 12345678hgtfd --discovery-port 5401"
+--role master --cluster-token 12345678hgtfd --discovery-port 5401 --tunnel-enabled \
+--tunnel-max-connections 4 --tunnel-idle-secs 900"
         );
     }
 
