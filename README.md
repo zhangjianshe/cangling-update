@@ -327,6 +327,10 @@ location ^~ /update/ {
 页面也允许宿主页面在应用脚本执行前设置
 `window.CANGLING_UPDATE_BASE_PATH = "/update"` 来覆盖自动检测结果。
 
+WebSocket TCP 隧道入口同时支持无前缀的 `/api/tunnel/ws` 和单段路径前缀
+（例如 `/update/api/tunnel/ws`）。因此即使上游代理保留 `/update`，隧道的
+Ed25519 公钥认证仍能正常工作；签名规范路径始终为 `/api/tunnel/ws`。
+
 ## 升级
 
 ### 镜像包

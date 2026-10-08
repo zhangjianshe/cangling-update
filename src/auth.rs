@@ -34,7 +34,7 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     }
     // This single endpoint authenticates either a login session or an
     // Ed25519 signature inside the tunnel handler.
-    if method == Method::GET && path == "/api/tunnel/ws" {
+    if method == Method::GET && is_tunnel_path(path) {
         return true;
     }
     // 机器间接口由 cluster::require_cluster_token 单独认证，不走登录会话。
@@ -58,6 +58,14 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         return true;
     }
     method == Method::GET && path == "/api/portal"
+}
+
+fn is_tunnel_path(path: &str) -> bool {
+    path == "/api/tunnel/ws"
+        || path.strip_prefix('/').is_some_and(|rest| {
+            rest.split_once('/')
+                .is_some_and(|(prefix, suffix)| !prefix.is_empty() && suffix == "api/tunnel/ws")
+        })
 }
 
 fn is_hostinfo_path(path: &str) -> bool {
@@ -496,7 +504,11 @@ mod tests {
         assert!(is_public(&Method::GET, "/media/portal/icon/abc"));
         assert!(is_public(&Method::GET, "/api/auth/status"));
         assert!(is_public(&Method::GET, "/api/tunnel/ws"));
+        assert!(is_public(&Method::GET, "/update/api/tunnel/ws"));
+        assert!(is_public(&Method::GET, "/custom/api/tunnel/ws"));
         assert!(!is_public(&Method::POST, "/api/tunnel/ws"));
+        assert!(!is_public(&Method::POST, "/update/api/tunnel/ws"));
+        assert!(!is_public(&Method::GET, "/a/b/api/tunnel/ws"));
         assert!(!is_public(&Method::GET, "/hostinfo"));
         assert!(!is_public(&Method::GET, "/hostinfo.md"));
         assert!(is_hostinfo_path("/hostinfo"));

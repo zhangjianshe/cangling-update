@@ -53,6 +53,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/change-password", post(auth::change_password))
         .route("/api/tunnel/ws", get(crate::tunnel::server))
+        .route("/{prefix}/api/tunnel/ws", get(crate::tunnel::server))
         .route("/api/jobs", post(create_job))
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/meta", get(meta))
