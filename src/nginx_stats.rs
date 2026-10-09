@@ -573,6 +573,9 @@ struct Report {
     os_versions: Vec<NamedCount>,
     networks: Vec<NamedCount>,
     device_models: Vec<NamedCount>,
+    android_models: Vec<NamedCount>,
+    android_model_requests: i64,
+    android_model_count: i64,
     client_apps: Vec<NamedCount>,
 }
 async fn report(
@@ -610,6 +613,21 @@ async fn report(
         Ok(values)
     };
     let totals=c.query_row("SELECT COALESCE(SUM(requests),0),COALESCE(SUM(response_bytes),0),COALESCE(SUM(status_1xx),0),COALESCE(SUM(status_2xx),0),COALESCE(SUM(status_3xx),0),COALESCE(SUM(status_4xx),0),COALESCE(SUM(status_5xx),0),CASE WHEN COALESCE(SUM(request_time_count),0)=0 THEN 0 ELSE SUM(request_time_sum)/SUM(request_time_count) END,COALESCE(SUM(slow_requests),0),(SELECT COUNT(DISTINCT client_ip) FROM nginx_bucket_clients WHERE bucket_start>=?1 AND bucket_start<=?2) FROM nginx_traffic_buckets WHERE bucket_start>=?1 AND bucket_start<=?2",params![from,to],|r|Ok(Totals{requests:r.get(0)?,response_bytes:r.get(1)?,status:[r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?],avg_request_time:r.get(7)?,slow_requests:r.get(8)?,unique_clients:r.get(9)?}))?;
+    let android_models = {
+        let mut statement = c.prepare("SELECT device_model,SUM(requests) n FROM nginx_bucket_devices WHERE bucket_start>=?1 AND bucket_start<=?2 AND platform='Android' AND device_model<>'' GROUP BY device_model ORDER BY n DESC LIMIT 7")?;
+        let rows = statement.query_map(params![from, to], |r| {
+            Ok(NamedCount {
+                name: r.get(0)?,
+                requests: r.get(1)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let (android_model_requests, android_model_count) = c.query_row(
+        "SELECT COALESCE(SUM(requests),0),COUNT(DISTINCT device_model) FROM nginx_bucket_devices WHERE bucket_start>=?1 AND bucket_start<=?2 AND platform='Android' AND device_model<>''",
+        params![from, to],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     Ok(Json(Report {
         from: from.clone(),
         to: to.clone(),
@@ -627,6 +645,9 @@ async fn report(
             .into_iter()
             .filter(|item| !item.name.is_empty())
             .collect(),
+        android_models,
+        android_model_requests,
+        android_model_count,
         client_apps: grouped("nginx_bucket_devices", "client_app", 20)?,
     }))
 }
