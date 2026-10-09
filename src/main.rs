@@ -88,8 +88,8 @@ struct Cli {
     #[arg(long, env = "CANGLING_DISCOVERY_PORT", default_value_t = cluster::DEFAULT_DISCOVERY_PORT)]
     discovery_port: u16,
 
-    /// 启用经过登录认证的 WebSocket SSH 隧道（固定目标 127.0.0.1:22）
-    #[arg(long, env = "CANGLING_TUNNEL_ENABLED", default_value_t = false)]
+    /// 启用经过登录认证的 WebSocket SSH 隧道（默认启用，固定目标 127.0.0.1:22）
+    #[arg(long, env = "CANGLING_TUNNEL_ENABLED", default_value_t = true)]
     tunnel_enabled: bool,
 
     /// WebSocket SSH 隧道最大并发连接数
