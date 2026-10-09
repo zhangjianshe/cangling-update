@@ -7022,6 +7022,13 @@
       return `<svg viewBox="0 0 ${W} ${H}" role="img">${legend}<line x1="0" y1="${T+plotH}" x2="${W}" y2="${T+plotH}" stroke="var(--line)"/>${bars}</svg>`;
     }
 
+    function trafficDistributionSvg(rows, palette) {
+      const values=(rows||[]).filter(row=>Number(row.requests)>0).slice(0,7),total=values.reduce((sum,row)=>sum+Number(row.requests),0),max=Math.max(1,...values.map(row=>Number(row.requests))),W=720,H=310,x=155,maxW=470,rowH=38;
+      if(!values.length)return `<div class="empty" style="height:310px;display:grid;place-items:center">升级后采集到新日志时开始统计</div>`;
+      const bars=values.map((row,i)=>{const v=Number(row.requests),y=18+i*rowH,w=v/max*maxW,color=palette[i%palette.length],share=total?v/total*100:0;return `<text x="0" y="${y+18}" fill="var(--text)" font-size="13" font-weight="600">${esc(row.name||'未知')}</text><rect x="${x}" y="${y}" width="${Math.max(2,w)}" height="24" fill="${color}"/><text x="${x+w+10}" y="${y+17}" fill="var(--text)" font-size="12" font-weight="600">${(v/10000).toFixed(2)} 万 · ${share.toFixed(1)}%</text>`}).join('');
+      return `<svg viewBox="0 0 ${W} ${H}" role="img">${bars}</svg>`;
+    }
+
     async function renderTraffic() {
       const today=new Date().toLocaleDateString('sv-SE'); const main=$("#main");
       main.innerHTML=`<div class="traffic-header"><h2>Nginx 流量统计</h2><div class="traffic-toolbar"><div class="field"><label>开始日期</label><input id="traffic-from" type="date" value="${today}"></div><div class="field"><label>结束日期</label><input id="traffic-to" type="date" value="${today}"></div><button class="btn primary" id="traffic-query">查询</button><button class="btn" id="traffic-scan">立即采集</button><button class="btn" id="traffic-settings">配置</button></div></div><div id="traffic-content"><div class="empty">正在读取统计数据…</div></div>`;
@@ -7033,7 +7040,7 @@
     async function loadTrafficReport(){
       const el=$("#traffic-content"); if(!el)return; const from=$("#traffic-from").value,to=$("#traffic-to").value;
       try{const r=await api(`/api/nginx-stats/report?from=${encodeURIComponent(from+'T00:00:00')}&to=${encodeURIComponent(to+'T23:59:59')}`),t=r.totals,s=t.status||[0,0,0,0,0],now=new Date(),today=now.toLocaleDateString('sv-SE'),cutoff=to===today?now.toTimeString().slice(0,5):'23:59',range=from===to?`${from} 00:00–${cutoff}`:`${from} 00:00–${to} ${cutoff}`,titleDate=from===to?from:`${from}—${to}`;
-        el.innerHTML=`<section class="traffic-report"><h1 class="traffic-report-title">江苏服务 ${esc(titleDate)} 流量与访问情况</h1><p class="traffic-report-summary">${esc(range)}（北京时间）　·　${(t.requests/10000).toFixed(2)} 万次请求　·　${(t.response_bytes/1e9).toFixed(2)} GB 响应流量　·　${Number(t.unique_clients).toLocaleString()} 个独立客户端 IP</p><div class="traffic-grid"><div class="traffic-chart"><h3>每半小时请求量</h3>${trafficBarsSvg(r.buckets,x=>x.requests,'#3568c8',v=>(v/10000).toFixed(2)+' 万',cutoff)}</div><div class="traffic-chart"><h3>每半小时响应流量</h3>${trafficBarsSvg(r.buckets,x=>x.response_bytes,'#f2c338',v=>(v/1e9).toFixed(2)+' GB',cutoff)}</div><div class="traffic-chart"><h3>HTTP 状态码分布</h3>${trafficStatusSvg(s)}</div><div class="traffic-chart"><h3>主要后端请求分布</h3>${trafficUpstreamSvg(r.upstreams)}</div></div></section>`;
+        el.innerHTML=`<section class="traffic-report"><h1 class="traffic-report-title">江苏服务 ${esc(titleDate)} 流量与访问情况</h1><p class="traffic-report-summary">${esc(range)}（北京时间）　·　${(t.requests/10000).toFixed(2)} 万次请求　·　${(t.response_bytes/1e9).toFixed(2)} GB 响应流量　·　${Number(t.unique_clients).toLocaleString()} 个独立客户端 IP</p><div class="traffic-grid"><div class="traffic-chart"><h3>每半小时请求量</h3>${trafficBarsSvg(r.buckets,x=>x.requests,'#3568c8',v=>(v/10000).toFixed(2)+' 万',cutoff)}</div><div class="traffic-chart"><h3>每半小时响应流量</h3>${trafficBarsSvg(r.buckets,x=>x.response_bytes,'#f2c338',v=>(v/1e9).toFixed(2)+' GB',cutoff)}</div><div class="traffic-chart"><h3>HTTP 状态码分布</h3>${trafficStatusSvg(s)}</div><div class="traffic-chart"><h3>主要后端请求分布</h3>${trafficUpstreamSvg(r.upstreams)}</div><div class="traffic-chart"><h3>客户端系统分布</h3>${trafficDistributionSvg(r.platforms,['#3568c8','#4fb3ad','#d95f9f','#f2c338','#8b6ccf','#54bd76','#94a3b8'])}</div><div class="traffic-chart"><h3>移动网络类型分布</h3>${trafficDistributionSvg(r.networks,['#4fb3ad','#3568c8','#f2c338','#d95f9f','#8b6ccf','#54bd76','#94a3b8'])}</div><div class="traffic-chart"><h3>移动设备型号 Top 7</h3>${trafficDistributionSvg(r.device_models,['#8b6ccf','#3568c8','#4fb3ad','#d95f9f','#f2c338','#54bd76','#94a3b8'])}</div><div class="traffic-chart"><h3>客户端应用分布</h3>${trafficDistributionSvg(r.client_apps,['#54bd76','#3568c8','#4fb3ad','#d95f9f','#f2c338','#8b6ccf','#94a3b8'])}</div></div></section>`;
       }catch(e){el.innerHTML=`<div class="empty bad">${esc(e.message)}</div>`}
     }
 
@@ -7055,8 +7062,10 @@ access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
   dateext
   dateformat -%Y%m%d-%H%M%S
   create 0644 root root
+  sharedscripts
   postrotate
-    docker exec <nginx-container> nginx -s reopen >/dev/null 2>&1 || true
+    docker_bin=$(command -v docker)
+    "$docker_bin" exec <nginx-container> nginx -s reopen
   endscript
 }
 # 建议每小时调用 logrotate；采集固定在每小时 15 分、45 分，与轮转错开。`;

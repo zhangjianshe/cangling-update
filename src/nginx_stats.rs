@@ -44,9 +44,17 @@ CREATE TABLE IF NOT EXISTS nginx_bucket_paths (
   bucket_start TEXT NOT NULL, path TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(bucket_start, path)
 );
+CREATE TABLE IF NOT EXISTS nginx_bucket_devices (
+  bucket_start TEXT NOT NULL, platform TEXT NOT NULL, os_version TEXT NOT NULL,
+  device_model TEXT NOT NULL, network_type TEXT NOT NULL,
+  client_app TEXT NOT NULL, app_version TEXT NOT NULL,
+  requests INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(bucket_start, platform, os_version, device_model, network_type, client_app, app_version)
+);
 CREATE INDEX IF NOT EXISTS idx_nginx_clients_bucket ON nginx_bucket_clients(bucket_start);
 CREATE INDEX IF NOT EXISTS idx_nginx_upstreams_bucket ON nginx_bucket_upstreams(bucket_start);
 CREATE INDEX IF NOT EXISTS idx_nginx_paths_bucket ON nginx_bucket_paths(bucket_start);
+CREATE INDEX IF NOT EXISTS idx_nginx_devices_bucket ON nginx_bucket_devices(bucket_start);
 "#;
 
 pub fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
@@ -213,6 +221,7 @@ struct Agg {
     clients: HashSet<String>,
     upstreams: HashMap<String, i64>,
     paths: HashMap<String, i64>,
+    devices: HashMap<DeviceInfo, i64>,
 }
 #[derive(Debug, Serialize)]
 struct ScanResult {
@@ -313,6 +322,7 @@ fn scan_file(state: &AppState, path: &Path, result: &mut ScanResult) -> Result<(
                     }
                     a.clients.insert(e.client);
                     *a.paths.entry(e.path).or_default() += 1;
+                    *a.devices.entry(e.device).or_default() += 1;
                     if let Some(u) = e.upstream {
                         *a.upstreams.entry(u).or_default() += 1
                     }
@@ -350,6 +360,9 @@ fn persist_batch(
         for (p, n) in a.paths {
             tx.execute("INSERT INTO nginx_bucket_paths(bucket_start,path,requests) VALUES(?1,?2,?3) ON CONFLICT(bucket_start,path) DO UPDATE SET requests=requests+excluded.requests",params![bucket,p,n])?;
         }
+        for (device, n) in a.devices {
+            tx.execute("INSERT INTO nginx_bucket_devices(bucket_start,platform,os_version,device_model,network_type,client_app,app_version,requests) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(bucket_start,platform,os_version,device_model,network_type,client_app,app_version) DO UPDATE SET requests=requests+excluded.requests",params![bucket,device.platform,device.os_version,device.device_model,device.network_type,device.client_app,device.app_version,n])?;
+        }
     }
     tx.execute("INSERT INTO nginx_log_cursors(identity,path,offset,pending,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(identity) DO UPDATE SET path=excluded.path,offset=excluded.offset,pending=excluded.pending,updated_at=excluded.updated_at",params![identity,path.to_string_lossy(),offset as i64,pending,chrono::Utc::now().to_rfc3339()])?;
     tx.commit()?;
@@ -364,7 +377,109 @@ struct Event {
     path: String,
     upstream: Option<String>,
     request_time: Option<f64>,
+    device: DeviceInfo,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct DeviceInfo {
+    platform: String,
+    os_version: String,
+    device_model: String,
+    network_type: String,
+    client_app: String,
+    app_version: String,
+}
+
+fn user_agent_value<'a>(quoted: &'a [&str]) -> &'a str {
+    quoted.get(5).copied().unwrap_or("")
+}
+
+fn value_after<'a>(text: &'a str, marker: &str, endings: &[char]) -> Option<&'a str> {
+    let start = text.find(marker)? + marker.len();
+    let tail = &text[start..];
+    let end = tail.find(endings).unwrap_or(tail.len());
+    let value = tail[..end].trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn classify_user_agent(user_agent: &str) -> DeviceInfo {
+    let ua = user_agent.trim();
+    let lower = ua.to_ascii_lowercase();
+    let mut platform = "其他".to_string();
+    let mut os_version = String::new();
+    let mut device_model = String::new();
+
+    if ua.is_empty() || ua == "-" {
+        platform = "未知".to_string();
+    } else if lower.contains("android") {
+        platform = "Android".to_string();
+        os_version = value_after(ua, "Android ", &[';', ')'])
+            .unwrap_or("")
+            .to_string();
+        if let Some(android) = ua.find("Android ") {
+            let tail = &ua[android..];
+            if let Some(separator) = tail.find(';') {
+                let candidate = tail[separator + 1..].split(';').next().unwrap_or("").trim();
+                let candidate = candidate
+                    .split(" Build/")
+                    .next()
+                    .unwrap_or(candidate)
+                    .trim();
+                if !candidate.is_empty() && candidate.len() <= 80 {
+                    device_model = candidate.to_string();
+                }
+            }
+        }
+    } else if lower.contains("iphone") || lower.contains("ipad") || lower.contains("ipod") {
+        platform = "Apple iOS/iPadOS".to_string();
+        device_model = if lower.contains("ipad") {
+            "iPad"
+        } else if lower.contains("ipod") {
+            "iPod"
+        } else {
+            "iPhone"
+        }
+        .to_string();
+        os_version = value_after(ua, "CPU iPhone OS ", &[' '])
+            .or_else(|| value_after(ua, "CPU OS ", &[' ']))
+            .unwrap_or("")
+            .replace('_', ".");
+    } else if lower.contains("windows") {
+        platform = "Windows".to_string();
+    } else if lower.contains("macintosh") || lower.contains("mac os x") {
+        platform = "macOS".to_string();
+    } else if lower.contains("linux") {
+        platform = "Linux".to_string();
+    }
+
+    let network_type = value_after(ua, "NetType/", &[' ', ';', ')'])
+        .map(|v| v.to_ascii_uppercase())
+        .unwrap_or_else(|| "未知".to_string());
+    let (client_app, app_version) = if lower.contains("micromessenger/") {
+        (
+            if lower.contains("miniprogram") {
+                "微信小程序"
+            } else {
+                "微信"
+            }
+            .to_string(),
+            value_after(ua, "MicroMessenger/", &['(', ' '])
+                .unwrap_or("")
+                .to_string(),
+        )
+    } else {
+        ("其他".to_string(), String::new())
+    };
+    DeviceInfo {
+        platform,
+        os_version,
+        device_model,
+        network_type,
+        client_app,
+        app_version,
+    }
+}
+
 fn parse_line(line: &str) -> Option<Event> {
     let lb = line.find('[')?;
     let rb = line[lb..].find(']')? + lb;
@@ -400,6 +515,7 @@ fn parse_line(line: &str) -> Option<Event> {
         .filter(|v| *v != "-")
         .map(str::to_string);
     let request_time = token(suffix, "rt=").and_then(|v| v.parse().ok());
+    let device = classify_user_agent(user_agent_value(&quoted));
     Some(Event {
         bucket,
         status,
@@ -408,6 +524,7 @@ fn parse_line(line: &str) -> Option<Event> {
         path,
         upstream,
         request_time,
+        device,
     })
 }
 fn token<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -452,6 +569,11 @@ struct Report {
     buckets: Vec<Bucket>,
     upstreams: Vec<NamedCount>,
     paths: Vec<NamedCount>,
+    platforms: Vec<NamedCount>,
+    os_versions: Vec<NamedCount>,
+    networks: Vec<NamedCount>,
+    device_models: Vec<NamedCount>,
+    client_apps: Vec<NamedCount>,
 }
 async fn report(
     State(state): State<AppState>,
@@ -495,6 +617,17 @@ async fn report(
         buckets,
         upstreams: grouped("nginx_bucket_upstreams", "upstream", 50)?,
         paths: grouped("nginx_bucket_paths", "path", 20)?,
+        platforms: grouped("nginx_bucket_devices", "platform", 20)?,
+        os_versions: grouped("nginx_bucket_devices", "os_version", 30)?
+            .into_iter()
+            .filter(|item| !item.name.is_empty())
+            .collect(),
+        networks: grouped("nginx_bucket_devices", "network_type", 20)?,
+        device_models: grouped("nginx_bucket_devices", "device_model", 20)?
+            .into_iter()
+            .filter(|item| !item.name.is_empty())
+            .collect(),
+        client_apps: grouped("nginx_bucket_devices", "client_app", 20)?,
     }))
 }
 
@@ -509,6 +642,29 @@ mod tests {
         assert_eq!(e.client, "223.1.1.1");
         assert_eq!(e.upstream.as_deref(), Some("10.132.5.223:7600"));
         assert_eq!(e.bytes, 143);
+        assert_eq!(e.device.platform, "其他");
+    }
+
+    #[test]
+    fn classifies_android_user_agent() {
+        let ua = "Mozilla/5.0 (Linux; Android 16; PLY110 Build/BP2A.250605.015; wv) AppleWebKit/537.36 MicroMessenger/8.0 NetType/5G Language/zh_CN miniProgram/wx123";
+        let device = classify_user_agent(ua);
+        assert_eq!(device.platform, "Android");
+        assert_eq!(device.os_version, "16");
+        assert_eq!(device.device_model, "PLY110");
+        assert_eq!(device.network_type, "5G");
+        assert_eq!(device.client_app, "微信小程序");
+        assert_eq!(device.app_version, "8.0");
+    }
+
+    #[test]
+    fn classifies_apple_user_agent() {
+        let ua = "Mozilla/5.0 (iPad; CPU OS 16_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 MicroMessenger/8.0 NetType/WIFI";
+        let device = classify_user_agent(ua);
+        assert_eq!(device.platform, "Apple iOS/iPadOS");
+        assert_eq!(device.os_version, "16.5");
+        assert_eq!(device.device_model, "iPad");
+        assert_eq!(device.network_type, "WIFI");
     }
 
     #[test]
