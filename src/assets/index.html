@@ -232,19 +232,19 @@
       background:var(--bg-input);
     }
     .traffic-toolbar input[type="date"]::-webkit-calendar-picker-indicator { opacity:.58; cursor:pointer; }
-    .traffic-kpis { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:12px; margin:14px 0; }
-    .traffic-kpi { border:1px solid var(--line); background:var(--bg-2); padding:16px; border-radius:8px; }
-    .traffic-kpi b { display:block; color:var(--accent); font-size:24px; margin-bottom:4px; }
-    .traffic-kpi span { color:var(--muted); font-size:12px; }
-    .traffic-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-    .traffic-chart { border:1px solid var(--line); background:var(--bg-2); padding:16px; border-radius:8px; min-width:0; }
-    .traffic-chart h3 { margin:0 0 12px; }
-    .traffic-chart svg { width:100%; height:250px; overflow:visible; }
+    .traffic-report { max-width:1600px; margin:0 auto; padding:8px 12px 40px; }
+    .traffic-report-title { margin:0; color:var(--text); font-size:30px; line-height:1.25; font-weight:700; letter-spacing:-.02em; }
+    .traffic-report-summary { margin:12px 0 38px; color:var(--muted); font-size:16px; line-height:1.6; }
+    .traffic-grid { display:grid; grid-template-columns:1fr 1fr; column-gap:88px; row-gap:68px; }
+    .traffic-chart { min-width:0; padding:0; background:transparent; border:0; border-radius:0; }
+    .traffic-chart h3 { margin:0 0 12px; color:var(--text); font-size:20px; line-height:1.4; font-weight:700; }
+    .traffic-chart svg { width:100%; height:310px; overflow:visible; border-radius:0; }
     .traffic-guide { margin-top:14px; padding:12px 14px; border:1px solid var(--line-muted); border-radius:7px; background:var(--bg-3); }
     .traffic-guide summary { cursor:pointer; font-weight:600; color:var(--text); }
     .traffic-guide h4 { margin:14px 0 6px; }
     .traffic-guide pre { margin:6px 0 0; max-height:260px; overflow:auto; white-space:pre; font-size:11px; line-height:1.55; }
-    @media(max-width:900px){.traffic-header{align-items:flex-start;flex-direction:column}.traffic-toolbar{justify-content:flex-start;margin-left:0}.traffic-grid{grid-template-columns:1fr}.traffic-kpis{grid-template-columns:1fr 1fr}}
+    @media(max-width:1100px){.traffic-grid{column-gap:36px}.traffic-report-title{font-size:26px}}
+    @media(max-width:900px){.traffic-header{align-items:flex-start;flex-direction:column}.traffic-toolbar{justify-content:flex-start;margin-left:0}.traffic-grid{grid-template-columns:1fr;row-gap:44px}.traffic-report{padding-inline:0}.traffic-report-summary{margin-bottom:30px}.traffic-chart svg{height:280px}}
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
       color: var(--text); padding: 6px 8px; margin-bottom: 2px; border-radius: 6px;
@@ -6997,21 +6997,29 @@
       term.focus();
     }
 
-    function trafficBarsSvg(items, value, color, formatter) {
-      const W=720,H=250,L=34,B=32,T=18, plotH=H-B-T, max=Math.max(1,...items.map(value));
-      const bw=Math.max(2,(W-L-8)/Math.max(1,items.length)*.72);
-      const bars=items.map((it,i)=>{const v=value(it),h=v/max*plotH,x=L+i*(W-L-8)/items.length+3,y=T+plotH-h;const label=i%2===0?`<text x="${x+bw/2}" y="${H-8}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc((it.start||'').slice(11,16))}</text>`:"";return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="1" fill="${color}"/>${label}`}).join('');
-      return `<svg viewBox="0 0 ${W} ${H}" role="img"><line x1="${L}" y1="${T+plotH}" x2="${W}" y2="${T+plotH}" stroke="var(--line)"/>${bars}<text x="${L}" y="13" fill="var(--muted)" font-size="11">峰值 ${formatter(max)}</text></svg>`;
+    function trafficBarsSvg(items, value, color, formatter, cutoff) {
+      const W=720,H=310,L=4,R=8,T=24,B=56,plotW=W-L-R,plotH=H-T-B,max=Math.max(1,...items.map(value));
+      const step=plotW/Math.max(1,items.length),bw=Math.max(2,step*.72),peak=Math.max(0,...items.map(value));
+      const grid=[0,.25,.5,.75,1].map(n=>`<line x1="${L}" y1="${T+plotH*(1-n)}" x2="${W-R}" y2="${T+plotH*(1-n)}" stroke="var(--line-muted)" stroke-width="1"/>`).join('');
+      const bars=items.map((it,i)=>{const v=value(it),h=v/max*plotH,x=L+i*step+(step-bw)/2,y=T+plotH-h,time=(it.start||'').slice(11,16),hour=time.slice(0,2),last=i===items.length-1,label=(time.endsWith(':00')||last)?`<text x="${x+bw/2}" y="${H-32}" text-anchor="middle" fill="var(--muted)" font-size="12">${esc(hour)}${last&&time.endsWith(':30')?'*':''}</text>`:'';const peakLabel=v===peak&&peak>0?`<text x="${x+bw/2}" y="${Math.max(14,y-8)}" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="700">${formatter(v)}</text>`:'';return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${color}"/>${label}${peakLabel}`}).join('');
+      const last=(items.at(-1)?.start||'').slice(11,16),caption=last.endsWith(':30')?`${last}* 为截至 ${cutoff}`:'小时';
+      return `<svg viewBox="0 0 ${W} ${H}" role="img">${grid}${bars}<text x="${W/2}" y="${H-2}" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">小时${caption==='小时'?'':`（${esc(caption)}）`}</text></svg>`;
     }
 
     function trafficStatusSvg(status) {
-      const colors=['#ff8a3d','#df6aa9','#f2c94c','#53b987','#d94a4a'], max=Math.max(1,...status), W=720;
-      return `<svg viewBox="0 0 720 250" role="img">${status.map((v,i)=>{const y=18+i*44,w=v/max*560;return `<text x="0" y="${y+19}" fill="var(--text)" font-size="13">${i+1}xx</text><rect x="45" y="${y}" width="${Math.max(2,w)}" height="25" fill="${colors[i]}"/><text x="${58+w}" y="${y+18}" fill="var(--text)" font-size="12">${(v/10000).toFixed(2)} 万</text>`}).join('')}</svg>`;
+      const colors=['#ff8a3d','#df63a7','#f2c338','#54bd76','#e64b4b'],max=Math.max(1,...status),W=720,H=310,x=62,maxW=570;
+      const rows=status.map((v,i)=>{const y=24+i*48,w=v/max*maxW;return `<text x="0" y="${y+20}" fill="var(--text)" font-size="14" font-weight="600">${i+1}xx</text><rect x="${x}" y="${y}" width="${Math.max(2,w)}" height="27" fill="${colors[i]}"/><text x="${x+w+12}" y="${y+19}" fill="var(--text)" font-size="13" font-weight="600">${(v/10000).toFixed(2)} 万</text>`}).join('');
+      const total=status.reduce((a,b)=>a+b,0),five=total?status[4]/total*100:0;
+      return `<svg viewBox="0 0 ${W} ${H}" role="img">${rows}<text x="${W/2}" y="${H-8}" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="600">请求次数（5XX 占 ${five.toFixed(3)}%）</text></svg>`;
     }
 
     function trafficUpstreamSvg(rows) {
-      const list=rows.slice(0,10),max=Math.max(1,...list.map(x=>x.requests));
-      return `<svg viewBox="0 0 720 250" role="img">${list.map((r,i)=>{const y=8+i*23,w=r.requests/max*420;return `<text x="0" y="${y+14}" fill="var(--text)" font-size="11">${esc(r.name)}</text><rect x="190" y="${y}" width="${w}" height="16" fill="#4db6ac"/><text x="${200+w}" y="${y+13}" fill="var(--muted)" font-size="11">${(r.requests/10000).toFixed(2)} 万</text>`}).join('')}</svg>`;
+      const hosts=['223','224','225'],colors=['#3568c8','#4fb3ad','#d95f9f'],services=[{label:'NP4 Base :7600',port:'7600'},{label:'GeoServer :7108',port:'7108'}];
+      const values=services.map(service=>hosts.map(host=>rows.reduce((sum,row)=>sum+(new RegExp(`(?:^|\\.)${host}:${service.port}(?:$|,)`).test(row.name)?Number(row.requests):0),0))),max=Math.max(1,...values.flat());
+      const W=720,H=310,T=68,B=48,plotH=H-T-B,centers=[180,530],bw=42,gap=16;
+      const legend=hosts.map((host,i)=>`<rect x="${250+i*105}" y="10" width="15" height="15" fill="${colors[i]}"/><text x="${272+i*105}" y="23" fill="var(--text)" font-size="13" font-weight="600">${host}</text>`).join('');
+      const bars=services.map((service,si)=>values[si].map((v,hi)=>{const h=v/max*plotH,x=centers[si]-(bw*3+gap*2)/2+hi*(bw+gap),y=T+plotH-h;return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${colors[hi]}"/>`}).join('')+`<text x="${centers[si]}" y="${H-14}" text-anchor="middle" fill="var(--text)" font-size="14" font-weight="600">${service.label}</text>`).join('');
+      return `<svg viewBox="0 0 ${W} ${H}" role="img">${legend}<line x1="0" y1="${T+plotH}" x2="${W}" y2="${T+plotH}" stroke="var(--line)"/>${bars}</svg>`;
     }
 
     async function renderTraffic() {
@@ -7024,8 +7032,8 @@
 
     async function loadTrafficReport(){
       const el=$("#traffic-content"); if(!el)return; const from=$("#traffic-from").value,to=$("#traffic-to").value;
-      try{const r=await api(`/api/nginx-stats/report?from=${encodeURIComponent(from+'T00:00:00')}&to=${encodeURIComponent(to+'T23:59:59')}`),t=r.totals,s=t.status||[0,0,0,0,0],five=t.requests?s[4]/t.requests*100:0;
-        el.innerHTML=`<div class="traffic-kpis"><div class="traffic-kpi"><b>${(t.requests/10000).toFixed(2)} 万</b><span>请求次数</span></div><div class="traffic-kpi"><b>${(t.response_bytes/1e9).toFixed(2)} GB</b><span>响应流量</span></div><div class="traffic-kpi"><b>${Number(t.unique_clients).toLocaleString()}</b><span>独立客户端 IP</span></div><div class="traffic-kpi"><b>${five.toFixed(3)}%</b><span>5XX · ${Number(s[4]).toLocaleString()} 次</span></div></div><div class="traffic-grid"><div class="traffic-chart"><h3>每半小时请求量</h3>${trafficBarsSvg(r.buckets,x=>x.requests,'#3568c8',v=>(v/10000).toFixed(2)+' 万')}</div><div class="traffic-chart"><h3>每半小时响应流量</h3>${trafficBarsSvg(r.buckets,x=>x.response_bytes,'#f0c63e',v=>(v/1e9).toFixed(2)+' GB')}</div><div class="traffic-chart"><h3>HTTP 状态码分布</h3>${trafficStatusSvg(s)}</div><div class="traffic-chart"><h3>主要后端请求分布</h3>${trafficUpstreamSvg(r.upstreams)}</div></div>`;
+      try{const r=await api(`/api/nginx-stats/report?from=${encodeURIComponent(from+'T00:00:00')}&to=${encodeURIComponent(to+'T23:59:59')}`),t=r.totals,s=t.status||[0,0,0,0,0],now=new Date(),today=now.toLocaleDateString('sv-SE'),cutoff=to===today?now.toTimeString().slice(0,5):'23:59',range=from===to?`${from} 00:00–${cutoff}`:`${from} 00:00–${to} ${cutoff}`,titleDate=from===to?from:`${from}—${to}`;
+        el.innerHTML=`<section class="traffic-report"><h1 class="traffic-report-title">江苏服务 ${esc(titleDate)} 流量与访问情况</h1><p class="traffic-report-summary">${esc(range)}（北京时间）　·　${(t.requests/10000).toFixed(2)} 万次请求　·　${(t.response_bytes/1e9).toFixed(2)} GB 响应流量　·　${Number(t.unique_clients).toLocaleString()} 个独立客户端 IP</p><div class="traffic-grid"><div class="traffic-chart"><h3>每半小时请求量</h3>${trafficBarsSvg(r.buckets,x=>x.requests,'#3568c8',v=>(v/10000).toFixed(2)+' 万',cutoff)}</div><div class="traffic-chart"><h3>每半小时响应流量</h3>${trafficBarsSvg(r.buckets,x=>x.response_bytes,'#f2c338',v=>(v/1e9).toFixed(2)+' GB',cutoff)}</div><div class="traffic-chart"><h3>HTTP 状态码分布</h3>${trafficStatusSvg(s)}</div><div class="traffic-chart"><h3>主要后端请求分布</h3>${trafficUpstreamSvg(r.upstreams)}</div></div></section>`;
       }catch(e){el.innerHTML=`<div class="empty bad">${esc(e.message)}</div>`}
     }
 
