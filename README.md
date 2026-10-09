@@ -28,6 +28,17 @@
 
 统计数据写入 `config/cangling.db`，以本机时区的半小时为时间桶，保存请求次数、响应字节、1XX-5XX、独立客户端 IP、请求耗时、URL 与 `upstream=` 后端分布。页面查询和图表只读取 SQLite，不再重新扫描历史日志。若要展示真实客户端和后端分布，access log 应包含 X-Forwarded-For 字段以及 `upstream=$upstream_addr rt=$request_time`。
 
+终端维度功能启用前已经被主采集器读过的日志，可用独立脚本安全回填。脚本会暂时关闭自动采集开关，快照主采集器的 inode/偏移游标，在单独的工作数据库中解析普通及 `.gz` 日志，最后只原子替换 `nginx_bucket_devices`；不会重复累计请求量、流量或状态码。日志在回填期间新增的内容仍由主采集器恢复后继续处理。
+
+```bash
+python3 tools/backfill_nginx_devices.py \
+  --db /mnt/cangling/update/config/cangling.db \
+  --log-dir /mnt/cangling/bl_np4_cluster_tengine/nginx/lb_log \
+  --rate-mbps 30
+```
+
+建议先备份 `cangling.db`。可用 `--dry-run --keep-work-db` 只解析和检查结果，不替换线上终端统计；脚本异常退出时会自动恢复原来的自动采集开关。
+
 ## 安装
 ```bash
   mkdir update
