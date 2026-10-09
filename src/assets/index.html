@@ -213,6 +213,32 @@
     .app[data-section="repo"] aside,
     .app[data-section="images"] aside,
     .app[data-section="storage"] aside { display: none; }
+    .app[data-section="traffic"] .shell { grid-template-columns: 1fr; }
+    .app[data-section="traffic"] aside { display: none; }
+    .traffic-toolbar { display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin-bottom:14px; }
+    .traffic-toolbar .field { margin:0; min-width:150px; }
+    .traffic-toolbar label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
+    .traffic-toolbar input[type="date"] {
+      height:36px; padding:0 10px; color:var(--text); background:var(--bg-3);
+      border:1px solid var(--line-muted); border-radius:7px; outline:none;
+      box-shadow:none; transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+    .traffic-toolbar input[type="date"]:hover { border-color:var(--line); background:var(--bg-input); }
+    .traffic-toolbar input[type="date"]:focus {
+      border-color:color-mix(in srgb, var(--accent) 55%, transparent);
+      box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+      background:var(--bg-input);
+    }
+    .traffic-toolbar input[type="date"]::-webkit-calendar-picker-indicator { opacity:.58; cursor:pointer; }
+    .traffic-kpis { display:grid; grid-template-columns:repeat(4,minmax(150px,1fr)); gap:12px; margin:14px 0; }
+    .traffic-kpi { border:1px solid var(--line); background:var(--bg-2); padding:16px; border-radius:8px; }
+    .traffic-kpi b { display:block; color:var(--accent); font-size:24px; margin-bottom:4px; }
+    .traffic-kpi span { color:var(--muted); font-size:12px; }
+    .traffic-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .traffic-chart { border:1px solid var(--line); background:var(--bg-2); padding:16px; border-radius:8px; min-width:0; }
+    .traffic-chart h3 { margin:0 0 12px; }
+    .traffic-chart svg { width:100%; height:250px; overflow:visible; }
+    @media(max-width:900px){.traffic-grid{grid-template-columns:1fr}.traffic-kpis{grid-template-columns:1fr 1fr}}
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
       color: var(--text); padding: 6px 8px; margin-bottom: 2px; border-radius: 6px;
@@ -1043,6 +1069,7 @@
         <button type="button" class="btn" id="btn-k3s" title="K3s 资源">K3s 资源</button>
         <button type="button" class="btn" id="btn-images" title="容器镜像">镜像</button>
         <button type="button" class="btn" id="btn-storage" title="存储">存储</button>
+        <button type="button" class="btn" id="btn-traffic" title="Nginx 流量统计">流量</button>
         <button type="button" class="btn" id="btn-projects" title="项目">项目</button>
       </nav>
       </div>
@@ -1627,6 +1654,7 @@
       if (hash === "#/repo") return "repo";
       if (hash === "#/images") return "images";
       if (hash === "#/storage") return "storage";
+      if (hash === "#/traffic") return "traffic";
       return "projects";
     }
 
@@ -1635,7 +1663,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), repo: $("#btn-repo"), images: $("#btn-images"), storage: $("#btn-storage") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), repo: $("#btn-repo"), images: $("#btn-images"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -1663,6 +1691,7 @@
       if (hash === "#/repo") return renderRepo();
       if (hash === "#/images") return renderImages();
       if (hash === "#/storage") return renderStorage();
+      if (hash === "#/traffic") return renderTraffic();
       const m = hash.match(/^#\/p\/([^/]+)$/);
       if (m) return openProject(m[1]);
       renderHome();
@@ -6962,6 +6991,44 @@
       term.focus();
     }
 
+    function trafficBarsSvg(items, value, color, formatter) {
+      const W=720,H=250,L=34,B=32,T=18, plotH=H-B-T, max=Math.max(1,...items.map(value));
+      const bw=Math.max(2,(W-L-8)/Math.max(1,items.length)*.72);
+      const bars=items.map((it,i)=>{const v=value(it),h=v/max*plotH,x=L+i*(W-L-8)/items.length+3,y=T+plotH-h;const label=i%2===0?`<text x="${x+bw/2}" y="${H-8}" text-anchor="middle" fill="var(--muted)" font-size="10">${esc((it.start||'').slice(11,16))}</text>`:"";return `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="1" fill="${color}"/>${label}`}).join('');
+      return `<svg viewBox="0 0 ${W} ${H}" role="img"><line x1="${L}" y1="${T+plotH}" x2="${W}" y2="${T+plotH}" stroke="var(--line)"/>${bars}<text x="${L}" y="13" fill="var(--muted)" font-size="11">峰值 ${formatter(max)}</text></svg>`;
+    }
+
+    function trafficStatusSvg(status) {
+      const colors=['#ff8a3d','#df6aa9','#f2c94c','#53b987','#d94a4a'], max=Math.max(1,...status), W=720;
+      return `<svg viewBox="0 0 720 250" role="img">${status.map((v,i)=>{const y=18+i*44,w=v/max*560;return `<text x="0" y="${y+19}" fill="var(--text)" font-size="13">${i+1}xx</text><rect x="45" y="${y}" width="${Math.max(2,w)}" height="25" fill="${colors[i]}"/><text x="${58+w}" y="${y+18}" fill="var(--text)" font-size="12">${(v/10000).toFixed(2)} 万</text>`}).join('')}</svg>`;
+    }
+
+    function trafficUpstreamSvg(rows) {
+      const list=rows.slice(0,10),max=Math.max(1,...list.map(x=>x.requests));
+      return `<svg viewBox="0 0 720 250" role="img">${list.map((r,i)=>{const y=8+i*23,w=r.requests/max*420;return `<text x="0" y="${y+14}" fill="var(--text)" font-size="11">${esc(r.name)}</text><rect x="190" y="${y}" width="${w}" height="16" fill="#4db6ac"/><text x="${200+w}" y="${y+13}" fill="var(--muted)" font-size="11">${(r.requests/10000).toFixed(2)} 万</text>`}).join('')}</svg>`;
+    }
+
+    async function renderTraffic() {
+      const today=new Date().toLocaleDateString('sv-SE'); const main=$("#main");
+      main.innerHTML=`<div class="title-row"><div><h2>Nginx 流量统计</h2><p class="hint">增量读取 access log，每半小时聚合到本机 SQLite。</p></div><button class="btn" id="traffic-settings">配置</button></div><div class="card"><div class="traffic-toolbar"><div class="field"><label>开始日期</label><input id="traffic-from" type="date" value="${today}"></div><div class="field"><label>结束日期</label><input id="traffic-to" type="date" value="${today}"></div><button class="btn primary" id="traffic-query">查询</button><button class="btn" id="traffic-scan">立即采集</button></div><div id="traffic-content"><div class="empty">正在读取统计数据…</div></div></div>`;
+      $("#traffic-settings").onclick=openTrafficSettings; $("#traffic-query").onclick=loadTrafficReport;
+      $("#traffic-scan").onclick=async()=>{const b=$("#traffic-scan");b.disabled=true;try{const r=await api('/api/nginx-stats/scan',{method:'POST'});flash('ok',`采集完成：新增 ${r.parsed_lines} 条，读取 ${formatBytes(r.bytes_read)}`);await loadTrafficReport()}catch(e){flash('err',e.message)}finally{b.disabled=false}};
+      await loadTrafficReport();
+    }
+
+    async function loadTrafficReport(){
+      const el=$("#traffic-content"); if(!el)return; const from=$("#traffic-from").value,to=$("#traffic-to").value;
+      try{const r=await api(`/api/nginx-stats/report?from=${encodeURIComponent(from+'T00:00:00')}&to=${encodeURIComponent(to+'T23:59:59')}`),t=r.totals,s=t.status||[0,0,0,0,0],five=t.requests?s[4]/t.requests*100:0;
+        el.innerHTML=`<div class="traffic-kpis"><div class="traffic-kpi"><b>${(t.requests/10000).toFixed(2)} 万</b><span>请求次数</span></div><div class="traffic-kpi"><b>${(t.response_bytes/1e9).toFixed(2)} GB</b><span>响应流量</span></div><div class="traffic-kpi"><b>${Number(t.unique_clients).toLocaleString()}</b><span>独立客户端 IP</span></div><div class="traffic-kpi"><b>${five.toFixed(3)}%</b><span>5XX · ${Number(s[4]).toLocaleString()} 次</span></div></div><div class="traffic-grid"><div class="traffic-chart"><h3>每半小时请求量</h3>${trafficBarsSvg(r.buckets,x=>x.requests,'#3568c8',v=>(v/10000).toFixed(2)+' 万')}</div><div class="traffic-chart"><h3>每半小时响应流量</h3>${trafficBarsSvg(r.buckets,x=>x.response_bytes,'#f0c63e',v=>(v/1e9).toFixed(2)+' GB')}</div><div class="traffic-chart"><h3>HTTP 状态码分布</h3>${trafficStatusSvg(s)}</div><div class="traffic-chart"><h3>主要后端请求分布</h3>${trafficUpstreamSvg(r.upstreams)}</div></div>`;
+      }catch(e){el.innerHTML=`<div class="empty bad">${esc(e.message)}</div>`}
+    }
+
+    async function openTrafficSettings(){
+      let s;try{s=await api('/api/nginx-stats/settings')}catch(e){flash('err',e.message);return}
+      $("#dialog-title").textContent='Nginx 流量统计配置'; $("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>日志目录</label><div class="row"><input id="traffic-log-dir" type="text" value="${esc(s.log_dir||'')}" placeholder="/var/log/nginx"><button class="btn" id="traffic-dir-pick">浏览</button></div><p class="hint">自动读取目录中未压缩的 access*.log 文件，并通过 inode 和偏移量断点续采。</p></div><div class="field"><label><input id="traffic-enabled" type="checkbox" ${s.enabled?'checked':''}> 启用每半小时自动统计</label></div><div class="field"><label><input id="traffic-start-end" type="checkbox"> 从当前文件末尾开始（不导入历史日志）</label></div><p class="hint">上次采集：${esc(s.last_scan_at||'尚未采集')} ${s.last_message?'· '+esc(s.last_message):''}</p><div class="flash err" id="traffic-settings-error" hidden></div></div>`; const save=$("#dialog-extra"); save.hidden=false; save.textContent='保存'; $("#dialog-foot").hidden=false; $("#dialog").hidden=false;
+      $("#traffic-dir-pick").onclick=()=>openDirPicker('traffic-log-dir'); save.onclick=async()=>{const err=$("#traffic-settings-error");err.hidden=true;try{await api('/api/nginx-stats/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$("#traffic-enabled").checked,log_dir:$("#traffic-log-dir").value.trim(),start_from_end:$("#traffic-start-end").checked})});closeDialog();flash('ok','Nginx 流量统计配置已保存');await loadTrafficReport()}catch(e){err.textContent=e.message;err.hidden=false}};
+    }
+
     async function deleteProjectById(projectId,projectName) {
       if (state.busy) {
         flash("err", "正在恢复中，请勿重复操作");
@@ -7043,6 +7110,7 @@
     $("#btn-repo").onclick = () => goHash("#/repo");
     $("#btn-images").onclick = () => goHash("#/images");
     $("#btn-storage").onclick = () => goHash("#/storage");
+    $("#btn-traffic").onclick = () => goHash("#/traffic");
     function setUserMenuOpen(open) {
       const panel = $("#user-menu-panel");
       const button = $("#btn-user-menu");

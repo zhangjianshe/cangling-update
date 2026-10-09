@@ -1,0 +1,484 @@
+use crate::error::AppError;
+use crate::state::AppState;
+use axum::extract::{Query, State};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use chrono::{DateTime, Datelike, Local, Timelike};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS nginx_stats_settings (
+  id INTEGER PRIMARY KEY CHECK(id=1), enabled INTEGER NOT NULL DEFAULT 0,
+  log_dir TEXT NOT NULL DEFAULT '', last_scan_at TEXT NOT NULL DEFAULT '',
+  last_status TEXT NOT NULL DEFAULT '', last_message TEXT NOT NULL DEFAULT ''
+);
+INSERT OR IGNORE INTO nginx_stats_settings(id) VALUES(1);
+CREATE TABLE IF NOT EXISTS nginx_log_cursors (
+  identity TEXT PRIMARY KEY, path TEXT NOT NULL, offset INTEGER NOT NULL DEFAULT 0,
+  pending BLOB NOT NULL DEFAULT X'', updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS nginx_traffic_buckets (
+  bucket_start TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0,
+  response_bytes INTEGER NOT NULL DEFAULT 0, status_1xx INTEGER NOT NULL DEFAULT 0,
+  status_2xx INTEGER NOT NULL DEFAULT 0, status_3xx INTEGER NOT NULL DEFAULT 0,
+  status_4xx INTEGER NOT NULL DEFAULT 0, status_5xx INTEGER NOT NULL DEFAULT 0,
+  request_time_sum REAL NOT NULL DEFAULT 0, request_time_count INTEGER NOT NULL DEFAULT 0,
+  slow_requests INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS nginx_bucket_clients (
+  bucket_start TEXT NOT NULL, client_ip TEXT NOT NULL,
+  PRIMARY KEY(bucket_start, client_ip)
+);
+CREATE TABLE IF NOT EXISTS nginx_bucket_upstreams (
+  bucket_start TEXT NOT NULL, upstream TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(bucket_start, upstream)
+);
+CREATE TABLE IF NOT EXISTS nginx_bucket_paths (
+  bucket_start TEXT NOT NULL, path TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(bucket_start, path)
+);
+CREATE INDEX IF NOT EXISTS idx_nginx_clients_bucket ON nginx_bucket_clients(bucket_start);
+CREATE INDEX IF NOT EXISTS idx_nginx_upstreams_bucket ON nginx_bucket_upstreams(bucket_start);
+CREATE INDEX IF NOT EXISTS idx_nginx_paths_bucket ON nginx_bucket_paths(bucket_start);
+"#;
+
+pub fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
+    conn.execute_batch(SCHEMA)?;
+    Ok(())
+}
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/nginx-stats/settings",
+            get(get_settings).put(save_settings),
+        )
+        .route("/api/nginx-stats/scan", post(scan_now))
+        .route("/api/nginx-stats/report", get(report))
+}
+
+#[derive(Debug, Serialize)]
+struct Settings {
+    enabled: bool,
+    log_dir: String,
+    last_scan_at: String,
+    last_status: String,
+    last_message: String,
+}
+
+fn read_settings(conn: &Connection) -> rusqlite::Result<Settings> {
+    conn.query_row("SELECT enabled,log_dir,last_scan_at,last_status,last_message FROM nginx_stats_settings WHERE id=1", [], |r| Ok(Settings { enabled:r.get::<_,i64>(0)? != 0, log_dir:r.get(1)?, last_scan_at:r.get(2)?, last_status:r.get(3)?, last_message:r.get(4)? }))
+}
+
+async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    Ok(Json(read_settings(&conn)?))
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveSettings {
+    enabled: bool,
+    log_dir: String,
+    #[serde(default)]
+    start_from_end: bool,
+}
+
+async fn save_settings(
+    State(state): State<AppState>,
+    Json(body): Json<SaveSettings>,
+) -> Result<Json<Settings>, AppError> {
+    let dir = validate_log_dir(&body.log_dir)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        conn.execute("UPDATE nginx_stats_settings SET enabled=?1,log_dir=?2,last_status='saved',last_message='',last_scan_at=?3 WHERE id=1", params![body.enabled as i64,dir.to_string_lossy(),now])?;
+        if body.start_from_end {
+            initialize_cursors_at_end(&conn, &dir)?;
+        }
+    }
+    if body.enabled && !body.start_from_end {
+        let scan_state = state.clone();
+        tokio::spawn(async move {
+            if let Err(error) = run_scan(scan_state).await {
+                tracing::error!("initial Nginx access log statistics failed: {error}");
+            }
+        });
+    }
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    Ok(Json(read_settings(&conn)?))
+}
+
+async fn scan_now(State(state): State<AppState>) -> Result<Json<ScanResult>, AppError> {
+    Ok(Json(run_scan(state).await?))
+}
+
+pub async fn scheduler(state: AppState) {
+    let mut timer = tokio::time::interval(Duration::from_secs(30));
+    let mut last_slot = String::new();
+    loop {
+        timer.tick().await;
+        let now = Local::now();
+        let slot = format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            if now.minute() < 30 { 0 } else { 30 }
+        );
+        if slot == last_slot || now.minute() % 30 != 0 {
+            continue;
+        }
+        last_slot = slot;
+        let enabled = state
+            .db
+            .lock()
+            .ok()
+            .and_then(|c| read_settings(&c).ok())
+            .is_some_and(|s| s.enabled && !s.log_dir.is_empty());
+        if enabled {
+            if let Err(err) = run_scan(state.clone()).await {
+                tracing::error!("Nginx access log statistics failed: {err}");
+            }
+        }
+    }
+}
+
+fn validate_log_dir(raw: &str) -> Result<PathBuf, AppError> {
+    let p = PathBuf::from(raw.trim());
+    if !p.is_absolute() {
+        return Err(AppError::bad("Nginx 日志目录必须是绝对路径"));
+    }
+    if !p.is_dir() {
+        return Err(AppError::bad(format!("日志目录不存在：{}", p.display())));
+    }
+    Ok(p.canonicalize().unwrap_or(p))
+}
+
+fn log_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for e in std::fs::read_dir(dir)? {
+        let e = e?;
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        let n = e.file_name().to_string_lossy().to_ascii_lowercase();
+        if n.contains("access") && n.contains(".log") && !n.ends_with(".gz") {
+            files.push(p);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn initialize_cursors_at_end(conn: &Connection, dir: &Path) -> Result<(), AppError> {
+    for p in log_files(dir)? {
+        let m = p.metadata()?;
+        let id = format!("{}:{}", m.dev(), m.ino());
+        conn.execute("INSERT INTO nginx_log_cursors(identity,path,offset,pending,updated_at) VALUES(?1,?2,?3,X'',?4) ON CONFLICT(identity) DO UPDATE SET path=excluded.path,offset=excluded.offset,pending=X'',updated_at=excluded.updated_at",params![id,p.to_string_lossy(),m.len() as i64,chrono::Utc::now().to_rfc3339()])?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct Agg {
+    requests: i64,
+    bytes: i64,
+    status: [i64; 5],
+    rt_sum: f64,
+    rt_count: i64,
+    slow: i64,
+    clients: HashSet<String>,
+    upstreams: HashMap<String, i64>,
+    paths: HashMap<String, i64>,
+}
+#[derive(Debug, Serialize)]
+struct ScanResult {
+    files: usize,
+    new_lines: u64,
+    parsed_lines: u64,
+    skipped_lines: u64,
+    bytes_read: u64,
+    finished_at: String,
+}
+
+async fn run_scan(state: AppState) -> Result<ScanResult, AppError> {
+    let scan_lock = state.nginx_stats_lock.clone();
+    let _guard = scan_lock.lock().await;
+    let (dir, enabled) = {
+        let c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        let s = read_settings(&c)?;
+        (PathBuf::from(s.log_dir), s.enabled)
+    };
+    if !enabled {
+        return Err(AppError::bad("Nginx 日志统计尚未启用"));
+    }
+    let dir = validate_log_dir(&dir.to_string_lossy())?;
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || scan_blocking(&st, &dir))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+}
+
+fn scan_blocking(state: &AppState, dir: &Path) -> Result<ScanResult, AppError> {
+    let files = log_files(dir)?;
+    let mut result = ScanResult {
+        files: files.len(),
+        new_lines: 0,
+        parsed_lines: 0,
+        skipped_lines: 0,
+        bytes_read: 0,
+        finished_at: String::new(),
+    };
+    for p in files {
+        scan_file(state, &p, &mut result)?;
+    }
+    result.finished_at = chrono::Utc::now().to_rfc3339();
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    conn.execute("UPDATE nginx_stats_settings SET last_scan_at=?1,last_status='ok',last_message=?2 WHERE id=1",params![result.finished_at,format!("读取 {} 字节，新增 {} 条记录",result.bytes_read,result.parsed_lines)])?;
+    Ok(result)
+}
+
+fn scan_file(state: &AppState, path: &Path, result: &mut ScanResult) -> Result<(), AppError> {
+    let meta = path.metadata()?;
+    let identity = format!("{}:{}", meta.dev(), meta.ino());
+    let (mut offset, mut pending) = {
+        let c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        c.query_row(
+            "SELECT offset,pending FROM nginx_log_cursors WHERE identity=?1",
+            [&identity],
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Vec<u8>>(1)?)),
+        )
+        .optional()?
+        .unwrap_or((0, Vec::new()))
+    };
+    if meta.len() < offset {
+        offset = 0;
+        pending.clear();
+    }
+    let mut f = File::open(path)?;
+    f.seek(SeekFrom::Start(offset))?;
+    let mut fresh = Vec::new();
+    f.read_to_end(&mut fresh)?;
+    result.bytes_read += fresh.len() as u64;
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    let new_offset = offset + fresh.len() as u64;
+    pending.extend_from_slice(&fresh);
+    let last_nl = pending.iter().rposition(|b| *b == b'\n');
+    let complete = last_nl.map(|i| pending[..=i].to_vec()).unwrap_or_default();
+    let rest = last_nl
+        .map(|i| pending[i + 1..].to_vec())
+        .unwrap_or(pending);
+    let mut aggs: HashMap<String, Agg> = HashMap::new();
+    for raw in complete.split(|b| *b == b'\n').filter(|x| !x.is_empty()) {
+        result.new_lines += 1;
+        match std::str::from_utf8(raw).ok().and_then(parse_line) {
+            Some(e) => {
+                result.parsed_lines += 1;
+                let a = aggs.entry(e.bucket).or_default();
+                a.requests += 1;
+                a.bytes += e.bytes;
+                a.status[(e.status / 100 - 1) as usize] += 1;
+                if let Some(rt) = e.request_time {
+                    a.rt_sum += rt;
+                    a.rt_count += 1;
+                    if rt > 1.0 {
+                        a.slow += 1
+                    }
+                }
+                a.clients.insert(e.client);
+                *a.paths.entry(e.path).or_default() += 1;
+                if let Some(u) = e.upstream {
+                    *a.upstreams.entry(u).or_default() += 1
+                }
+            }
+            None => result.skipped_lines += 1,
+        }
+    }
+    let mut c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let tx = c.transaction()?;
+    for (bucket, a) in aggs {
+        tx.execute("INSERT INTO nginx_traffic_buckets(bucket_start,requests,response_bytes,status_1xx,status_2xx,status_3xx,status_4xx,status_5xx,request_time_sum,request_time_count,slow_requests) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(bucket_start) DO UPDATE SET requests=requests+excluded.requests,response_bytes=response_bytes+excluded.response_bytes,status_1xx=status_1xx+excluded.status_1xx,status_2xx=status_2xx+excluded.status_2xx,status_3xx=status_3xx+excluded.status_3xx,status_4xx=status_4xx+excluded.status_4xx,status_5xx=status_5xx+excluded.status_5xx,request_time_sum=request_time_sum+excluded.request_time_sum,request_time_count=request_time_count+excluded.request_time_count,slow_requests=slow_requests+excluded.slow_requests",params![bucket,a.requests,a.bytes,a.status[0],a.status[1],a.status[2],a.status[3],a.status[4],a.rt_sum,a.rt_count,a.slow])?;
+        for ip in a.clients {
+            tx.execute(
+                "INSERT OR IGNORE INTO nginx_bucket_clients(bucket_start,client_ip) VALUES(?1,?2)",
+                params![bucket, ip],
+            )?;
+        }
+        for (u, n) in a.upstreams {
+            tx.execute("INSERT INTO nginx_bucket_upstreams(bucket_start,upstream,requests) VALUES(?1,?2,?3) ON CONFLICT(bucket_start,upstream) DO UPDATE SET requests=requests+excluded.requests",params![bucket,u,n])?;
+        }
+        for (p, n) in a.paths {
+            tx.execute("INSERT INTO nginx_bucket_paths(bucket_start,path,requests) VALUES(?1,?2,?3) ON CONFLICT(bucket_start,path) DO UPDATE SET requests=requests+excluded.requests",params![bucket,p,n])?;
+        }
+    }
+    tx.execute("INSERT INTO nginx_log_cursors(identity,path,offset,pending,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(identity) DO UPDATE SET path=excluded.path,offset=excluded.offset,pending=excluded.pending,updated_at=excluded.updated_at",params![identity,path.to_string_lossy(),new_offset as i64,rest,chrono::Utc::now().to_rfc3339()])?;
+    tx.commit()?;
+    Ok(())
+}
+
+struct Event {
+    bucket: String,
+    status: i64,
+    bytes: i64,
+    client: String,
+    path: String,
+    upstream: Option<String>,
+    request_time: Option<f64>,
+}
+fn parse_line(line: &str) -> Option<Event> {
+    let lb = line.find('[')?;
+    let rb = line[lb..].find(']')? + lb;
+    let dt = DateTime::parse_from_str(&line[lb + 1..rb], "%d/%b/%Y:%H:%M:%S %z").ok()?;
+    let local = dt.with_timezone(&Local);
+    let bucket = local
+        .with_minute(if local.minute() < 30 { 0 } else { 30 })?
+        .with_second(0)?
+        .format("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string();
+    let quoted: Vec<&str> = line.split('"').collect();
+    if quoted.len() < 3 {
+        return None;
+    }
+    let mut req = quoted[1].split_whitespace();
+    let _ = req.next()?;
+    let path = req.next()?.split('?').next()?.to_string();
+    let mut tail = quoted[2].split_whitespace();
+    let status = tail.next()?.parse::<i64>().ok()?;
+    if !(100..600).contains(&status) {
+        return None;
+    }
+    let bytes = tail.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let client = quoted
+        .get(7)
+        .and_then(|v| v.split(',').next())
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && *v != "-")
+        .unwrap_or_else(|| line.split_whitespace().next().unwrap_or("-"))
+        .to_string();
+    let suffix = quoted.last().copied().unwrap_or("");
+    let upstream = token(suffix, "upstream=")
+        .filter(|v| *v != "-")
+        .map(str::to_string);
+    let request_time = token(suffix, "rt=").and_then(|v| v.parse().ok());
+    Some(Event {
+        bucket,
+        status,
+        bytes,
+        client,
+        path,
+        upstream,
+        request_time,
+    })
+}
+fn token<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    let p = s.find(prefix)? + prefix.len();
+    Some(&s[p..p + s[p..].find(char::is_whitespace).unwrap_or(s.len() - p)])
+}
+
+#[derive(Deserialize)]
+struct ReportQuery {
+    from: Option<String>,
+    to: Option<String>,
+}
+#[derive(Serialize)]
+struct Bucket {
+    start: String,
+    requests: i64,
+    response_bytes: i64,
+    status: [i64; 5],
+    unique_clients: i64,
+    avg_request_time: f64,
+    slow_requests: i64,
+}
+#[derive(Serialize)]
+struct NamedCount {
+    name: String,
+    requests: i64,
+}
+#[derive(Serialize)]
+struct Totals {
+    requests: i64,
+    response_bytes: i64,
+    unique_clients: i64,
+    status: [i64; 5],
+    avg_request_time: f64,
+    slow_requests: i64,
+}
+#[derive(Serialize)]
+struct Report {
+    from: String,
+    to: String,
+    totals: Totals,
+    buckets: Vec<Bucket>,
+    upstreams: Vec<NamedCount>,
+    paths: Vec<NamedCount>,
+}
+async fn report(
+    State(state): State<AppState>,
+    Query(q): Query<ReportQuery>,
+) -> Result<Json<Report>, AppError> {
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let from = q.from.unwrap_or_else(|| format!("{today}T00:00:00"));
+    let to = q.to.unwrap_or_else(|| format!("{today}T23:59:59"));
+    let c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let mut st=c.prepare("SELECT b.bucket_start,b.requests,b.response_bytes,b.status_1xx,b.status_2xx,b.status_3xx,b.status_4xx,b.status_5xx,(SELECT COUNT(*) FROM nginx_bucket_clients x WHERE x.bucket_start=b.bucket_start),CASE WHEN b.request_time_count=0 THEN 0 ELSE b.request_time_sum/b.request_time_count END,b.slow_requests FROM nginx_traffic_buckets b WHERE b.bucket_start>=?1 AND b.bucket_start<=?2 ORDER BY b.bucket_start")?;
+    let buckets = st
+        .query_map(params![from, to], |r| {
+            Ok(Bucket {
+                start: r.get(0)?,
+                requests: r.get(1)?,
+                response_bytes: r.get(2)?,
+                status: [r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?],
+                unique_clients: r.get(8)?,
+                avg_request_time: r.get(9)?,
+                slow_requests: r.get(10)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let grouped = |table: &str, column: &str, limit: i64| -> Result<Vec<NamedCount>, AppError> {
+        let sql=format!("SELECT {column},SUM(requests) n FROM {table} WHERE bucket_start>=?1 AND bucket_start<=?2 GROUP BY {column} ORDER BY n DESC LIMIT {limit}");
+        let mut s = c.prepare(&sql)?;
+        let rows = s.query_map(params![from, to], |r| {
+            Ok(NamedCount {
+                name: r.get(0)?,
+                requests: r.get(1)?,
+            })
+        })?;
+        let values = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(values)
+    };
+    let totals=c.query_row("SELECT COALESCE(SUM(requests),0),COALESCE(SUM(response_bytes),0),COALESCE(SUM(status_1xx),0),COALESCE(SUM(status_2xx),0),COALESCE(SUM(status_3xx),0),COALESCE(SUM(status_4xx),0),COALESCE(SUM(status_5xx),0),CASE WHEN COALESCE(SUM(request_time_count),0)=0 THEN 0 ELSE SUM(request_time_sum)/SUM(request_time_count) END,COALESCE(SUM(slow_requests),0),(SELECT COUNT(DISTINCT client_ip) FROM nginx_bucket_clients WHERE bucket_start>=?1 AND bucket_start<=?2) FROM nginx_traffic_buckets WHERE bucket_start>=?1 AND bucket_start<=?2",params![from,to],|r|Ok(Totals{requests:r.get(0)?,response_bytes:r.get(1)?,status:[r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?],avg_request_time:r.get(7)?,slow_requests:r.get(8)?,unique_clients:r.get(9)?}))?;
+    Ok(Json(Report {
+        from: from.clone(),
+        to: to.clone(),
+        totals,
+        buckets,
+        upstreams: grouped("nginx_bucket_upstreams", "upstream", 50)?,
+        paths: grouped("nginx_bucket_paths", "path", 20)?,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parses_combined_with_upstream() {
+        let l = r#"182.18.90.194 - - [09/Oct/2026:05:35:48 +0000] \"GET /app/a?q=1 HTTP/1.1\" 200 143 \"-\" \"ua\" \"223.1.1.1, 172.22.0.1\" upstream=10.132.5.223:7600 cache=- rt=0.242 urt=0.242"#;
+        let e = parse_line(l).unwrap();
+        assert_eq!(e.path, "/app/a");
+        assert_eq!(e.client, "223.1.1.1");
+        assert_eq!(e.upstream.as_deref(), Some("10.132.5.223:7600"));
+        assert_eq!(e.bytes, 143);
+    }
+}

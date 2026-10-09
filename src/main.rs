@@ -15,6 +15,7 @@ mod images;
 mod k3s;
 mod k3s_resources;
 mod models;
+mod nginx_stats;
 mod password_policy;
 mod paths;
 mod port_forward;
@@ -352,6 +353,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let conn = db::open(&paths.db_path)?;
+    nginx_stats::ensure_schema(&conn)?;
     let configured_admin_password = std::env::var("CANGLING_ADMIN_PASSWORD")
         .ok()
         .filter(|password| !password.trim().is_empty());
@@ -386,6 +388,7 @@ async fn main() -> anyhow::Result<()> {
     let app = api::router(state.clone());
 
     tokio::spawn(dbbackup::scheduler(state.clone()));
+    tokio::spawn(nginx_stats::scheduler(state.clone()));
 
     if cluster_cfg.role != cluster::Role::Worker {
         tokio::spawn(images::monitor(state.clone()));
