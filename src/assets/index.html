@@ -238,6 +238,10 @@
     .traffic-chart { border:1px solid var(--line); background:var(--bg-2); padding:16px; border-radius:8px; min-width:0; }
     .traffic-chart h3 { margin:0 0 12px; }
     .traffic-chart svg { width:100%; height:250px; overflow:visible; }
+    .traffic-guide { margin-top:14px; padding:12px 14px; border:1px solid var(--line-muted); border-radius:7px; background:var(--bg-3); }
+    .traffic-guide summary { cursor:pointer; font-weight:600; color:var(--text); }
+    .traffic-guide h4 { margin:14px 0 6px; }
+    .traffic-guide pre { margin:6px 0 0; max-height:260px; overflow:auto; white-space:pre; font-size:11px; line-height:1.55; }
     @media(max-width:900px){.traffic-grid{grid-template-columns:1fr}.traffic-kpis{grid-template-columns:1fr 1fr}}
     .pitem {
       width: 100%; text-align: left; border: 1px solid transparent; background: transparent;
@@ -7010,7 +7014,7 @@
 
     async function renderTraffic() {
       const today=new Date().toLocaleDateString('sv-SE'); const main=$("#main");
-      main.innerHTML=`<div class="title-row"><div><h2>Nginx 流量统计</h2><p class="hint">增量读取 access log，每半小时聚合到本机 SQLite。</p></div><button class="btn" id="traffic-settings">配置</button></div><div class="card"><div class="traffic-toolbar"><div class="field"><label>开始日期</label><input id="traffic-from" type="date" value="${today}"></div><div class="field"><label>结束日期</label><input id="traffic-to" type="date" value="${today}"></div><button class="btn primary" id="traffic-query">查询</button><button class="btn" id="traffic-scan">立即采集</button></div><div id="traffic-content"><div class="empty">正在读取统计数据…</div></div></div>`;
+      main.innerHTML=`<div class="title-row"><div><h2>Nginx 流量统计</h2><p class="hint">增量读取 access log，每半小时聚合到本机 SQLite。</p></div></div><div class="card"><div class="traffic-toolbar"><div class="field"><label>开始日期</label><input id="traffic-from" type="date" value="${today}"></div><div class="field"><label>结束日期</label><input id="traffic-to" type="date" value="${today}"></div><button class="btn primary" id="traffic-query">查询</button><button class="btn" id="traffic-scan">立即采集</button><button class="btn" id="traffic-settings">配置</button></div><div id="traffic-content"><div class="empty">正在读取统计数据…</div></div></div>`;
       $("#traffic-settings").onclick=openTrafficSettings; $("#traffic-query").onclick=loadTrafficReport;
       $("#traffic-scan").onclick=async()=>{const b=$("#traffic-scan");b.disabled=true;try{const r=await api('/api/nginx-stats/scan',{method:'POST'});flash('ok',`采集完成：新增 ${r.parsed_lines} 条，读取 ${formatBytes(r.bytes_read)}`);await loadTrafficReport()}catch(e){flash('err',e.message)}finally{b.disabled=false}};
       await loadTrafficReport();
@@ -7025,7 +7029,28 @@
 
     async function openTrafficSettings(){
       let s;try{s=await api('/api/nginx-stats/settings')}catch(e){flash('err',e.message);return}
-      $("#dialog-title").textContent='Nginx 流量统计配置'; $("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>日志目录</label><div class="row"><input id="traffic-log-dir" type="text" value="${esc(s.log_dir||'')}" placeholder="/var/log/nginx"><button class="btn" id="traffic-dir-pick">浏览</button></div><p class="hint">自动读取目录中未压缩的 access*.log 文件，并通过 inode 和偏移量断点续采。</p></div><div class="field"><label><input id="traffic-enabled" type="checkbox" ${s.enabled?'checked':''}> 启用每半小时自动统计</label></div><div class="field"><label><input id="traffic-start-end" type="checkbox"> 从当前文件末尾开始（不导入历史日志）</label></div><p class="hint">上次采集：${esc(s.last_scan_at||'尚未采集')} ${s.last_message?'· '+esc(s.last_message):''}</p><div class="flash err" id="traffic-settings-error" hidden></div></div>`; const save=$("#dialog-extra"); save.hidden=false; save.textContent='保存'; $("#dialog-foot").hidden=false; $("#dialog").hidden=false;
+      const nginxExample=`log_format cangling '$remote_addr - $remote_user [$time_local] "$request" '
+  '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+  '"$http_x_forwarded_for" upstream=$upstream_addr cache=$upstream_cache_status '
+  'rt=$request_time urt=$upstream_response_time uct=$upstream_connect_time';
+access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
+      const rotateExample=`/path/to/lb_log/access.log {
+  daily
+  rotate 336
+  maxsize 500M
+  missingok
+  notifempty
+  compress
+  delaycompress
+  dateext
+  dateformat -%Y%m%d-%H%M%S
+  create 0644 root root
+  postrotate
+    docker exec <nginx-container> nginx -s reopen >/dev/null 2>&1 || true
+  endscript
+}
+# 建议每小时调用 logrotate；采集固定在每小时 15 分、45 分，与轮转错开。`;
+      $("#dialog-title").textContent='Nginx 流量统计配置'; $("#dialog-body").innerHTML=`<div class="storage-form"><div class="field"><label>日志目录</label><div class="row"><input id="traffic-log-dir" type="text" value="${esc(s.log_dir||'')}" placeholder="/var/log/nginx"><button class="btn" id="traffic-dir-pick">浏览</button></div><p class="hint">读取 access.log 及其未压缩轮转文件（access.log-* / access.log.*），自动排除 monitor_access.log 和 .gz，通过 inode 与偏移量断点续采。</p></div><div class="field"><label><input id="traffic-enabled" type="checkbox" ${s.enabled?'checked':''}> 启用自动统计（每小时 15 分、45 分）</label></div><div class="field"><label><input id="traffic-start-end" type="checkbox"> 从当前文件末尾开始（不导入历史日志）</label></div><p class="hint">上次采集：${esc(s.last_scan_at||'尚未采集')} ${s.last_message?'· '+esc(s.last_message):''}</p><details class="traffic-guide"><summary>推荐的 Nginx 日志格式与 logrotate 配置</summary><h4>Nginx access log</h4><pre>${esc(nginxExample)}</pre><h4>logrotate</h4><pre>${esc(rotateExample)}</pre></details><div class="flash err" id="traffic-settings-error" hidden></div></div>`; const save=$("#dialog-extra"); save.hidden=false; save.textContent='保存'; $("#dialog-foot").hidden=false; $("#dialog").hidden=false;
       $("#traffic-dir-pick").onclick=()=>openDirPicker('traffic-log-dir'); save.onclick=async()=>{const err=$("#traffic-settings-error");err.hidden=true;try{await api('/api/nginx-stats/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$("#traffic-enabled").checked,log_dir:$("#traffic-log-dir").value.trim(),start_from_end:$("#traffic-start-end").checked})});closeDialog();flash('ok','Nginx 流量统计配置已保存');await loadTrafficReport()}catch(e){err.textContent=e.message;err.hidden=false}};
     }
 

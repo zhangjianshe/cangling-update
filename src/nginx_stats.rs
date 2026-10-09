@@ -125,15 +125,18 @@ pub async fn scheduler(state: AppState) {
     loop {
         timer.tick().await;
         let now = Local::now();
+        if !is_scheduled_minute(now.minute()) {
+            continue;
+        }
         let slot = format!(
             "{:04}-{:02}-{:02} {:02}:{:02}",
             now.year(),
             now.month(),
             now.day(),
             now.hour(),
-            if now.minute() < 30 { 0 } else { 30 }
+            now.minute()
         );
-        if slot == last_slot || now.minute() % 30 != 0 {
+        if slot == last_slot {
             continue;
         }
         last_slot = slot;
@@ -149,6 +152,10 @@ pub async fn scheduler(state: AppState) {
             }
         }
     }
+}
+
+fn is_scheduled_minute(minute: u32) -> bool {
+    minute == 15 || minute == 45
 }
 
 fn validate_log_dir(raw: &str) -> Result<PathBuf, AppError> {
@@ -171,12 +178,19 @@ fn log_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             continue;
         }
         let n = e.file_name().to_string_lossy().to_ascii_lowercase();
-        if n.contains("access") && n.contains(".log") && !n.ends_with(".gz") {
+        if is_access_log_name(&n) {
             files.push(p);
         }
     }
     files.sort();
     Ok(files)
+}
+
+fn is_access_log_name(name: &str) -> bool {
+    !name.ends_with(".gz")
+        && (name == "access.log"
+            || name.starts_with("access.log-")
+            || name.starts_with("access.log."))
 }
 
 fn initialize_cursors_at_end(conn: &Connection, dir: &Path) -> Result<(), AppError> {
@@ -266,45 +280,60 @@ fn scan_file(state: &AppState, path: &Path, result: &mut ScanResult) -> Result<(
     }
     let mut f = File::open(path)?;
     f.seek(SeekFrom::Start(offset))?;
-    let mut fresh = Vec::new();
-    f.read_to_end(&mut fresh)?;
-    result.bytes_read += fresh.len() as u64;
-    if fresh.is_empty() {
-        return Ok(());
-    }
-    let new_offset = offset + fresh.len() as u64;
-    pending.extend_from_slice(&fresh);
-    let last_nl = pending.iter().rposition(|b| *b == b'\n');
-    let complete = last_nl.map(|i| pending[..=i].to_vec()).unwrap_or_default();
-    let rest = last_nl
-        .map(|i| pending[i + 1..].to_vec())
-        .unwrap_or(pending);
-    let mut aggs: HashMap<String, Agg> = HashMap::new();
-    for raw in complete.split(|b| *b == b'\n').filter(|x| !x.is_empty()) {
-        result.new_lines += 1;
-        match std::str::from_utf8(raw).ok().and_then(parse_line) {
-            Some(e) => {
-                result.parsed_lines += 1;
-                let a = aggs.entry(e.bucket).or_default();
-                a.requests += 1;
-                a.bytes += e.bytes;
-                a.status[(e.status / 100 - 1) as usize] += 1;
-                if let Some(rt) = e.request_time {
-                    a.rt_sum += rt;
-                    a.rt_count += 1;
-                    if rt > 1.0 {
-                        a.slow += 1
+    let mut chunk = vec![0_u8; 8 * 1024 * 1024];
+    loop {
+        let read = f.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        offset += read as u64;
+        result.bytes_read += read as u64;
+        pending.extend_from_slice(&chunk[..read]);
+        let Some(last_nl) = pending.iter().rposition(|b| *b == b'\n') else {
+            persist_batch(state, &identity, path, offset, &pending, HashMap::new())?;
+            continue;
+        };
+        let rest = pending.split_off(last_nl + 1);
+        let mut aggs: HashMap<String, Agg> = HashMap::new();
+        for raw in pending.split(|b| *b == b'\n').filter(|x| !x.is_empty()) {
+            result.new_lines += 1;
+            match std::str::from_utf8(raw).ok().and_then(parse_line) {
+                Some(e) => {
+                    result.parsed_lines += 1;
+                    let a = aggs.entry(e.bucket).or_default();
+                    a.requests += 1;
+                    a.bytes += e.bytes;
+                    a.status[(e.status / 100 - 1) as usize] += 1;
+                    if let Some(rt) = e.request_time {
+                        a.rt_sum += rt;
+                        a.rt_count += 1;
+                        if rt > 1.0 {
+                            a.slow += 1
+                        }
+                    }
+                    a.clients.insert(e.client);
+                    *a.paths.entry(e.path).or_default() += 1;
+                    if let Some(u) = e.upstream {
+                        *a.upstreams.entry(u).or_default() += 1
                     }
                 }
-                a.clients.insert(e.client);
-                *a.paths.entry(e.path).or_default() += 1;
-                if let Some(u) = e.upstream {
-                    *a.upstreams.entry(u).or_default() += 1
-                }
+                None => result.skipped_lines += 1,
             }
-            None => result.skipped_lines += 1,
         }
+        pending = rest;
+        persist_batch(state, &identity, path, offset, &pending, aggs)?;
     }
+    Ok(())
+}
+
+fn persist_batch(
+    state: &AppState,
+    identity: &str,
+    path: &Path,
+    offset: u64,
+    pending: &[u8],
+    aggs: HashMap<String, Agg>,
+) -> Result<(), AppError> {
     let mut c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let tx = c.transaction()?;
     for (bucket, a) in aggs {
@@ -322,7 +351,7 @@ fn scan_file(state: &AppState, path: &Path, result: &mut ScanResult) -> Result<(
             tx.execute("INSERT INTO nginx_bucket_paths(bucket_start,path,requests) VALUES(?1,?2,?3) ON CONFLICT(bucket_start,path) DO UPDATE SET requests=requests+excluded.requests",params![bucket,p,n])?;
         }
     }
-    tx.execute("INSERT INTO nginx_log_cursors(identity,path,offset,pending,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(identity) DO UPDATE SET path=excluded.path,offset=excluded.offset,pending=excluded.pending,updated_at=excluded.updated_at",params![identity,path.to_string_lossy(),new_offset as i64,rest,chrono::Utc::now().to_rfc3339()])?;
+    tx.execute("INSERT INTO nginx_log_cursors(identity,path,offset,pending,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(identity) DO UPDATE SET path=excluded.path,offset=excluded.offset,pending=excluded.pending,updated_at=excluded.updated_at",params![identity,path.to_string_lossy(),offset as i64,pending,chrono::Utc::now().to_rfc3339()])?;
     tx.commit()?;
     Ok(())
 }
@@ -480,5 +509,23 @@ mod tests {
         assert_eq!(e.client, "223.1.1.1");
         assert_eq!(e.upstream.as_deref(), Some("10.132.5.223:7600"));
         assert_eq!(e.bytes, 143);
+    }
+
+    #[test]
+    fn access_log_names_include_uncompressed_rotations_only() {
+        assert!(is_access_log_name("access.log"));
+        assert!(is_access_log_name("access.log-20261009-170101"));
+        assert!(is_access_log_name("access.log.1"));
+        assert!(!is_access_log_name("access.log-20261008.gz"));
+        assert!(!is_access_log_name("monitor_access.log"));
+        assert!(!is_access_log_name("error.log"));
+    }
+
+    #[test]
+    fn scheduler_runs_at_quarter_past_and_quarter_to() {
+        assert!(is_scheduled_minute(15));
+        assert!(is_scheduled_minute(45));
+        assert!(!is_scheduled_minute(0));
+        assert!(!is_scheduled_minute(30));
     }
 }
