@@ -20,7 +20,6 @@ import time
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 
 TIME_RE = re.compile(
@@ -40,7 +39,7 @@ MONTHS = {
     b"Nov": 11,
     b"Dec": 12,
 }
-SHANGHAI = ZoneInfo("Asia/Shanghai")
+BEIJING = timezone(timedelta(hours=8))
 STAGE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS devices (
   bucket_start TEXT NOT NULL, platform TEXT NOT NULL, os_version TEXT NOT NULL,
@@ -155,8 +154,8 @@ def bucket_for(line: bytes, cache: dict[tuple[bytes, ...], str]) -> str | None:
         int(year), int(month), int(day), int(hour), int(minute),
         tzinfo=timezone(timedelta(minutes=offset)),
     )
-    local = source.astimezone(SHANGHAI).replace(
-        minute=0 if source.astimezone(SHANGHAI).minute < 30 else 30,
+    local = source.astimezone(BEIJING).replace(
+        minute=0 if source.astimezone(BEIJING).minute < 30 else 30,
         second=0,
         microsecond=0,
     )
@@ -262,7 +261,10 @@ def prepare_live(conn: sqlite3.Connection) -> int:
 
 def remove_work_db(path: Path) -> None:
     for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
-        candidate.unlink(missing_ok=True)
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def restore_enabled(conn: sqlite3.Connection, enabled: int, message: str) -> None:
