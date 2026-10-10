@@ -119,19 +119,27 @@
     .app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; overflow: hidden; }
     header {
       display: flex; align-items: center; justify-content: space-between; gap: 16px;
-      min-height: 64px; padding: 8px 22px; border-bottom: 1px solid var(--line); background: var(--bg-header);
+      height: 56px; min-height: 56px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--bg-header);
     }
     .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
     .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .top-nav {
-      display: flex; align-items: center; gap: 6px;
+      display: flex; align-items: center; align-self: stretch; gap: 4px;
       margin-left: 18px; flex-shrink: 0;
     }
-    .top-nav .btn { font-weight: 600; }
-    .top-nav .btn.active {
-      border-color: var(--accent-emphasis); background: var(--bg-active); color: var(--text);
+    header .top-nav .btn {
+      height: auto; padding: 0 12px; border: 0; border-bottom: 2px solid transparent;
+      border-radius: 0; background: transparent; color: var(--muted);
+      font-size: 16px; font-weight: 500;
+      transition: color .12s ease, border-color .12s ease;
     }
-    .top-nav .btn svg { display: block; }
+    header .top-nav .btn:hover {
+      border-bottom-color: transparent; background: transparent; color: var(--text);
+    }
+    header .top-nav .btn.active {
+      border-bottom-color: var(--accent-emphasis); background: transparent; color: var(--text); font-weight: 600;
+    }
+    .top-nav .btn svg { display: block; width: 16px; height: 16px; flex: 0 0 auto; }
     .mark {
       width: 32px; height: 32px; flex: 0 0 auto;
       color: var(--success-emphasis);
@@ -1067,17 +1075,16 @@
         </span>
         <div>
           <h1>系统更新 <span class="app-ver">v__APP_VERSION__</span></h1>
-          <small>主机 Docker Compose 系统管理 · 返回首页</small>
         </div>
       </a>
       <nav class="top-nav" aria-label="功能切换">
-        <button type="button" class="btn" id="btn-repo" title="软件仓库">软件仓库</button>
-        <button type="button" class="btn" id="btn-cluster" title="主机节点">主机节点</button>
-        <button type="button" class="btn" id="btn-k3s" title="K3s 资源">K3s 资源</button>
-        <button type="button" class="btn" id="btn-images" title="容器镜像">镜像</button>
-        <button type="button" class="btn" id="btn-storage" title="存储">存储</button>
-        <button type="button" class="btn" id="btn-traffic" title="入口流量统计">流量</button>
-        <button type="button" class="btn" id="btn-projects" title="项目">项目</button>
+        <button type="button" class="btn" id="btn-repo" title="软件仓库"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.3 9 5.1"/><path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>软件仓库</button>
+        <button type="button" class="btn" id="btn-cluster" title="主机节点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/></svg>主机节点</button>
+        <button type="button" class="btn" id="btn-k3s" title="K3s 资源"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 8.7 5v10L12 22l-8.7-5V7Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>K3s 资源</button>
+        <button type="button" class="btn" id="btn-images" title="容器镜像"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>镜像</button>
+        <button type="button" class="btn" id="btn-storage" title="存储"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v7c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12v7c0 1.7 4 3 9 3s9-1.3 9-3v-7"/></svg>存储</button>
+        <button type="button" class="btn" id="btn-traffic" title="入口流量统计"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19V2"/></svg>流量</button>
+        <button type="button" class="btn" id="btn-projects" title="项目"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>项目</button>
       </nav>
       </div>
       <div class="header-right">

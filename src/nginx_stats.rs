@@ -51,11 +51,13 @@ CREATE TABLE IF NOT EXISTS nginx_bucket_devices (
   requests INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(bucket_start, platform, os_version, device_model, network_type, client_app, app_version)
 );
-CREATE INDEX IF NOT EXISTS idx_nginx_clients_bucket ON nginx_bucket_clients(bucket_start);
-CREATE INDEX IF NOT EXISTS idx_nginx_upstreams_bucket ON nginx_bucket_upstreams(bucket_start);
-CREATE INDEX IF NOT EXISTS idx_nginx_paths_bucket ON nginx_bucket_paths(bucket_start);
-CREATE INDEX IF NOT EXISTS idx_nginx_devices_bucket ON nginx_bucket_devices(bucket_start);
+DROP INDEX IF EXISTS idx_nginx_clients_bucket;
+DROP INDEX IF EXISTS idx_nginx_upstreams_bucket;
+DROP INDEX IF EXISTS idx_nginx_paths_bucket;
+DROP INDEX IF EXISTS idx_nginx_devices_bucket;
 "#;
+
+const MAX_PATHS_PER_BUCKET: i64 = 500;
 
 pub fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(SCHEMA)?;
@@ -360,6 +362,10 @@ fn persist_batch(
         for (p, n) in a.paths {
             tx.execute("INSERT INTO nginx_bucket_paths(bucket_start,path,requests) VALUES(?1,?2,?3) ON CONFLICT(bucket_start,path) DO UPDATE SET requests=requests+excluded.requests",params![bucket,p,n])?;
         }
+        tx.execute(
+            "DELETE FROM nginx_bucket_paths WHERE bucket_start=?1 AND path NOT IN (SELECT path FROM nginx_bucket_paths WHERE bucket_start=?1 ORDER BY requests DESC,path LIMIT ?2)",
+            params![bucket, MAX_PATHS_PER_BUCKET],
+        )?;
         for (device, n) in a.devices {
             tx.execute("INSERT INTO nginx_bucket_devices(bucket_start,platform,os_version,device_model,network_type,client_app,app_version,requests) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(bucket_start,platform,os_version,device_model,network_type,client_app,app_version) DO UPDATE SET requests=requests+excluded.requests",params![bucket,device.platform,device.os_version,device.device_model,device.network_type,device.client_app,device.app_version,n])?;
         }
@@ -496,7 +502,7 @@ fn parse_line(line: &str) -> Option<Event> {
     }
     let mut req = quoted[1].split_whitespace();
     let _ = req.next()?;
-    let path = req.next()?.split('?').next()?.to_string();
+    let path = normalize_path(req.next()?.split('?').next()?);
     let mut tail = quoted[2].split_whitespace();
     let status = tail.next()?.parse::<i64>().ok()?;
     if !(100..600).contains(&status) {
@@ -526,6 +532,60 @@ fn parse_line(line: &str) -> Option<Event> {
         request_time,
         device,
     })
+}
+
+fn normalize_path(path: &str) -> String {
+    if !path.starts_with('/') {
+        return "/invalid-request".to_string();
+    }
+    if path.starts_with("/ib/api/v1/map3/") {
+        return "/ib/api/v1/map3/:tile".to_string();
+    }
+    let mut normalized = String::with_capacity(path.len().min(256));
+    normalized.push('/');
+    for (index, segment) in path.split('/').skip(1).enumerate() {
+        if index > 0 {
+            normalized.push('/');
+        }
+        normalized.push_str(&normalize_path_segment(segment));
+        if normalized.len() >= 512 {
+            return "/oversized-path".to_string();
+        }
+    }
+    normalized
+}
+
+fn normalize_path_segment(segment: &str) -> String {
+    if segment.is_empty() {
+        return String::new();
+    }
+    if segment.bytes().all(|byte| byte.is_ascii_digit()) {
+        return ":id".to_string();
+    }
+    if segment.contains(',')
+        && segment
+            .split(',')
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return ":ids".to_string();
+    }
+    let (stem, suffix) = segment
+        .split_once('.')
+        .map(|(stem, suffix)| (stem, Some(suffix)))
+        .unwrap_or((segment, None));
+    if stem.bytes().all(|byte| byte.is_ascii_digit()) {
+        return suffix
+            .map(|suffix| format!(":id.{suffix}"))
+            .unwrap_or_else(|| ":id".to_string());
+    }
+    let compact = stem.replace('-', "");
+    let is_hash = compact.len() >= 16 && compact.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if is_hash {
+        return suffix
+            .map(|suffix| format!(":hash.{suffix}"))
+            .unwrap_or_else(|| ":hash".to_string());
+    }
+    segment.to_string()
 }
 fn token<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     let p = s.find(prefix)? + prefix.len();
@@ -745,6 +805,31 @@ mod tests {
         assert_eq!(device.os_version, "16.5");
         assert_eq!(device.device_model, "iPad");
         assert_eq!(device.network_type, "WIFI");
+    }
+
+    #[test]
+    fn normalizes_high_cardinality_paths() {
+        assert_eq!(
+            normalize_path("/ib/api/v1/map3/0748e9a1c92edd5c59cedbcda66ba08c/13/6784/3273.png"),
+            "/ib/api/v1/map3/:tile"
+        );
+        assert_eq!(
+            normalize_path("/app/out-check-polygon/30581657"),
+            "/app/out-check-polygon/:id"
+        );
+        assert_eq!(
+            normalize_path("/cms/v1/staff/select/19086,19085,19084"),
+            "/cms/v1/staff/select/:ids"
+        );
+        assert_eq!(
+            normalize_path("/ib/cangling/4307D9F41295E4125325A2B1AF1C502B.cache.js"),
+            "/ib/cangling/:hash.cache.js"
+        );
+        assert_eq!(
+            normalize_path("/app/out-check-polygon/feature/getFeaturesByTaskId"),
+            "/app/out-check-polygon/feature/getFeaturesByTaskId"
+        );
+        assert_eq!(normalize_path("not-http"), "/invalid-request");
     }
 
     #[test]
