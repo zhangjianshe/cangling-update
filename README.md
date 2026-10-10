@@ -43,7 +43,7 @@ python3 tools/backfill_nginx_devices.py \
 ```bash
   mkdir update
   cd update
-  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.159/cangling-update-linux-amd64
+  curl -fL -o cangling-update https://github.com/zhangjianshe/cangling-update/releases/download/v0.1.160/cangling-update-linux-amd64
   chmod +x cangling-update
   ./cangling-update install-service
   # 访问地址 http://localhost:5400
