@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS nginx_stats_settings (
@@ -552,6 +552,16 @@ struct NamedCount {
     name: String,
     requests: i64,
 }
+fn top_named(values: HashMap<String, i64>, limit: usize, include_empty: bool) -> Vec<NamedCount> {
+    let mut values = values
+        .into_iter()
+        .filter(|(name, _)| include_empty || !name.is_empty())
+        .map(|(name, requests)| NamedCount { name, requests })
+        .collect::<Vec<_>>();
+    values.sort_unstable_by(|a, b| b.requests.cmp(&a.requests));
+    values.truncate(limit);
+    values
+}
 #[derive(Serialize)]
 struct Totals {
     requests: i64,
@@ -577,6 +587,16 @@ struct Report {
     android_model_requests: i64,
     android_model_count: i64,
     client_apps: Vec<NamedCount>,
+    diagnostics: ReportDiagnostics,
+}
+#[derive(Serialize)]
+struct ReportDiagnostics {
+    database_bytes: u64,
+    bucket_rows: i64,
+    client_rows: i64,
+    device_rows: i64,
+    lock_wait_ms: u128,
+    query_ms: u128,
 }
 async fn report(
     State(state): State<AppState>,
@@ -585,7 +605,9 @@ async fn report(
     let today = Local::now().format("%Y-%m-%d").to_string();
     let from = q.from.unwrap_or_else(|| format!("{today}T00:00:00"));
     let to = q.to.unwrap_or_else(|| format!("{today}T23:59:59"));
+    let started = Instant::now();
     let c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let lock_wait_ms = started.elapsed().as_millis();
     let mut st=c.prepare("SELECT b.bucket_start,b.requests,b.response_bytes,b.status_1xx,b.status_2xx,b.status_3xx,b.status_4xx,b.status_5xx,(SELECT COUNT(*) FROM nginx_bucket_clients x WHERE x.bucket_start=b.bucket_start),CASE WHEN b.request_time_count=0 THEN 0 ELSE b.request_time_sum/b.request_time_count END,b.slow_requests FROM nginx_traffic_buckets b WHERE b.bucket_start>=?1 AND b.bucket_start<=?2 ORDER BY b.bucket_start")?;
     let buckets = st
         .query_map(params![from, to], |r| {
@@ -612,43 +634,80 @@ async fn report(
         let values = rows.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(values)
     };
-    let totals=c.query_row("SELECT COALESCE(SUM(requests),0),COALESCE(SUM(response_bytes),0),COALESCE(SUM(status_1xx),0),COALESCE(SUM(status_2xx),0),COALESCE(SUM(status_3xx),0),COALESCE(SUM(status_4xx),0),COALESCE(SUM(status_5xx),0),CASE WHEN COALESCE(SUM(request_time_count),0)=0 THEN 0 ELSE SUM(request_time_sum)/SUM(request_time_count) END,COALESCE(SUM(slow_requests),0),(SELECT COUNT(DISTINCT client_ip) FROM nginx_bucket_clients WHERE bucket_start>=?1 AND bucket_start<=?2) FROM nginx_traffic_buckets WHERE bucket_start>=?1 AND bucket_start<=?2",params![from,to],|r|Ok(Totals{requests:r.get(0)?,response_bytes:r.get(1)?,status:[r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?],avg_request_time:r.get(7)?,slow_requests:r.get(8)?,unique_clients:r.get(9)?}))?;
-    let android_models = {
-        let mut statement = c.prepare("SELECT device_model,SUM(requests) n FROM nginx_bucket_devices WHERE bucket_start>=?1 AND bucket_start<=?2 AND platform='Android' AND device_model<>'' GROUP BY device_model ORDER BY n DESC LIMIT 7")?;
-        let rows = statement.query_map(params![from, to], |r| {
-            Ok(NamedCount {
-                name: r.get(0)?,
-                requests: r.get(1)?,
-            })
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-    };
-    let (android_model_requests, android_model_count) = c.query_row(
-        "SELECT COALESCE(SUM(requests),0),COUNT(DISTINCT device_model) FROM nginx_bucket_devices WHERE bucket_start>=?1 AND bucket_start<=?2 AND platform='Android' AND device_model<>''",
+    let (client_rows, unique_clients) = c.query_row(
+        "SELECT COUNT(*),COUNT(DISTINCT client_ip) FROM nginx_bucket_clients WHERE bucket_start>=?1 AND bucket_start<=?2",
         params![from, to],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let totals=c.query_row("SELECT COALESCE(SUM(requests),0),COALESCE(SUM(response_bytes),0),COALESCE(SUM(status_1xx),0),COALESCE(SUM(status_2xx),0),COALESCE(SUM(status_3xx),0),COALESCE(SUM(status_4xx),0),COALESCE(SUM(status_5xx),0),CASE WHEN COALESCE(SUM(request_time_count),0)=0 THEN 0 ELSE SUM(request_time_sum)/SUM(request_time_count) END,COALESCE(SUM(slow_requests),0) FROM nginx_traffic_buckets WHERE bucket_start>=?1 AND bucket_start<=?2",params![from,to],|r|Ok(Totals{requests:r.get(0)?,response_bytes:r.get(1)?,status:[r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?],avg_request_time:r.get(7)?,slow_requests:r.get(8)?,unique_clients}))?;
+    let mut platform_counts = HashMap::new();
+    let mut os_version_counts = HashMap::new();
+    let mut network_counts = HashMap::new();
+    let mut device_model_counts = HashMap::new();
+    let mut android_model_counts = HashMap::new();
+    let mut client_app_counts = HashMap::new();
+    let mut device_rows = 0_i64;
+    let mut statement = c.prepare("SELECT platform,os_version,device_model,network_type,client_app,requests FROM nginx_bucket_devices WHERE bucket_start>=?1 AND bucket_start<=?2")?;
+    let rows = statement.query_map(params![from, to], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    for row in rows {
+        let (platform, os_version, device_model, network, client_app, requests) = row?;
+        device_rows += 1;
+        *platform_counts.entry(platform.clone()).or_default() += requests;
+        *os_version_counts.entry(os_version).or_default() += requests;
+        *network_counts.entry(network).or_default() += requests;
+        *device_model_counts.entry(device_model.clone()).or_default() += requests;
+        *client_app_counts.entry(client_app).or_default() += requests;
+        if platform == "Android" && !device_model.is_empty() {
+            *android_model_counts.entry(device_model).or_default() += requests;
+        }
+    }
+    let android_model_count = android_model_counts.len() as i64;
+    let android_model_requests = android_model_counts.values().sum();
+    let platforms = top_named(platform_counts, 20, true);
+    let os_versions = top_named(os_version_counts, 30, false);
+    let networks = top_named(network_counts, 20, true);
+    let device_models = top_named(device_model_counts, 20, false);
+    let android_models = top_named(android_model_counts, 7, false);
+    let client_apps = top_named(client_app_counts, 20, true);
+    let database_bytes = std::fs::metadata(&state.paths.db_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let bucket_rows = buckets.len() as i64;
+    let upstreams = grouped("nginx_bucket_upstreams", "upstream", 50)?;
+    let paths = grouped("nginx_bucket_paths", "path", 20)?;
+    let query_ms = started.elapsed().as_millis();
     Ok(Json(Report {
         from: from.clone(),
         to: to.clone(),
         totals,
         buckets,
-        upstreams: grouped("nginx_bucket_upstreams", "upstream", 50)?,
-        paths: grouped("nginx_bucket_paths", "path", 20)?,
-        platforms: grouped("nginx_bucket_devices", "platform", 20)?,
-        os_versions: grouped("nginx_bucket_devices", "os_version", 30)?
-            .into_iter()
-            .filter(|item| !item.name.is_empty())
-            .collect(),
-        networks: grouped("nginx_bucket_devices", "network_type", 20)?,
-        device_models: grouped("nginx_bucket_devices", "device_model", 20)?
-            .into_iter()
-            .filter(|item| !item.name.is_empty())
-            .collect(),
+        upstreams,
+        paths,
+        platforms,
+        os_versions,
+        networks,
+        device_models,
         android_models,
         android_model_requests,
         android_model_count,
-        client_apps: grouped("nginx_bucket_devices", "client_app", 20)?,
+        client_apps,
+        diagnostics: ReportDiagnostics {
+            database_bytes,
+            bucket_rows,
+            client_rows,
+            device_rows,
+            lock_wait_ms,
+            query_ms,
+        },
     }))
 }
 
