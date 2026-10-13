@@ -419,6 +419,10 @@
     .upgrade-upload-pane h3 { margin: 0 0 6px; font-size: 15px; }
     .upgrade-upload-pane .hint { min-height: 38px; margin: 0 0 10px; }
     .upgrade-upload-pane .drop { min-height: 96px; display: flex; align-items: center; justify-content: center; }
+    .jar-upgrade-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+    .jar-upgrade-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+    .jar-status-ok { color: var(--ok); font-weight: 700; }
+    .jar-status-missing { color: var(--bad); font-weight: 700; }
     .filelist { margin: 12px 0 0; padding: 0; list-style: none; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
     .filelist li { padding: 4px 0; color: var(--text); }
     .progress-wrap { margin-top: 14px; }
@@ -429,7 +433,7 @@
     .progress > span { display: block; height: 100%; width: 0; background: var(--success-emphasis); transition: width 0.15s linear; }
     .progress.unknown > span { width: 32%; animation: prog-slide 1.1s ease-in-out infinite; }
     @keyframes prog-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
-    @media (max-width: 900px) { .upgrade-upload-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 900px) { .upgrade-upload-grid, .jar-upgrade-grid { grid-template-columns: 1fr; } }
     table { width: 100%; border-collapse: collapse; }
     th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
     .card > table th, .card > table td { vertical-align: middle; }
@@ -1082,6 +1086,7 @@
         <button type="button" class="btn" id="btn-cluster" title="主机节点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/></svg>主机节点</button>
         <button type="button" class="btn" id="btn-k3s" title="K3s 资源"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 8.7 5v10L12 22l-8.7-5V7Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>K3s 资源</button>
         <button type="button" class="btn" id="btn-images" title="容器镜像"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>镜像</button>
+        <button type="button" class="btn" id="btn-jar-upgrade" title="JAR 升级"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>JAR升级</button>
         <button type="button" class="btn" id="btn-storage" title="存储"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v7c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12v7c0 1.7 4 3 9 3s9-1.3 9-3v-7"/></svg>存储</button>
         <button type="button" class="btn" id="btn-traffic" title="入口流量统计"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19V2"/></svg>流量</button>
         <button type="button" class="btn" id="btn-projects" title="项目"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>项目</button>
@@ -1210,6 +1215,7 @@
     const clusterPoll = { timer: null, inflight: false };
     const k3sPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
+    const jarUpgradePoll = { timer: null, jobId: null };
     const KIND = { baseline: "基线", "baseline-compose": "Compose 基线", update: "升级", "pre-replace": "JAR 替换前备份", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
@@ -1667,6 +1673,7 @@
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return "k3s";
       if (hash === "#/repo") return "repo";
       if (hash === "#/images") return "images";
+      if (hash === "#/jar-upgrade") return "jar-upgrade";
       if (hash === "#/storage") return "storage";
       if (hash === "#/traffic") return "traffic";
       return "projects";
@@ -1677,7 +1684,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), repo: $("#btn-repo"), images: $("#btn-images"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), repo: $("#btn-repo"), images: $("#btn-images"), "jar-upgrade": $("#btn-jar-upgrade"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -1694,6 +1701,7 @@
       stopClusterPoll();
       stopK3sPoll();
       stopImageMonitorPoll();
+      stopJarUpgradePoll();
       comboClose();
       closeDialog();
       setMetaPanelOpen(false);
@@ -1704,6 +1712,7 @@
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return renderK3s();
       if (hash === "#/repo") return renderRepo();
       if (hash === "#/images") return renderImages();
+      if (hash === "#/jar-upgrade") return renderJarUpgrade();
       if (hash === "#/storage") return renderStorage();
       if (hash === "#/traffic") return renderTraffic();
       const m = hash.match(/^#\/p\/([^/]+)$/);
@@ -2920,6 +2929,132 @@
       state.selectedNodeImages = new Set();
       await loadImages();
       startImageMonitorPoll();
+    }
+
+    async function renderJarUpgrade() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      try {
+        drawJarUpgrade(await api("/api/jar-upgrade/status"));
+      } catch (e) {
+        $("#main").innerHTML = `<div class="card"><h3>JAR 升级</h3><p class="hint">${esc(e.message)}</p></div>`;
+      }
+    }
+
+    function drawJarUpgrade(data) {
+      const rows = (data.files || []).map(file => `<tr>
+        <td><code>${esc(file.name)}</code></td>
+        <td class="${file.present ? "jar-status-ok" : "jar-status-missing"}">${file.present ? "已就绪" : "缺失"}</td>
+        <td>${file.present ? fmtBytes(file.bytes) : "—"}</td>
+        <td>${file.modified ? fmtDateTime(file.modified * 1000) : "—"}</td>
+      </tr>`).join("");
+      $("#main").innerHTML = `
+        <div class="title-row">
+          <div><h2>JAR 升级</h2><div class="path">上传到 incoming，先升级 19，再升级 18</div></div>
+          <button class="btn" id="btn-jar-refresh">刷新</button>
+        </div>
+        <div id="flash" hidden></div>
+        <div class="jar-upgrade-grid">
+          <div class="card">
+            <h3>待发布 JAR</h3>
+            <p class="hint">目录：<code>${esc(data.incoming_dir)}</code></p>
+            <table><thead><tr><th>文件名</th><th>状态</th><th>大小</th><th>修改时间</th></tr></thead><tbody>${rows}</tbody></table>
+            <div class="jar-upgrade-actions">
+              <input id="jar-files" type="file" accept=".jar,application/java-archive" multiple hidden />
+              <button class="btn" id="btn-jar-upload" ${data.upgrading ? "disabled" : ""}>选择并上传 JAR</button>
+              <button class="btn primary" id="btn-jar-run" ${data.ready && !data.upgrading ? "" : "disabled"}>${data.upgrading ? "正在升级…" : "执行升级"}</button>
+            </div>
+            <div class="progress-wrap" id="jar-upload-progress" hidden>
+              <div class="progress-meta"><span id="jar-upload-message">正在上传</span><span id="jar-upload-percent">0%</span></div>
+              <div class="progress"><span id="jar-upload-bar"></span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>升级流程</h3>
+            <ol class="hint"><li>可选择 1～4 个固定名称的 JAR；每次上传会替换上一批待升级文件</li><li>以当前版本为基础，仅覆盖本次上传的 JAR</li><li>生成 SHA-256 并同步到 19</li><li>升级并验证 19、18</li><li>失败自动回滚上一版本</li></ol>
+            <p class="hint">脚本：<code>${esc(data.script)}</code></p>
+            <pre class="task-log" id="jar-upgrade-log">${data.upgrading ? "升级任务正在运行…" : "等待操作"}</pre>
+          </div>
+        </div>`;
+      $("#btn-jar-refresh").onclick = renderJarUpgrade;
+      $("#btn-jar-upload").onclick = () => $("#jar-files").click();
+      $("#jar-files").onchange = uploadJarFiles;
+      $("#btn-jar-run").onclick = runJarUpgrade;
+    }
+
+    function uploadJarFiles() {
+      const input = $("#jar-files");
+      const files = Array.from((input && input.files) || []);
+      if (!files.length) return;
+      const allowed = new Set(["cis-server-1.0.0.jar", "cis-map-1.0.0.jar", "cis-k8s-1.0.0.jar", "np4-base-server-1.0.0.jar"]);
+      const invalid = files.find(file => !allowed.has(file.name));
+      if (invalid) { flash("err", `不允许的文件名：${invalid.name}`); input.value = ""; return; }
+      const form = new FormData();
+      files.forEach(file => form.append("files", file, file.name));
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", appPath("/api/jar-upgrade/upload"));
+      const token = sessionToken(); if (token) xhr.setRequestHeader("Authorization", "Bearer " + token);
+      $("#btn-jar-upload").disabled = true;
+      $("#btn-jar-run").disabled = true;
+      $("#jar-upload-progress").hidden = false;
+      xhr.upload.onprogress = event => {
+        if (!event.lengthComputable) return;
+        const pct = Math.round(event.loaded * 100 / event.total);
+        $("#jar-upload-percent").textContent = pct + "%";
+        $("#jar-upload-bar").style.width = pct + "%";
+        $("#jar-upload-message").textContent = `正在上传 ${files.length} 个文件`;
+      };
+      xhr.onload = async () => {
+        input.value = "";
+        if (xhr.status >= 200 && xhr.status < 300) {
+          await renderJarUpgrade();
+          flash("ok", `已上传 ${files.length} 个 JAR`);
+        } else {
+          let message = xhr.responseText; try { message = JSON.parse(message).error; } catch (_) {}
+          await renderJarUpgrade(); flash("err", message || "上传失败");
+        }
+      };
+      xhr.onerror = async () => { await renderJarUpgrade(); flash("err", "上传失败：网络连接中断"); };
+      xhr.send(form);
+    }
+
+    async function runJarUpgrade() {
+      if (!(await confirmDialog("确定使用 incoming 中现有的一个或多个 JAR 滚动升级 19 和 18？"))) return;
+      const button = $("#btn-jar-run"); if (button) button.disabled = true;
+      try {
+        const job = await api("/api/jar-upgrade/run", { method: "POST" });
+        watchJarUpgrade(job.id);
+      } catch (e) {
+        flash("err", e.message);
+        if (button) button.disabled = false;
+      }
+    }
+
+    function watchJarUpgrade(jobId) {
+      stopJarUpgradePoll();
+      jarUpgradePoll.jobId = jobId;
+      const poll = async () => {
+        try {
+          const job = await api("/api/jobs/" + jobId);
+          const log = $("#jar-upgrade-log"); if (log) log.textContent = job.message || job.phase;
+          if (job.done) {
+            stopJarUpgradePoll();
+            flash(job.error ? "err" : "ok", job.error || "JAR 升级完成");
+            const button = $("#btn-jar-run"); if (button) button.disabled = false;
+          }
+        } catch (e) {
+          stopJarUpgradePoll(); flash("err", e.message);
+        }
+      };
+      jarUpgradePoll.timer = setInterval(poll, 1000);
+      poll();
+    }
+
+    function stopJarUpgradePoll() {
+      if (jarUpgradePoll.timer) clearInterval(jarUpgradePoll.timer);
+      jarUpgradePoll.timer = null;
+      jarUpgradePoll.jobId = null;
     }
 
     function imageDirectoryQuery() {
@@ -7163,6 +7298,7 @@ access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
     $("#btn-k3s").onclick = () => goHash("#/k3s");
     $("#btn-repo").onclick = () => goHash("#/repo");
     $("#btn-images").onclick = () => goHash("#/images");
+    $("#btn-jar-upgrade").onclick = () => goHash("#/jar-upgrade");
     $("#btn-storage").onclick = () => goHash("#/storage");
     $("#btn-traffic").onclick = () => goHash("#/traffic");
     function setUserMenuOpen(open) {

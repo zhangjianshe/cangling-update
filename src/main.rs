@@ -12,6 +12,7 @@ mod gitrepo;
 mod hostinfo;
 mod hosts;
 mod images;
+mod jar_upgrade;
 mod k3s;
 mod k3s_resources;
 mod models;
