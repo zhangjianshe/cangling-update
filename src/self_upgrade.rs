@@ -161,6 +161,27 @@ async fn set_executable(path: &Path) -> Result<(), AppError> {
 }
 
 async fn inspect_version(path: &Path) -> Result<String, AppError> {
+    let help = tokio::time::timeout(
+        VERSION_TIMEOUT,
+        tokio::process::Command::new(path).arg("--help").output(),
+    )
+    .await
+    .map_err(|_| AppError::bad("检查上传程序身份超时"))?
+    .map_err(|e| AppError::bad(format!("无法执行上传程序：{e}")))?;
+    if !help.status.success() {
+        return Err(AppError::bad(
+            "上传文件无法正常执行，不是有效的 cangling-update 程序",
+        ));
+    }
+    let help_text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&help.stdout),
+        String::from_utf8_lossy(&help.stderr)
+    );
+    if !is_cangling_update_help(&help_text) {
+        return Err(AppError::bad("上传文件不是 cangling-update 程序"));
+    }
+
     let output = tokio::time::timeout(
         VERSION_TIMEOUT,
         tokio::process::Command::new(path).arg("version").output(),
@@ -178,6 +199,14 @@ async fn inspect_version(path: &Path) -> Result<String, AppError> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_version_output(&stdout).ok_or_else(|| AppError::bad("上传程序没有返回有效版本号"))
+}
+
+fn is_cangling_update_help(value: &str) -> bool {
+    value.lines().any(|line| {
+        let line = line.trim();
+        line == "Usage: cangling-update [OPTIONS] [COMMAND]"
+            || line.starts_with("Usage: cangling-update ")
+    })
 }
 
 fn parse_version_output(value: &str) -> Option<String> {
@@ -226,5 +255,15 @@ mod tests {
         assert!(parse_version_output("cangling-update 1.2.3").is_none());
         assert!(parse_version_output("1.2").is_none());
         assert!(parse_version_output("1.2.3.4").is_none());
+    }
+
+    #[test]
+    fn identifies_cangling_update_help() {
+        assert!(is_cangling_update_help(
+            "Single-binary docker-compose update console\n\nUsage: cangling-update [OPTIONS] [COMMAND]\n"
+        ));
+        assert!(!is_cangling_update_help(
+            "Usage: another-program [OPTIONS] [COMMAND]\n"
+        ));
     }
 }

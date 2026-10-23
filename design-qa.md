@@ -1,44 +1,53 @@
-# Traffic report design QA
+# Self-update dialog design QA
 
-- Source visual truth: `/tmp/codex-clipboard-fc8032d6-12a0-4ad5-8796-0f2e21f02422.png`
-- Implementation screenshot: `/tmp/cangling-traffic-report-implementation.png`
-- Side-by-side comparison: `/tmp/cangling-traffic-report-comparison.png`
-- Viewport: 1800 × 1128 CSS px
-- Source pixels: 1800 × 1125
-- Implementation pixels: 1800 × 1128
-- Device scale factor: 1
-- State: light theme, 2026-10-09 single-day report, populated test fixture
+- Source visual truth: `/tmp/codex-clipboard-d227b4b0-7647-4d7c-aca6-9af7a75c1c31.png`
+- Implementation screenshots:
+  - `.codex-artifacts/ui-self-update/01-empty.jpg`
+  - `.codex-artifacts/ui-self-update/02-invalid-file.jpg`
+  - `.codex-artifacts/ui-self-update/03-dialog-invalid.jpg`
+- Combined comparison: `.codex-artifacts/ui-self-update/04-before-after.jpg`
+- Browser viewport: 1280 × 720 CSS px
+- Source pixels: 1028 × 1313
+- Implementation full-view pixels: 1280 × 720
+- Implementation dialog crop: 440 × 556 CSS px / 440 × 556 pixels
+- Density normalization: implementation captured at 1 CSS px per image pixel; source resized to 440 px wide for the combined comparison.
+- State: invalid file selected and server validation rejected it.
 
 ## Full-view comparison evidence
 
-The implementation reproduces the report hierarchy and 2 × 2 composition from the source: dated Jiangsu report title, one-line summary, paired half-hour charts, horizontal HTTP status distribution, and grouped 223/224/225 upstream chart. The existing application header and Nginx filter toolbar remain above the report by design, following the previously requested product behavior.
+The implementation uses the existing application typography, button styles, colors, border tokens and modal chrome. The optimized modal is content-height rather than filling most of the viewport. The failure state no longer displays a green 100% progress bar or an active “uploading” label.
 
 ## Focused-region comparison evidence
 
-- Typography: system Chinese sans-serif, bold report/chart headings, muted summary copy, and compact chart labels match the source hierarchy.
-- Spacing: report width, two-column tracks, generous inter-row whitespace, and borderless chart regions match the source rhythm.
-- Colors: blue requests, yellow traffic, magenta 2xx, and blue/teal/pink node series match the supplied palette.
-- Charts: peak labels, hourly x-axis labels, last partial-bucket marker, status values in 万, 5XX percentage, and backend service/node grouping are present.
-- Assets: the source contains no raster or icon assets; none were substituted or omitted.
-- Copy: title, Beijing-time summary, request/traffic/client totals, and all four chart headings match the requested report wording.
-
-## Interaction and runtime checks
-
-- Date filter/query interaction tested successfully.
-- Four report regions render from the report API response.
-- Browser console: no warnings or errors.
-- Rust tests: 155 passed, 0 failed.
-
-## Findings
-
-No actionable P0, P1, or P2 differences remain. The application navigation and filter toolbar add vertical space above the report compared with the standalone source image; this is an intentional product-shell constraint and preserves the user's earlier toolbar requirement.
+The dialog crop confirms that the selected file is represented separately with filename, size and a visible removal action. The error message appears directly after the validation explanation. The primary action is restored after failure, allowing retry without closing the dialog.
 
 ## Comparison history
 
-- Initial implementation: passed the full-view and focused-region comparison without P0/P1/P2 fixes.
+1. Earlier P1: validation failure appeared together with “正在上传”, a green 100% bar and an error alert. Fixed by separating upload and validation phases and hiding/resetting progress on failure.
+2. Earlier P2: the fixed-height modal left excessive empty space. Fixed by using content-driven dialog height and tighter vertical spacing.
+3. Earlier P2: the chosen file was embedded in the drop zone with no direct removal action. Fixed with a filename/size card and “移除” button.
+4. Post-fix evidence: `02-invalid-file.jpg` and `03-dialog-invalid.jpg`; the browser console contained no warnings or errors.
 
-## Follow-up polish
+## Required fidelity surfaces
 
-- P3: If the report is later exported as a standalone image/PDF, omit the application header and filter toolbar to match the source crop exactly.
+- Fonts and typography: existing application font stack and hierarchy retained; filename truncation and secondary size styling added.
+- Spacing and layout rhythm: modal content is compact, aligned, and uses existing 6 px radii and spacing scale.
+- Colors and visual tokens: existing accent, success, muted, border and error tokens reused; no new isolated palette introduced.
+- Image and asset fidelity: no raster assets are required for this utility dialog; the former text-glyph upload arrow was removed.
+- Copy and content: technical explanation was shortened to the four actual validation stages and the upgrade-version constraint.
+
+## Interaction checks
+
+- Opened More → 更新自己.
+- Verified the primary action is disabled before selecting a file.
+- Selected a local invalid test file through the file chooser.
+- Verified filename, size and removal action.
+- Submitted the file and received the server-side invalid-file error.
+- Verified progress was cleared and retry controls were restored.
+- Checked browser console: no errors or warnings.
+
+## Findings
+
+No actionable P0, P1 or P2 findings remain. A future P3 polish option is to add a compact success/reconnect countdown after a valid upgrade.
 
 final result: passed

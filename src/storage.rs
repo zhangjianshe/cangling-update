@@ -907,7 +907,7 @@ fn mount_external(s: &Storage) -> Result<String, AppError> {
     )
 }
 
-fn mount_from_spec(
+pub(crate) fn mount_from_spec(
     protocol: &str,
     server: &str,
     share: &str,
@@ -976,7 +976,7 @@ fn unmount_external(s: &Storage) -> Result<String, AppError> {
     unmount_dir(&s.target_dir)
 }
 
-fn unmount_dir(target_dir: &str) -> Result<String, AppError> {
+pub(crate) fn unmount_dir(target_dir: &str) -> Result<String, AppError> {
     let mnt = target_dir.trim();
     if mnt.is_empty() {
         return Err(AppError::bad("目标目录（挂载点）为空"));
