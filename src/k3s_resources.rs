@@ -14,9 +14,19 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
+const NODE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 const LOG_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_LOG_TAIL: u32 = 5000;
+const NODE_ID_LABEL: &str = "cangling.cn/node-id";
+const NODE_POOL_LABEL: &str = "cangling.cn/pool";
 const K3S_BINS: &[&str] = &["k3s", "/usr/local/bin/k3s", "/usr/bin/k3s", "/opt/bin/k3s"];
+const KUBECTL_BINS: &[&str] = &["kubectl", "/usr/local/bin/kubectl", "/usr/bin/kubectl"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum KubectlBinary {
+    K3s(PathBuf),
+    Standalone(PathBuf),
+}
 
 #[derive(Clone, Copy)]
 struct ResourceKind {
@@ -115,6 +125,13 @@ pub struct ScaleBody {
     replicas: u32,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeLabelsBody {
+    node_id: String,
+    pool: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TextResult {
     text: String,
@@ -125,6 +142,7 @@ pub fn routes() -> Router<crate::state::AppState> {
         .route("/api/k3s/status", get(cluster_status))
         .route("/api/k3s/namespaces", get(namespaces))
         .route("/api/k3s/resources", get(resources))
+        .route("/api/k3s/nodes/{name}/labels", put(update_node_labels))
         .route(
             "/api/k3s/resources/{kind}/{namespace}/{name}",
             get(resource_detail),
@@ -169,6 +187,53 @@ fn validate_name(value: &str, label: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+fn validate_label_value(value: &str, label: &str, allow_empty: bool) -> Result<(), AppError> {
+    if value.is_empty() {
+        return if allow_empty {
+            Ok(())
+        } else {
+            Err(AppError::bad(format!("{label}不能为空")))
+        };
+    }
+    let bytes = value.as_bytes();
+    if bytes.len() > 63
+        || !bytes[0].is_ascii_alphanumeric()
+        || !bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(AppError::bad(format!(
+            "{label}必须为 1–63 个字母、数字、-、_ 或 .，并以字母或数字开头和结尾"
+        )));
+    }
+    Ok(())
+}
+
+fn node_label_args(name: &str, body: &NodeLabelsBody) -> Result<Vec<String>, AppError> {
+    validate_name(name, "节点名称")?;
+    let node_id = if body.node_id.trim().is_empty() {
+        name
+    } else {
+        body.node_id.trim()
+    };
+    let pool = body.pool.trim();
+    validate_label_value(node_id, "node-id", false)?;
+    validate_label_value(pool, "pool", true)?;
+    Ok(vec![
+        "label".into(),
+        "node".into(),
+        name.into(),
+        format!("{NODE_ID_LABEL}={node_id}"),
+        if pool.is_empty() {
+            format!("{NODE_POOL_LABEL}-")
+        } else {
+            format!("{NODE_POOL_LABEL}={pool}")
+        },
+        "--overwrite".into(),
+    ])
+}
+
 fn namespace_args(kind: ResourceKind, namespace: &str) -> Result<Vec<String>, AppError> {
     if !kind.namespaced {
         return Ok(Vec::new());
@@ -180,8 +245,8 @@ fn namespace_args(kind: ResourceKind, namespace: &str) -> Result<Vec<String>, Ap
     Ok(vec!["--namespace".into(), namespace.into()])
 }
 
-fn k3s_binary() -> Option<PathBuf> {
-    K3S_BINS.iter().find_map(|candidate| {
+fn find_binary(candidates: &[&str]) -> Option<PathBuf> {
+    candidates.iter().find_map(|candidate| {
         if candidate.contains('/') {
             FsPath::new(candidate)
                 .is_file()
@@ -196,12 +261,28 @@ fn k3s_binary() -> Option<PathBuf> {
     })
 }
 
+fn kubectl_binary() -> Option<KubectlBinary> {
+    find_binary(K3S_BINS)
+        .map(KubectlBinary::K3s)
+        .or_else(|| find_binary(KUBECTL_BINS).map(KubectlBinary::Standalone))
+}
+
+fn kubectl_arguments(binary: &KubectlBinary, args: Vec<String>) -> Vec<String> {
+    match binary {
+        KubectlBinary::K3s(_) => std::iter::once("kubectl".to_string()).chain(args).collect(),
+        KubectlBinary::Standalone(_) => args,
+    }
+}
+
 async fn kubectl(args: Vec<String>, limit: Duration) -> Result<String, AppError> {
-    let binary = k3s_binary().ok_or_else(|| AppError::internal("当前主机未安装 k3s"))?;
-    let mut command = Command::new(binary);
+    let binary =
+        kubectl_binary().ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl"))?;
+    let program = match &binary {
+        KubectlBinary::K3s(path) | KubectlBinary::Standalone(path) => path,
+    };
+    let mut command = Command::new(program);
     command
-        .arg("kubectl")
-        .args(&args)
+        .args(kubectl_arguments(&binary, args))
         .stdin(Stdio::null())
         .kill_on_drop(true);
     let output = timeout(limit, command.output())
@@ -223,6 +304,55 @@ async fn kubectl_json(args: Vec<String>) -> Result<Value, AppError> {
     let text = kubectl(args, COMMAND_TIMEOUT).await?;
     serde_json::from_str(&text)
         .map_err(|error| AppError::internal(format!("解析 kubectl 输出失败：{error}")))
+}
+
+pub(crate) async fn local_node_internal_ip() -> Option<String> {
+    let text = kubectl(
+        vec!["get".into(), "nodes".into(), "-o".into(), "json".into()],
+        NODE_DISCOVERY_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    let nodes: Value = serde_json::from_str(&text).ok()?;
+    select_local_node_internal_ip(
+        &nodes,
+        &crate::hostinfo::hostname(),
+        &crate::hostinfo::primary_ip(),
+    )
+}
+
+fn select_local_node_internal_ip(nodes: &Value, hostname: &str, local_ip: &str) -> Option<String> {
+    let items = nodes["items"].as_array()?;
+    let matches_name = |node: &&Value| {
+        let metadata = &node["metadata"];
+        [
+            metadata["name"].as_str(),
+            metadata["labels"]["kubernetes.io/hostname"].as_str(),
+            metadata["labels"][NODE_ID_LABEL].as_str(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value.eq_ignore_ascii_case(hostname))
+    };
+    let matches_ip = |node: &&Value| {
+        node_internal_ip(node)
+            .as_deref()
+            .is_some_and(|address| address == local_ip)
+    };
+    items
+        .iter()
+        .find(matches_name)
+        .or_else(|| items.iter().find(matches_ip))
+        .and_then(node_internal_ip)
+}
+
+fn node_internal_ip(node: &Value) -> Option<String> {
+    node["status"]["addresses"]
+        .as_array()?
+        .iter()
+        .find(|address| address["type"] == "InternalIP")?["address"]
+        .as_str()
+        .map(str::to_owned)
 }
 
 async fn cluster_status() -> Result<Json<Value>, AppError> {
@@ -295,6 +425,23 @@ async fn resources(Query(query): Query<ResourceQuery>) -> Result<Json<Value>, Ap
     args.extend(namespace_args(kind, namespace)?);
     args.extend(["-o".into(), "json".into()]);
     Ok(Json(kubectl_json(args).await?))
+}
+
+async fn update_node_labels(
+    Path(name): Path<String>,
+    Json(body): Json<NodeLabelsBody>,
+) -> Result<Json<Value>, AppError> {
+    kubectl(node_label_args(&name, &body)?, COMMAND_TIMEOUT).await?;
+    Ok(Json(
+        kubectl_json(vec![
+            "get".into(),
+            "node".into(),
+            name,
+            "-o".into(),
+            "json".into(),
+        ])
+        .await?,
+    ))
 }
 
 async fn resource_detail(
@@ -470,5 +617,85 @@ mod tests {
         );
         let nodes = resource_kind("nodes").unwrap();
         assert!(namespace_args(nodes, "ignored").unwrap().is_empty());
+    }
+
+    #[test]
+    fn local_node_ip_prefers_hostname_then_matches_local_ip() {
+        let nodes = json!({"items": [
+            {
+                "metadata": {"name": "worker-a", "labels": {"kubernetes.io/hostname": "worker-a"}},
+                "status": {"addresses": [{"type": "InternalIP", "address": "10.0.0.2"}]}
+            },
+            {
+                "metadata": {"name": "generated-name", "labels": {"cangling.cn/node-id": "worker-b"}},
+                "status": {"addresses": [{"type": "InternalIP", "address": "10.0.0.3"}]}
+            }
+        ]});
+        assert_eq!(
+            select_local_node_internal_ip(&nodes, "worker-b", "10.0.0.2").as_deref(),
+            Some("10.0.0.3")
+        );
+        assert_eq!(
+            select_local_node_internal_ip(&nodes, "unknown", "10.0.0.2").as_deref(),
+            Some("10.0.0.2")
+        );
+    }
+
+    #[test]
+    fn k3s_adds_kubectl_subcommand_but_standalone_does_not() {
+        let args = vec!["get".into(), "nodes".into()];
+        assert_eq!(
+            kubectl_arguments(&KubectlBinary::K3s("/usr/bin/k3s".into()), args.clone()),
+            vec!["kubectl", "get", "nodes"]
+        );
+        assert_eq!(
+            kubectl_arguments(&KubectlBinary::Standalone("/usr/bin/kubectl".into()), args),
+            vec!["get", "nodes"]
+        );
+    }
+
+    #[test]
+    fn node_labels_default_id_to_node_name_and_remove_empty_pool() {
+        let args = node_label_args(
+            "n02-4c1ab4fe",
+            &NodeLabelsBody {
+                node_id: "".into(),
+                pool: "".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "label",
+                "node",
+                "n02-4c1ab4fe",
+                "cangling.cn/node-id=n02-4c1ab4fe",
+                "cangling.cn/pool-",
+                "--overwrite"
+            ]
+        );
+    }
+
+    #[test]
+    fn node_labels_validate_custom_values() {
+        let args = node_label_args(
+            "n02-4c1ab4fe",
+            &NodeLabelsBody {
+                node_id: "n02".into(),
+                pool: "map".into(),
+            },
+        )
+        .unwrap();
+        assert!(args.contains(&"cangling.cn/node-id=n02".into()));
+        assert!(args.contains(&"cangling.cn/pool=map".into()));
+        assert!(node_label_args(
+            "n02-4c1ab4fe",
+            &NodeLabelsBody {
+                node_id: "bad/value".into(),
+                pool: "map".into(),
+            },
+        )
+        .is_err());
     }
 }

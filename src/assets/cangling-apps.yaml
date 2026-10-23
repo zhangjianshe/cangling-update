@@ -1,0 +1,514 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cangling
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cangling-manager
+  namespace: cangling
+---
+# 实验环境：cis-server/cis-k8s 需要创建和调度业务资源，后续应按实际 API 收敛权限。
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cangling-manager-experiment
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: cangling-manager
+    namespace: cangling
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cangling-env
+  namespace: cangling
+data:
+  TZ: Asia/Shanghai
+  HOST: "192.168.3.121"
+  DATA_PATH: /mnt/cangling/cangling-share/storage
+  DOMAIN_NAME: np4.mapway.cn
+  VOLUME_DEFAULT_PATH: /mnt/cangling/storage/volumes
+  HOST_KAFKA: "192.168.3.121"
+  JDBC_DRIVER_NAME: org.postgresql.Driver
+  JDBC_URL_PREFIX: jdbc:postgresql
+  JDBC_DEFAULT_DB: postgres
+  JDBC_SCHEMA: cl,public
+  CL_BROKER_HOST: cangling-broker
+  CL_BROKER_PORT: "7500"
+  CL_BROKER_WEBPORT: "7501"
+  CL_BROKER_MQTT_WSPORT: "0"
+  KAFKA_PORT: "12001"
+  POSTGIS_USER: cangling
+  LDAP_PORT: "389"
+  WEB_PORT: "7600"
+  K8S_PORT: "7109"
+  MAP_PORT: "7110"
+  AI_WEB: http://192.168.3.121:7600
+  HOST_GEOSERVER_URL: http://cangling-map:3000
+  AI_MAP: http://cis-map:8079/
+  MAP_FRONT: ""
+  AI_IMAGE_PREFIX: ""
+  MQTT_WEB_SERVER: ""
+  GEOSERVER_FRONT: http://192.168.3.121:7600/geoserver
+  AI_K8S_NAMESPACE: np4
+  AI_THEME: ib-theme
+  PROJECT_DIR_NAME: ib
+  IB_CACHE_PATH: /opt/cangling/local/ibcache
+  IM_THEME: base
+  SERVER_URL: https://app.cangling.cn/
+  AI_IM_PATH: /mnt/cangling/storage/imdata
+  CL_BASE_PATH: /mnt/cangling/cangling-share/storage/cldata
+  CL_SERVER_URL: http://192.168.3.121:7600/
+  ENABLE_DOC: "false"
+  POSTGIS_MVT_USER: cangling
+  TILE_CACHE_URL: http://cangling-tile:7601
+  TILE_CACHE_CONFIG_DIR: /app/config
+  TILE_CACHE_MEMORY_CACHE_BYTES: "536870912"
+  TILE_CACHE_ROOT: /app/tiledata
+  CIS_MONGO_MIGRATION_ENABLED: "false"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cangling-secret
+  namespace: cangling
+type: Opaque
+stringData:
+  POSTGIS_PWD: "cangling-postgis"
+  POSTGIS_MVT_PWD: "cangling-postgis"
+  CANGLING_TILE_ADMIN_PASSWORD: "Ji2*p8Uh"
+  CANGLING_TILE_AUTH_TOKEN: "632ad553d15944e900de07df883b3eadefbf4a21"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cis-postgis, namespace: cangling}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: cis-postgis}}
+  template:
+    metadata: {labels: {app: cis-postgis}}
+    spec:
+      enableServiceLinks: false
+      nodeSelector: {kubernetes.io/hostname: n01}
+      containers:
+        - name: postgis
+          image: hub.cangling.cn/cangling/postgis:17-3.5
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: POSTGRES_DB, value: cis}
+            - {name: POSTGRES_HOST_AUTH_METHOD, value: trust}
+            - {name: POSTGRES_USER, value: cangling}
+            - {name: POSTGRES_PASS, valueFrom: {secretKeyRef: {name: cangling-secret, key: POSTGIS_PWD}}}
+            - {name: ALLOW_IP_RANGE, value: "0.0.0.0/0"}
+            - {name: POSTGRES_MULTIPLE_EXTENSIONS, value: "postgis,hstore,postgis_topology,postgis_raster,pgrouting"}
+          ports: [{containerPort: 5432}]
+          readinessProbe: {exec: {command: [pg_isready, -h, 127.0.0.1, -U, cangling]}, initialDelaySeconds: 15, periodSeconds: 10}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql}
+            - {name: localtime, mountPath: /etc/localtime, readOnly: true}
+      volumes:
+        - {name: data, hostPath: {path: /opt/cangling-core/postgis, type: Directory}}
+        - {name: localtime, hostPath: {path: /etc/localtime, type: File}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cis-postgis, namespace: cangling}
+spec: {selector: {app: cis-postgis}, ports: [{name: postgres, port: 5432, targetPort: 5432}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cangling-broker, namespace: cangling}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: cangling-broker}}
+  template:
+    metadata: {labels: {app: cangling-broker}}
+    spec:
+      enableServiceLinks: false
+      nodeSelector: {kubernetes.io/hostname: n01}
+      containers:
+        - name: broker
+          image: hub.cangling.cn/cangling/cangling-broker:0.1.60
+          imagePullPolicy: IfNotPresent
+          envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
+          ports: [{name: broker, containerPort: 7500}, {name: web, containerPort: 7501}]
+          volumeMounts: [{name: data, mountPath: /data}]
+      volumes: [{name: data, hostPath: {path: /opt/cangling-core/broker, type: DirectoryOrCreate}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cangling-broker, namespace: cangling}
+spec: {selector: {app: cangling-broker}, ports: [{name: broker, port: 7500}, {name: web, port: 7501}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cangling-tile, namespace: cangling}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: cangling-tile}}
+  template:
+    metadata: {labels: {app: cangling-tile}}
+    spec:
+      enableServiceLinks: false
+      nodeSelector: {kubernetes.io/hostname: n01}
+      containers:
+        - name: tile
+          image: hub.cangling.cn/cangling/cangling-tile:0.1.20
+          imagePullPolicy: IfNotPresent
+          envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
+          ports: [{containerPort: 7601}]
+          volumeMounts:
+            - {name: tiledata, mountPath: /app/tiledata}
+            - {name: config, mountPath: /app/config}
+      volumes:
+        - {name: tiledata, hostPath: {path: /opt/cangling/local/tiledata, type: Directory}}
+        - {name: config, hostPath: {path: /opt/cangling-core/tile-config, type: Directory}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cangling-tile, namespace: cangling}
+spec: {selector: {app: cangling-tile}, ports: [{port: 7601, targetPort: 7601}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cis-server, namespace: cangling}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: cis-server}}
+  template:
+    metadata: {labels: {app: cis-server}}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: cangling-manager
+      nodeSelector: {kubernetes.io/hostname: n01}
+      containers:
+        - name: cis-server
+          image: hub.cangling.cn/cangling/gdal-base:v4.2.35
+          imagePullPolicy: IfNotPresent
+          command: [java, -jar, /app/app.jar]
+          envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
+          ports: [{containerPort: 8078}]
+          readinessProbe: {tcpSocket: {port: 8078}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
+          volumeMounts: &javaMounts
+            - {name: passwd, mountPath: /etc/passwd, readOnly: true}
+            - {name: ibcache, mountPath: /var/ibcache}
+            - {name: np4, mountPath: /mnt/prod/np4}
+            - {name: modules, mountPath: /app/module}
+            - {name: backup, mountPath: /ibbackup}
+            - {name: cldata, mountPath: /app/imdata}
+            - {name: jar, mountPath: /app/app.jar, readOnly: true}
+      volumes: &serverVolumes
+        - {name: passwd, hostPath: {path: /etc/passwd, type: File}}
+        - {name: ibcache, hostPath: {path: /opt/cangling/local/ibcache, type: Directory}}
+        - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: Directory}}
+        - {name: modules, hostPath: {path: /mnt/cangling/cangling-share/storage/algo_tools, type: Directory}}
+        - {name: backup, hostPath: {path: /opt/cangling/local/ibbackup, type: Directory}}
+        - {name: cldata, hostPath: {path: /mnt/cangling/cangling-share/storage/cldata, type: Directory}}
+        - {name: jar, hostPath: {path: /opt/cangling-np4/jars/cis-server-1.0.0.jar, type: File}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cis-server, namespace: cangling}
+spec: {selector: {app: cis-server}, ports: [{port: 8078, targetPort: 8078}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cis-k8s, namespace: cangling}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: cis-k8s}}
+  template:
+    metadata: {labels: {app: cis-k8s}}
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: cangling-manager
+      nodeSelector: {kubernetes.io/hostname: n01}
+      containers:
+        - name: cis-k8s
+          image: hub.cangling.cn/cangling/gdal-base:v4.2.35
+          imagePullPolicy: IfNotPresent
+          command: [java, -jar, /app/app.jar]
+          envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
+          ports: [{containerPort: 8077}]
+          readinessProbe: {tcpSocket: {port: 8077}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
+          volumeMounts:
+            - {name: passwd, mountPath: /etc/passwd, readOnly: true}
+            - {name: ibcache, mountPath: /var/ibcache}
+            - {name: np4, mountPath: /mnt/prod/np4}
+            - {name: modules, mountPath: /app/module}
+            - {name: jar, mountPath: /app/app.jar, readOnly: true}
+      volumes:
+        - {name: passwd, hostPath: {path: /etc/passwd, type: File}}
+        - {name: ibcache, hostPath: {path: /opt/cangling/local/ibcache, type: Directory}}
+        - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: Directory}}
+        - {name: modules, hostPath: {path: /mnt/cangling/cangling-share/storage/algo_tools, type: Directory}}
+        - {name: jar, hostPath: {path: /opt/cangling-np4/jars/cis-k8s-1.0.0.jar, type: File}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cis-k8s, namespace: cangling}
+spec: {selector: {app: cis-k8s}, ports: [{port: 8077, targetPort: 8077}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cis-map, namespace: cangling}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: cis-map}}
+  template:
+    metadata: {labels: {app: cis-map}}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: cis-map
+          image: hub.cangling.cn/cangling/gdal-base:v4.2.35
+          imagePullPolicy: IfNotPresent
+          command: [java, -jar, /app/app.jar]
+          envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
+          env:
+            - {name: CANGLING_TILE_URL, value: http://cangling-tile:7601}
+            - {name: CANGLING_TILE_TOKEN, valueFrom: {secretKeyRef: {name: cangling-secret, key: CANGLING_TILE_AUTH_TOKEN}}}
+          ports: [{containerPort: 8079}]
+          readinessProbe: {tcpSocket: {port: 8079}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
+          volumeMounts:
+            - {name: passwd, mountPath: /etc/passwd, readOnly: true}
+            - {name: np4, mountPath: /mnt/prod/np4}
+            - {name: modules, mountPath: /app/module}
+            - {name: ibcache, mountPath: /var/ibcache}
+            - {name: jar, mountPath: /app/app.jar, readOnly: true}
+      volumes:
+        - {name: passwd, hostPath: {path: /etc/passwd, type: File}}
+        - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: Directory}}
+        - {name: modules, hostPath: {path: /mnt/cangling/cangling-share/storage/algo_tools, type: Directory}}
+        - {name: ibcache, hostPath: {path: /opt/cangling/local/ibcache, type: Directory}}
+        - {name: jar, hostPath: {path: /opt/cangling-np4/jars/cis-map-1.0.0.jar, type: File}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: cis-map, namespace: cangling}
+spec: {selector: {app: cis-map}, ports: [{port: 8079, targetPort: 8079}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: np4-base, namespace: cangling}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: np4-base}}
+  template:
+    metadata: {labels: {app: np4-base}}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: np4-base
+          image: hub.cangling.cn/cangling/gdal-base:v4.2.35
+          imagePullPolicy: IfNotPresent
+          command: [java, -jar, /app/app.jar]
+          envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {tcpSocket: {port: 8080}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
+          volumeMounts:
+            - {name: cldata, mountPath: /app/imdata}
+            - {name: logs, mountPath: /app/imdata/logs}
+            - {name: np4, mountPath: /mnt/prod/np4}
+            - {name: localtime, mountPath: /etc/localtime, readOnly: true}
+            - {name: jar, mountPath: /app/app.jar, readOnly: true}
+      volumes:
+        - {name: cldata, hostPath: {path: /mnt/cangling/cangling-share/storage/cldata, type: Directory}}
+        - {name: logs, hostPath: {path: /opt/cangling/local/base-logs, type: Directory}}
+        - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: Directory}}
+        - {name: localtime, hostPath: {path: /etc/localtime, type: File}}
+        - {name: jar, hostPath: {path: /opt/cangling-np4/jars/np4-base-server-1.0.0.jar, type: File}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: np4-base, namespace: cangling}
+spec: {selector: {app: np4-base}, ports: [{port: 8080, targetPort: 8080}]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: cangling-nginx, namespace: cangling}
+data:
+  nginx.conf: |
+    worker_processes 2;
+    error_log /var/log/nginx/error.log warn;
+    events { worker_connections 2048; multi_accept on; use epoll; }
+    http {
+      include /etc/nginx/mime.types;
+      default_type application/octet-stream;
+      sendfile on;
+      keepalive_timeout 65;
+      client_max_body_size 10G;
+      proxy_http_version 1.1;
+      proxy_set_header Host $http_host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+      upstream cis_mqtt { server cangling-broker:7501; }
+      upstream cis_server { server cis-server:8078; }
+      upstream cis_map { server cis-map:8079; keepalive 32; }
+      upstream cangling_map { server cangling-map:3000; keepalive 16; }
+      upstream cis_base { server np4-base:8080; keepalive 32; ip_hash; }
+      upstream cangling_tile { server cangling-tile:7601; }
+      server {
+        listen 7600;
+        server_name _;
+        location ^~ /msg/ { proxy_pass http://cis_mqtt/; }
+        location ^~ /events/mqtt { proxy_pass http://cis_mqtt/mqtt; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
+        location ^~ /ib/events/mqtt { proxy_pass http://cis_mqtt/mqtt; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
+        location ^~ /ib/socket/ { proxy_pass http://cis_server/socket/; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection $connection_upgrade; }
+        location ^~ /ib/api/v1/map3/ { proxy_pass http://cis_map/api/v1/map3/; }
+        location ^~ /ib/api/v1/map4/ { proxy_pass http://cis_map/api/v1/map4/; }
+        location ^~ /api/v1/map3/ { proxy_pass http://cis_map/api/v1/map3/; }
+        location ^~ /api/v1/map4/ { proxy_pass http://cis_map/api/v1/map4/; }
+        location ^~ /ib/geoserver/ {
+          proxy_set_header X-Forwarded-Prefix /ib/geoserver;
+          proxy_set_header X-Forwarded-Host $http_host;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_pass http://cangling_map/;
+          proxy_buffering off;
+        }
+        location ^~ /geoserver/ {
+          proxy_set_header X-Forwarded-Prefix /geoserver;
+          proxy_set_header X-Forwarded-Host $http_host;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_pass http://cangling_map/;
+          proxy_buffering off;
+        }
+        location = /cangling-tile { return 308 /cangling-tile/; }
+        location ^~ /cangling-tile/ {
+          proxy_set_header X-Forwarded-Prefix /cangling-tile;
+          proxy_set_header X-Forwarded-Host $http_host;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_pass http://cangling_tile/;
+          proxy_buffering off;
+        }
+        location = /cangling-broker { return 308 /cangling-broker/; }
+        location ^~ /cangling-broker/ {
+          proxy_set_header X-Forwarded-Prefix /cangling-broker;
+          proxy_set_header X-Forwarded-Host $http_host;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection $connection_upgrade;
+          proxy_pass http://cis_mqtt/;
+          proxy_request_buffering off;
+          proxy_buffering off;
+        }
+        location ^~ /tilecache/ { proxy_pass http://cangling_tile/; }
+        location /np4-images/ { root /var/www; }
+        location ^~ /ib/ { proxy_pass http://cis_server/; proxy_request_buffering off; proxy_buffering off; }
+        location / { proxy_pass http://cis_base/; }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: cangling-nginx, namespace: cangling}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: cangling-nginx}}
+  template:
+    metadata: {labels: {app: cangling-nginx}}
+    spec:
+      enableServiceLinks: false
+      nodeSelector: {kubernetes.io/hostname: n01}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: nginx
+          image: hub.cangling.cn/cangling/nginx-rtmp:v4.2.35
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 7600, hostPort: 7600}]
+          volumeMounts:
+            - {name: config, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true}
+            - {name: html, mountPath: /var/www/html}
+            - {name: images, mountPath: /var/www/np4-images}
+            - {name: logs, mountPath: /var/log/nginx}
+      volumes:
+        - {name: config, configMap: {name: cangling-nginx}}
+        - {name: html, hostPath: {path: /opt/cangling-nginx/html, type: Directory}}
+        - {name: images, hostPath: {path: /mnt/cangling/cangling-share/storage/np4-resource-images, type: Directory}}
+        - {name: logs, hostPath: {path: /opt/cangling/local/nginx-log, type: DirectoryOrCreate}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cangling-map
+  namespace: cangling
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: cangling-map
+  template:
+    metadata:
+      labels:
+        app: cangling-map
+    spec:
+      enableServiceLinks: false
+      imagePullSecrets:
+        - name: harbor-pull
+      nodeSelector:
+        kubernetes.io/hostname: n01
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: cangling-map
+          image: hub.cangling.cn/cangling/cangling-map:0.1.11
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: MAP_SERVER_ADDRESS, value: "0.0.0.0:3000"}
+            - {name: CATALOG_DATABASE_URL, value: "sqlite:///data/catalog.db?mode=rwc"}
+            - {name: WMTS_CACHE_BACKEND, value: cangling-tile}
+            - {name: CANGLING_TILE_URL, value: "http://cangling-tile:7601"}
+            - {name: CANGLING_TILE_TOKEN, valueFrom: {secretKeyRef: {name: cangling-secret, key: CANGLING_TILE_AUTH_TOKEN}}}
+            - {name: MAP_CACHE_ROOT, value: /cache}
+            - {name: MAP_RENDER_BACKEND, value: cpu}
+            - {name: RUST_LOG, value: "map_server=info,cangling_gdal_core=info,tower_http=info"}
+          ports:
+            - {name: http, containerPort: 3000}
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {cpu: "4", memory: 4Gi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: cache, mountPath: /cache}
+            - {name: geodata, mountPath: /geodata, readOnly: true}
+      volumes:
+        - {name: data, hostPath: {path: /opt/cangling/local/cangling-map/data, type: Directory}}
+        - {name: cache, hostPath: {path: /opt/cangling/local/cangling-map/cache, type: Directory}}
+        - {name: geodata, hostPath: {path: /opt/cangling/local/cangling-map/geodata, type: DirectoryOrCreate}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cangling-map
+  namespace: cangling
+spec:
+  selector:
+    app: cangling-map
+  ports:
+    - {name: http, port: 3000, targetPort: http}

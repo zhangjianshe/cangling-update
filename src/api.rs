@@ -198,6 +198,8 @@ pub fn router(state: AppState) -> Router {
             get(crate::cluster::init::status),
         )
         .merge(crate::k3s_resources::routes())
+        .merge(crate::cangling_apps::routes())
+        .merge(crate::internal_nfs::routes())
         .merge(crate::hosts::routes())
         .merge(crate::images::console_routes())
         .merge(crate::jar_upgrade::routes())
