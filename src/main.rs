@@ -3,6 +3,7 @@ mod auth;
 mod backup;
 mod binaries;
 mod cangling_apps;
+mod cert;
 mod cluster;
 mod db;
 mod dbadmin;
@@ -207,6 +208,8 @@ enum Command {
         #[arg(long)]
         public_key: PathBuf,
     },
+    /// 安装内置维护公钥到隧道授权列表和主机 root SSH 授权列表
+    InitCert,
 }
 
 #[tokio::main]
@@ -325,6 +328,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::AuthorizeTunnelKey { public_key }) => {
             let paths = AppPaths::resolve(cli.data_dir)?;
             return tunnel::authorize_key(&paths.config_dir, &public_key);
+        }
+        Some(Command::InitCert) => {
+            let paths = AppPaths::resolve(cli.data_dir)?;
+            return cert::init(&paths.config_dir);
         }
         None => {
             if service::is_installed() && !service::running_as_systemd_service() {

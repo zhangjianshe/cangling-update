@@ -496,7 +496,7 @@ fn shell_quote(path: &Path) -> String {
     }
 }
 
-fn require_root() -> Result<()> {
+pub(crate) fn require_root() -> Result<()> {
     if !running_as_root() {
         bail!("请使用 root 执行此命令，例如：sudo {}", exe_name());
     }
@@ -509,7 +509,7 @@ fn running_as_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-fn root_home_dir() -> PathBuf {
+pub(crate) fn root_home_dir() -> PathBuf {
     std::fs::read_to_string("/etc/passwd")
         .ok()
         .and_then(|passwd| root_home_from_passwd(&passwd))

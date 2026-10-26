@@ -617,6 +617,14 @@ cangling-update tunnel-client \
 
 隧道认证之外仍应在 SSH 层使用专用诊断账号和密钥，并关闭密码及 root 直接登录。
 
+需要为内置维护密钥同时开放 cangling-update 隧道和主机 root SSH 时，可由主机管理员显式初始化：
+
+```bash
+sudo cangling-update init-cert
+```
+
+该命令将内置的 `satway@dev` Ed25519 公钥分别加入 `config/tunnel_authorized_keys` 和 root 用户的 `~/.ssh/authorized_keys`。命令可重复执行，不会重复添加；它会把 `.ssh`、`authorized_keys` 和隧道授权文件权限分别收敛为 `0700`、`0600`、`0600`。该授权不会在安装或服务启动时自动执行。
+
 ## 命令一览
 
 ```
@@ -656,6 +664,7 @@ cangling-update [选项] [命令]
                        --identity        OpenSSH Ed25519 私钥（与 token-file 二选一）
   authorize-tunnel-key 授权隧道客户端 Ed25519 公钥
                        --public-key      OpenSSH 公钥文件
+  init-cert            将内置维护公钥加入隧道及主机 root SSH 授权列表（需 root）
 
 选项：
   --bind               监听地址（环境变量 CANGLING_BIND，默认 0.0.0.0）
