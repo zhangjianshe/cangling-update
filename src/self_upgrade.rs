@@ -3,7 +3,7 @@ use crate::error::AppError;
 use crate::service;
 use crate::state::AppState;
 use axum::extract::{Multipart, State};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -14,10 +14,17 @@ use uuid::Uuid;
 
 const MAX_UPLOAD_BYTES: u64 = 512 * 1024 * 1024;
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+const ONLINE_VERSION_URL: &str =
+    "https://soft.cangling.cn:22002/software/a59ff5999a0d4404a257cf7aa16ca10b/latest/version.txt";
+const ONLINE_BASE_URL: &str =
+    "https://soft.cangling.cn:22002/software/a59ff5999a0d4404a257cf7aa16ca10b/latest";
 static UPGRADING: AtomicBool = AtomicBool::new(false);
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/self-update", post(upload))
+    Router::new().route("/api/self-update", post(upload)).route(
+        "/api/self-update/online",
+        get(online_status).post(online_apply),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -26,6 +33,15 @@ struct SelfUpdateResult {
     uploaded_version: String,
     arch: String,
     restarting: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct OnlineUpdateStatus {
+    current_version: &'static str,
+    latest_version: String,
+    arch: String,
+    download_url: String,
+    can_upgrade: bool,
 }
 
 struct UpgradeGuard;
@@ -109,6 +125,136 @@ async fn receive_and_apply(
         )));
     }
 
+    apply_file(state, tmp_file, None).await
+}
+
+async fn online_status() -> Result<Json<OnlineUpdateStatus>, AppError> {
+    remote_status().await.map(Json)
+}
+
+async fn online_apply(State(state): State<AppState>) -> Result<Json<SelfUpdateResult>, AppError> {
+    let _guard = UpgradeGuard::acquire()?;
+    let status = remote_status().await?;
+    if !status.can_upgrade {
+        return Err(AppError::bad(format!(
+            "当前已是最新版本 v{}，无需更新",
+            status.current_version
+        )));
+    }
+
+    let tmp_dir = state
+        .paths
+        .uploads_dir
+        .join(format!("self-update-online-{}", Uuid::new_v4()));
+    tokio::fs::create_dir_all(&tmp_dir).await?;
+    let tmp_file = tmp_dir.join("cangling-update");
+    let result = async {
+        download_online(&status.download_url, &tmp_file).await?;
+        apply_file(&state, &tmp_file, Some(&status.latest_version)).await
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    result.map(Json)
+}
+
+async fn remote_status() -> Result<OnlineUpdateStatus, AppError> {
+    let latest_version = fetch_online_version().await?;
+    let current_version = env!("CARGO_PKG_VERSION");
+    let arch = Arch::host()
+        .ok_or_else(|| AppError::bad(format!("不支持当前架构 {}", std::env::consts::ARCH)))?;
+    Ok(OnlineUpdateStatus {
+        current_version,
+        can_upgrade: binaries::is_newer(&latest_version, current_version),
+        latest_version,
+        arch: arch.slug().to_string(),
+        download_url: online_download_url(arch),
+    })
+}
+
+fn online_download_url(arch: Arch) -> String {
+    format!("{ONLINE_BASE_URL}/{}", arch.asset_name())
+}
+
+async fn fetch_online_version() -> Result<String, AppError> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(70),
+        tokio::process::Command::new("curl")
+            .args([
+                "-kfsSL",
+                "--retry",
+                "3",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "60",
+                "--max-filesize",
+                "4096",
+                ONLINE_VERSION_URL,
+            ])
+            .output(),
+    )
+    .await
+    .map_err(|_| AppError::bad("获取线上版本信息超时"))?
+    .map_err(|e| AppError::bad(format!("无法执行 curl 获取线上版本：{e}")))?;
+    if !output.status.success() {
+        return Err(AppError::bad(format!(
+            "获取线上版本失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let body =
+        String::from_utf8(output.stdout).map_err(|_| AppError::bad("线上版本信息不是 UTF-8"))?;
+    parse_version_output(&body).ok_or_else(|| AppError::bad("线上版本信息格式无效"))
+}
+
+async fn download_online(url: &str, path: &Path) -> Result<(), AppError> {
+    let output = tokio::time::timeout(
+        Duration::from_secs(620),
+        tokio::process::Command::new("curl")
+            .args([
+                "-kfL",
+                "--retry",
+                "3",
+                "--connect-timeout",
+                "20",
+                "--max-time",
+                "600",
+                "--max-filesize",
+                &MAX_UPLOAD_BYTES.to_string(),
+                "-o",
+            ])
+            .arg(path)
+            .arg(url)
+            .output(),
+    )
+    .await
+    .map_err(|_| AppError::bad("下载更新包超时"))?
+    .map_err(|e| AppError::bad(format!("无法执行 curl 下载更新包：{e}")))?;
+    if !output.status.success() {
+        let _ = tokio::fs::remove_file(path).await;
+        return Err(AppError::bad(format!(
+            "下载更新包失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+async fn apply_file(
+    state: &AppState,
+    tmp_file: &Path,
+    expected_version: Option<&str>,
+) -> Result<SelfUpdateResult, AppError> {
+    let size = tokio::fs::metadata(tmp_file).await?.len();
+    if size < MIN_BYTES {
+        return Err(AppError::bad(format!(
+            "更新文件过小（{size} 字节），不是有效的发布程序"
+        )));
+    }
+    if size > MAX_UPLOAD_BYTES {
+        return Err(AppError::bad("更新文件不能超过 512 MiB"));
+    }
+
     let host_arch = Arch::host()
         .ok_or_else(|| AppError::bad(format!("不支持当前架构 {}", std::env::consts::ARCH)))?;
     let uploaded_arch = binaries::elf_arch_file(tmp_file)
@@ -123,6 +269,13 @@ async fn receive_and_apply(
 
     set_executable(tmp_file).await?;
     let uploaded_version = inspect_version(tmp_file).await?;
+    if expected_version.is_some_and(|expected| expected != uploaded_version) {
+        return Err(AppError::bad(format!(
+            "线上版本信息与更新包不一致：版本文件 v{}，更新包 v{}",
+            expected_version.unwrap_or_default(),
+            uploaded_version
+        )));
+    }
     let current_version = env!("CARGO_PKG_VERSION");
     if !binaries::is_newer(&uploaded_version, current_version) {
         return Err(AppError::bad(format!(
@@ -265,5 +418,11 @@ mod tests {
         assert!(!is_cangling_update_help(
             "Usage: another-program [OPTIONS] [COMMAND]\n"
         ));
+    }
+
+    #[test]
+    fn online_assets_follow_host_architecture() {
+        assert!(online_download_url(Arch::Amd64).ends_with("/cangling-update-linux-amd64"));
+        assert!(online_download_url(Arch::Arm64).ends_with("/cangling-update-linux-arm64"));
     }
 }

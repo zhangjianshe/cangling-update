@@ -1014,6 +1014,13 @@
     .self-update-form { padding: 20px; }
     .self-update-current { margin: 0 0 14px; color: var(--muted); }
     .self-update-current strong { color: var(--text); }
+    .self-update-online {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--bg-3);
+    }
+    .self-update-online-status { min-width: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .self-update-online .btn { flex: 0 0 auto; }
     .self-update-drop {
       min-height: 116px; padding: 18px; box-sizing: border-box;
       display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
@@ -1808,6 +1815,10 @@
       $("#dialog-body").innerHTML = `
         <div class="self-update-form">
           <p class="self-update-current">当前版本：<strong>v${esc(current)}</strong></p>
+          <div class="self-update-online">
+            <span class="self-update-online-status" id="self-update-online-status">正在获取线上版本…</span>
+            <button type="button" class="btn primary" id="self-update-online" disabled>在线下载</button>
+          </div>
           <div class="field">
             <input id="self-update-file" type="file" />
             <div class="self-update-drop" id="self-update-drop" role="button" tabindex="0" aria-label="拖动或选择 cangling-update 程序">
@@ -1836,6 +1847,8 @@
       const fileName = $("#self-update-file-name");
       const fileSize = $("#self-update-file-size");
       const remove = $("#self-update-remove");
+      const online = $("#self-update-online");
+      const onlineStatus = $("#self-update-online-status");
       const action = $("#dialog-extra");
       const flash = $("#self-update-flash");
       action.disabled = true;
@@ -1897,6 +1910,67 @@
       });
       remove.onclick = clearFile;
       drop.focus();
+      online.onclick = submitOnlineSelfUpdate;
+      api("/api/self-update/online").then((info) => {
+        onlineStatus.textContent = info.can_upgrade
+          ? `发现新版本 v${info.latest_version}（${info.arch}）`
+          : `线上最新版 v${info.latest_version}，当前无需更新`;
+        online.textContent = info.can_upgrade ? `在线下载 v${info.latest_version}` : "已是最新";
+        online.disabled = !info.can_upgrade;
+      }).catch((error) => {
+        onlineStatus.textContent = "无法获取线上版本：" + error.message;
+        online.textContent = "重新检查";
+        online.disabled = false;
+        online.onclick = openSelfUpdate;
+      });
+    }
+
+    async function submitOnlineSelfUpdate() {
+      const input = $("#self-update-file");
+      const drop = $("#self-update-drop");
+      const remove = $("#self-update-remove");
+      const online = $("#self-update-online");
+      const action = $("#dialog-extra");
+      const box = $("#self-update-flash");
+      const progress = $("#self-update-progress");
+      const progressTrack = $("#self-update-progress-track");
+      const progressBar = $("#self-update-progress-bar");
+      const progressPct = $("#self-update-progress-pct");
+      if (!online || online.disabled) return;
+      action.disabled = true;
+      online.disabled = true;
+      input.disabled = true;
+      if (remove) remove.disabled = true;
+      if (drop) drop.classList.add("is-disabled");
+      box.hidden = true;
+      progress.hidden = false;
+      progressTrack.classList.add("checking");
+      progressBar.style.width = "32%";
+      progressPct.textContent = "下载中";
+      $("#self-update-progress-msg").textContent = "正在下载并校验更新包";
+      try {
+        const payload = await api("/api/self-update/online", { method: "POST" });
+        progressTrack.classList.remove("checking");
+        progressBar.style.width = "100%";
+        progressPct.textContent = "完成";
+        $("#self-update-progress-msg").textContent = "更新完成，正在重启服务";
+        box.className = "flash ok";
+        box.textContent = `已从 v${payload.current_version} 在线更新到 v${payload.uploaded_version}，服务正在重启…`;
+        box.hidden = false;
+        setTimeout(() => location.reload(), 4000);
+      } catch (error) {
+        progress.hidden = true;
+        progressTrack.classList.remove("checking");
+        progressBar.style.width = "0";
+        box.className = "flash err";
+        box.textContent = error.message || "在线更新失败";
+        box.hidden = false;
+        online.disabled = false;
+        input.disabled = false;
+        if (remove) remove.disabled = false;
+        if (drop) drop.classList.remove("is-disabled");
+        action.disabled = !(input.files && input.files[0]);
+      }
     }
 
     function submitSelfUpdate() {
@@ -2600,31 +2674,31 @@
 
     function canglingInternalNfsPanel(config) {
       const status = state.canglingInternalNfs || {};
-      const nfs = status.config || { dataDir: "/opt/local/nfs/data", image: "hub.cangling.cn/cangling/nfs-server:1.0", namespace: config.namespace, exportPath: "/" };
+      const nfs = status.config || { dataDir: "/opt/local/nfs/data", image: "ghcr.io/kubernetes-sigs/nfs-ganesha:v6.5", namespace: config.namespace, exportPath: "/" };
       const serverAddress = nfs.serverAddress || status.detectedServerAddress || "";
       const exportPath = canglingNfsExportPath(nfs.exportPath || status.exportRoot || "/");
       const running = Boolean(status.running);
       const stateTitle = running ? "运行中" : status.configured ? "已停止" : "未配置";
       const detail = status.detail || "尚未读取 NFS 服务状态";
-      const composeDir = status.composeDir || "/opt/local/nfs";
-      const composeFile = status.composeFile || `${composeDir}/docker-compose.yaml`;
+      const manifestDir = status.manifestDir || "/opt/local/nfs";
+      const manifestFile = status.manifestFile || `${manifestDir}/ganesha.yaml`;
       const output = status.actionOutput ? `<pre class="cangling-nfs-output">${esc(status.actionOutput)}</pre>` : "";
       return `<div class="card">
-        <div class="cangling-section-head"><div><h3>集群内存储</h3><p class="hint">在当前 cangling-update 主机上通过 Docker Compose 提供 NFSv4，共享服务必须先于苍灵应用启动</p></div></div>
+        <div class="cangling-section-head"><div><h3>集群内存储</h3><p class="hint">在 K3s 内运行单实例 NFS-Ganesha，为不同节点上的 Pod 提供 NFSv4 RWX 目录共享</p></div></div>
         <div class="cangling-nfs-status">
           <div class="cangling-nfs-state"><span class="dot ${running ? "online" : "offline"}"></span><div><strong>${esc(stateTitle)}</strong><span>${esc(detail)}</span></div></div>
-          <div class="cangling-nfs-location">Compose：<code>${esc(composeFile)}</code><br/>导出根：<code>${esc(canglingNfsAddress(serverAddress || "待识别地址", exportPath))}</code></div>
-          <div class="cangling-nfs-actions"><button type="button" class="btn" id="cangling-nfs-refresh">刷新状态</button><button type="button" class="btn" id="cangling-nfs-apply" ${running ? "" : "disabled"}>应用到苍灵配置</button><button type="button" class="btn danger" id="cangling-nfs-stop" ${running ? "" : "disabled"}>停止</button><button type="button" class="btn primary" id="cangling-nfs-start">保存配置并启动</button></div>
+          <div class="cangling-nfs-location">K3s 清单：<code>${esc(manifestFile)}</code><br/>导出根：<code>${esc(canglingNfsAddress(serverAddress || "待识别地址", exportPath))}</code></div>
+          <div class="cangling-nfs-actions"><button type="button" class="btn" id="cangling-nfs-refresh">刷新状态</button><button type="button" class="btn" id="cangling-nfs-apply" ${running ? "" : "disabled"}>应用到苍灵配置</button><button type="button" class="btn danger" id="cangling-nfs-stop" ${running ? "" : "disabled"}>停止</button><button type="button" class="btn primary" id="cangling-nfs-start">保存配置并部署</button></div>
         </div>
         <div class="cangling-nfs-form">
-          <div class="field"><label for="cangling-nfs-compose-dir">Compose 工作目录</label><input id="cangling-nfs-compose-dir" type="text" value="${esc(composeDir)}" readonly /><p class="hint">系统固定位置，不随数据目录变化</p></div>
-          <div class="field"><label for="cangling-nfs-data-dir">宿主机数据目录</label><input id="cangling-nfs-data-dir" type="text" value="${esc(nfs.dataDir || "/opt/local/nfs/data")}" spellcheck="false" /><p class="hint">实际保存共享数据和 JAR 发布源，可放在容量更大的磁盘</p></div>
-          <div class="field"><label for="cangling-nfs-image">NFS 容器镜像</label><input id="cangling-nfs-image" type="text" value="${esc(nfs.image || "hub.cangling.cn/cangling/nfs-server:1.0")}" spellcheck="false" /><p class="hint">默认使用苍灵私有仓库中的 amd64/arm64 多架构镜像</p></div>
+          <div class="field"><label for="cangling-nfs-compose-dir">K3s 清单目录</label><input id="cangling-nfs-compose-dir" type="text" value="${esc(manifestDir)}" readonly /><p class="hint">系统固定位置，不随数据目录变化</p></div>
+          <div class="field"><label for="cangling-nfs-data-dir">存储节点数据目录</label><input id="cangling-nfs-data-dir" type="text" value="${esc(nfs.dataDir || "/opt/local/nfs/data")}" spellcheck="false" /><p class="hint">通过 hostPath 持久化；Ganesha Pod 固定在当前 cangling-update 所在 K3s 节点</p></div>
+          <div class="field"><label for="cangling-nfs-image">NFS-Ganesha 容器镜像</label><input id="cangling-nfs-image" type="text" value="${esc(nfs.image || "ghcr.io/kubernetes-sigs/nfs-ganesha:v6.5")}" spellcheck="false" /><p class="hint">Kubernetes SIG Storage 发布的 amd64/arm64 多架构用户态 NFS 镜像</p></div>
           <div class="field"><label for="cangling-nfs-server-address">NFS 服务地址</label><div class="cangling-global-select"><input id="cangling-nfs-server-address" type="text" value="${esc(serverAddress)}" placeholder="例如 192.168.3.121" spellcheck="false" /><button type="button" class="btn" id="cangling-nfs-detect-address">自动识别</button></div><p class="hint">默认读取当前 cangling-update 所在 K3s 节点的 InternalIP，也可手动指定其他可被所有节点访问的地址</p></div>
           <div class="field"><label for="cangling-nfs-export-path">Export path</label><input id="cangling-nfs-export-path" type="text" value="${esc(exportPath)}" placeholder="/" spellcheck="false" /><p class="hint">NFS 导出根下的逻辑路径，缺省为 /；例如 /cangling</p></div>
           <div class="field"><label for="cangling-nfs-export">苍灵应用 NFS 地址</label><input id="cangling-nfs-export" type="text" value="${esc(canglingNfsAddress(serverAddress, exportPath))}" readonly /><p class="hint">启动时自动建立 ${esc(exportPath === "/" ? "" : exportPath)}/shared/${esc(config.namespace)} 与 ${esc(exportPath === "/" ? "" : exportPath)}/jars/${esc(config.namespace)}</p></div>
         </div>
-        <div class="cangling-nfs-risk"><strong>权限提示：</strong>NFS 容器使用 <code>privileged: true</code> 调用宿主机内核 NFS 能力。仅应在受信任的基础设施节点上运行，并通过防火墙限制 TCP 2049 仅供 K3s 节点访问。</div>
+        <div class="cangling-nfs-risk"><strong>部署说明：</strong>Ganesha 作为 K3s Deployment 运行，数据通过存储节点 <code>hostPath</code> 持久化，并以该节点 InternalIP:2049 供 kubelet 挂载。为兼容现有 root 容器写入采用 <code>No_Root_Squash</code>、必要 capabilities 与宽松 seccomp，仅允许 RFC1918 内网客户端。</div>
         ${output}
       </div>`;
     }
