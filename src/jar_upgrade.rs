@@ -5,6 +5,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,7 @@ static UPGRADING: AtomicBool = AtomicBool::new(false);
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/jar-upgrade/status", get(status))
+        .route("/api/jar-upgrade/check", post(check_environment))
         .route("/api/jar-upgrade/upload", post(upload))
         .route("/api/jar-upgrade/run", post(run))
         .route("/api/jar-upgrade/repair-storage", post(repair_storage))
@@ -85,6 +87,30 @@ struct JarUpgradeStatus {
     ready: bool,
     upgrading: bool,
     files: Vec<JarFileStatus>,
+    checked_at: Option<String>,
+    nodes: Vec<JarNodeStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JarNodeStatus {
+    name: String,
+    address: String,
+    ok: bool,
+    message: String,
+    targets: Vec<JarTarget>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JarTarget {
+    jar: String,
+    container: String,
+    path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct JarEnvironmentReport {
+    checked_at: String,
+    nodes: Vec<JarNodeStatus>,
 }
 
 async fn load_status() -> Result<JarUpgradeStatus, AppError> {
@@ -106,7 +132,16 @@ async fn load_status() -> Result<JarUpgradeStatus, AppError> {
                 .map(|value| value.as_secs()),
         });
     }
+    let report = tokio::fs::read(root.join("environment.json"))
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<JarEnvironmentReport>(&bytes).ok())
+        .unwrap_or_default();
+    let environment_ready = !report.nodes.is_empty()
+        && report.nodes.iter().all(|node| node.ok)
+        && report.nodes.iter().any(|node| !node.targets.is_empty());
     let ready = files.iter().any(|file| file.present)
+        && environment_ready
         && tokio::fs::metadata(&script)
             .await
             .is_ok_and(|item| item.is_file());
@@ -116,11 +151,356 @@ async fn load_status() -> Result<JarUpgradeStatus, AppError> {
         ready,
         upgrading: UPGRADING.load(Ordering::SeqCst),
         files,
+        checked_at: (!report.checked_at.is_empty()).then_some(report.checked_at),
+        nodes: report.nodes,
     })
 }
 
 async fn status() -> Result<Json<JarUpgradeStatus>, AppError> {
     load_status().await.map(Json)
+}
+
+async fn check_environment(
+    State(state): State<AppState>,
+) -> Result<Json<JarUpgradeStatus>, AppError> {
+    if UPGRADING.load(Ordering::SeqCst) {
+        return Err(AppError::conflict("JAR 升级正在执行，暂时不能检查环境"));
+    }
+    let hosts = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        let mut stmt = conn.prepare(
+            "SELECT name,host,ssh_port,username,kind FROM managed_hosts
+             ORDER BY CASE kind WHEN 'local' THEN 0 WHEN 'cluster' THEN 1 ELSE 2 END,name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?.clamp(1, u16::MAX as i64) as u16,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let root = deploy_dir();
+    let inspect_root = root.clone();
+    let (report, script) =
+        tokio::task::spawn_blocking(move || inspect_environment(hosts, &inspect_root))
+            .await
+            .map_err(|error| AppError::internal(format!("环境检查异常退出：{error}")))??;
+    tokio::fs::create_dir_all(&root).await?;
+    let report_bytes = serde_json::to_vec_pretty(&report)
+        .map_err(|error| AppError::internal(format!("无法保存检查结果：{error}")))?;
+    tokio::fs::write(root.join("environment.json"), report_bytes).await?;
+    tokio::fs::write(root.join("upgrade-jars.sh"), script).await?;
+    tokio::fs::set_permissions(
+        root.join("upgrade-jars.sh"),
+        std::fs::Permissions::from_mode(0o750),
+    )
+    .await?;
+    load_status().await.map(Json)
+}
+
+#[derive(Debug)]
+struct InspectedHost {
+    status: JarNodeStatus,
+    kind: String,
+    host: String,
+    port: u16,
+    username: String,
+}
+
+fn inspect_environment(
+    mut hosts: Vec<(String, String, u16, String, String)>,
+    root: &Path,
+) -> Result<(JarEnvironmentReport, String), AppError> {
+    if !hosts.iter().any(|item| item.4 == "local") {
+        hosts.insert(
+            0,
+            (
+                "本机".into(),
+                String::new(),
+                22,
+                "root".into(),
+                "local".into(),
+            ),
+        );
+    }
+    let inspected = hosts
+        .into_iter()
+        .map(|(name, host, port, username, kind)| {
+            inspect_jar_host(name, host, port, username, kind)
+        })
+        .collect::<Vec<_>>();
+    let report = JarEnvironmentReport {
+        checked_at: chrono::Utc::now().to_rfc3339(),
+        nodes: inspected.iter().map(|item| item.status.clone()).collect(),
+    };
+    let script = generate_upgrade_script(root, &inspected)?;
+    Ok((report, script))
+}
+
+fn inspect_jar_host(
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    kind: String,
+) -> InspectedHost {
+    let address = if kind == "local" {
+        "本机".to_string()
+    } else {
+        format!("{username}@{host}:{port}")
+    };
+    let output = if kind == "local" {
+        discover_jar_targets(Command::new("docker"))
+    } else {
+        discover_remote_jar_targets(&host, port, &username)
+    };
+    let status = match output {
+        Ok(targets) if targets.is_empty() => JarNodeStatus {
+            name,
+            address,
+            ok: true,
+            message: "未发现挂载规定 JAR 的运行容器".into(),
+            targets,
+        },
+        Ok(targets) => JarNodeStatus {
+            name,
+            address,
+            ok: true,
+            message: format!("发现 {} 个待升级容器", targets.len()),
+            targets,
+        },
+        Err(error) => JarNodeStatus {
+            name,
+            address,
+            ok: false,
+            message: error.to_string(),
+            targets: Vec::new(),
+        },
+    };
+    InspectedHost {
+        status,
+        kind,
+        host,
+        port,
+        username,
+    }
+}
+
+fn discover_remote_jar_targets(
+    host: &str,
+    port: u16,
+    username: &str,
+) -> Result<Vec<JarTarget>, AppError> {
+    const SCRIPT: &str = r#"set -eu
+for c in $(docker ps --format '{{.Names}}'); do
+  source=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/app.jar"}}{{.Source}}{{end}}{{end}}' "$c")
+  [ -n "$source" ] && printf '%s|%s\n' "$c" "$source"
+done
+"#;
+    let destination = format!("{username}@{host}");
+    let mut child = Command::new("ssh")
+        .args([
+            "-p",
+            &port.to_string(),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=10",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            &destination,
+            "sh",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| AppError::internal(format!("无法连接 {destination}：{error}")))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::internal("无法发送远程检查脚本"))?
+        .write_all(SCRIPT.as_bytes())
+        .map_err(|error| AppError::internal(format!("发送远程检查脚本失败：{error}")))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| AppError::internal(format!("等待 {destination} 检查失败：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(output_tail(
+            &output.stderr,
+            "远程 Docker 检查失败",
+        )));
+    }
+    let mut targets = Vec::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((container, source)) = line.split_once('|') else {
+            continue;
+        };
+        let Some(jar) = Path::new(source).file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if REQUIRED_JARS.contains(&jar) {
+            targets.push(JarTarget {
+                jar: jar.into(),
+                container: container.into(),
+                path: source.into(),
+            });
+        }
+    }
+    targets.sort_by(|a, b| {
+        a.jar
+            .cmp(&b.jar)
+            .then_with(|| a.container.cmp(&b.container))
+    });
+    targets.dedup_by(|a, b| a.jar == b.jar && a.container == b.container && a.path == b.path);
+    Ok(targets)
+}
+
+fn discover_jar_targets(mut command: Command) -> Result<Vec<JarTarget>, AppError> {
+    command
+        .args(["ps", "--format", "{{.Names}}"])
+        .stdout(Stdio::piped());
+    let output = command
+        .output()
+        .map_err(|error| AppError::internal(format!("无法执行 Docker 检查：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(output_tail(
+            &output.stderr,
+            "无法读取运行容器",
+        )));
+    }
+    let names = String::from_utf8_lossy(&output.stdout);
+    let mut targets = Vec::new();
+    for container in names.lines().map(str::trim).filter(|name| !name.is_empty()) {
+        let output = Command::new("docker")
+            .args(["inspect", container])
+            .output()
+            .map_err(|error| AppError::internal(format!("无法检查容器 {container}：{error}")))?;
+        if !output.status.success() {
+            continue;
+        }
+        let Ok(documents) = serde_json::from_slice::<Vec<serde_json::Value>>(&output.stdout) else {
+            continue;
+        };
+        let Some(mounts) = documents
+            .first()
+            .and_then(|document| document.get("Mounts"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        for mount in mounts {
+            let Some(source) = mount.get("Source").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            let Some(jar) = Path::new(source).file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if REQUIRED_JARS.contains(&jar) {
+                targets.push(JarTarget {
+                    jar: jar.into(),
+                    container: container.into(),
+                    path: source.into(),
+                });
+            }
+        }
+    }
+    targets.sort_by(|a, b| {
+        a.jar
+            .cmp(&b.jar)
+            .then_with(|| a.container.cmp(&b.container))
+    });
+    targets.dedup_by(|a, b| a.jar == b.jar && a.container == b.container && a.path == b.path);
+    Ok(targets)
+}
+
+fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<String, AppError> {
+    let mut script = String::from("#!/bin/sh\nset -eu\nRUN_ID=$(date +%Y%m%d-%H%M%S)\nINCOMING=");
+    script.push_str(&shell_quote(&root.join("incoming").display().to_string()));
+    script.push_str("\nUPDATED=0\n");
+    for node in hosts {
+        if !node.status.ok {
+            continue;
+        }
+        for target in &node.status.targets {
+            let incoming = format!("$INCOMING/{}", target.jar);
+            if node.kind == "local" {
+                let backup_dir = root.join("backups");
+                let backup = format!(
+                    "{}/\"$RUN_ID\"/{}/{}",
+                    shell_quote(&backup_dir.display().to_string()),
+                    safe_name(&node.status.name),
+                    shell_quote(&target.jar)
+                );
+                script.push_str(&format!(
+                    "if [ -f {incoming} ]; then\n  mkdir -p {}\n  cp -a {} {}\n  if ! (install -m 0644 {incoming} {} && docker restart {} >/dev/null && test \"$(docker inspect -f '{{{{.State.Running}}}}' {})\" = true); then\n    cp -a {} {}\n    docker restart {} >/dev/null || true\n    echo '升级失败，已恢复 {}' >&2\n    exit 1\n  fi\n  UPDATED=$((UPDATED+1))\nfi\n",
+                    format!("{}/\"$RUN_ID\"/{}", shell_quote(&backup_dir.display().to_string()), safe_name(&node.status.name)),
+                    shell_quote(&target.path),
+                    &backup,
+                    shell_quote(&target.path),
+                    shell_quote(&target.container),
+                    shell_quote(&target.container),
+                    &backup,
+                    shell_quote(&target.path),
+                    shell_quote(&target.container),
+                    shell_quote(&target.container),
+                ));
+            } else {
+                let destination = format!("{}@{}", node.username, node.host);
+                let remote_backup_dir = format!(
+                    "/opt/cangling/jar-backups/\"$RUN_ID\"/{}",
+                    safe_name(&node.status.name)
+                );
+                let remote_backup = format!("{}/{}", remote_backup_dir, shell_quote(&target.jar));
+                let remote_temp = format!("{}.cangling-update-$RUN_ID", target.path);
+                let ssh = format!(
+                    "ssh -p {} -o BatchMode=yes -o StrictHostKeyChecking=accept-new {}",
+                    node.port,
+                    shell_quote(&destination)
+                );
+                let scp = format!(
+                    "scp -P {} -o BatchMode=yes -o StrictHostKeyChecking=accept-new",
+                    node.port
+                );
+                let remote_command = format!(
+                    "set -eu; RUN_ID=$(date +%Y%m%d-%H%M%S); mkdir -p {}; cp -a {} {}; if ! (install -m 0644 {} {} && rm -f {} && docker restart {} >/dev/null && test \\\"$(docker inspect -f '{{{{.State.Running}}}}' {})\\\" = true); then cp -a {} {}; docker restart {} >/dev/null || true; exit 1; fi",
+                    remote_backup_dir,
+                    shell_quote(&target.path), shell_quote(&remote_backup),
+                    shell_quote(&remote_temp), shell_quote(&target.path), shell_quote(&remote_temp),
+                    shell_quote(&target.container), shell_quote(&target.container),
+                    shell_quote(&remote_backup), shell_quote(&target.path), shell_quote(&target.container),
+                );
+                script.push_str(&format!(
+                    "if [ -f {incoming} ]; then\n  {scp} {incoming} {}\n  {ssh} {}\n  UPDATED=$((UPDATED+1))\nfi\n",
+                    shell_quote(&format!("{destination}:{remote_temp}")),
+                    shell_quote(&remote_command),
+                ));
+            }
+        }
+    }
+    script.push_str("[ \"$UPDATED\" -gt 0 ] || { echo '没有发现与本次上传匹配的运行容器' >&2; exit 1; }\necho \"JAR 升级完成，共更新 $UPDATED 个容器\"\n");
+    Ok(script)
+}
+
+fn safe_name(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 async fn upload(mut multipart: Multipart) -> Result<Json<JarUpgradeStatus>, AppError> {
@@ -895,5 +1275,31 @@ mod tests {
             "cangling"
         );
         assert!(derive_share_name("10.166.48.1:/").is_err());
+    }
+
+    #[test]
+    fn generated_script_uses_discovered_container_and_mount() {
+        let hosts = vec![InspectedHost {
+            status: JarNodeStatus {
+                name: "master".into(),
+                address: "本机".into(),
+                ok: true,
+                message: String::new(),
+                targets: vec![JarTarget {
+                    jar: "cis-server-1.0.0.jar".into(),
+                    container: "cangling-core-cis-server-1".into(),
+                    path: "/opt/np4/jars/cis-server-1.0.0.jar".into(),
+                }],
+            },
+            kind: "local".into(),
+            host: String::new(),
+            port: 22,
+            username: "root".into(),
+        }];
+        let script =
+            generate_upgrade_script(Path::new("/opt/cangling/jar-deploy"), &hosts).expect("script");
+        assert!(script.contains("cangling-core-cis-server-1"));
+        assert!(script.contains("/opt/np4/jars/cis-server-1.0.0.jar"));
+        assert!(script.contains("JAR 升级完成"));
     }
 }

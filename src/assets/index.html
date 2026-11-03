@@ -2174,7 +2174,7 @@
       const roleName = { standalone: "单机", master: "主节点", worker: "工作节点" }[st.role] || st.role;
       if (st.role === "standalone") {
         $("#main").innerHTML = `
-          <div class="title-row"><div><h2>主机节点</h2><div class="path">主机资产与远程终端</div></div><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div>
+          <div class="title-row"><div><h2>主机节点</h2><div class="path">主机资产与远程终端</div></div><div class="row"><button type="button" class="btn" id="btn-host-trust">主机互信</button><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div></div>
           <div id="flash" hidden></div>
           <div class="card" id="cluster-overview-card">
             ${clusterOverviewHeader()}
@@ -2192,6 +2192,7 @@
           <div class="card"><h3>主机列表</h3><div id="nodes-body"></div></div>`;
         bindClusterOverviewButton();
         bindHostinfoNoteButton();
+        $("#btn-host-trust").onclick = startHostTrust;
         $("#btn-add-host").onclick = () => openHostForm();
         return;
       }
@@ -2213,7 +2214,7 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>主机节点</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
-          <button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button>
+          <div class="row"><button type="button" class="btn" id="btn-host-trust">主机互信</button><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div>
         </div>
         <div id="flash" hidden></div>
         <div class="card" id="cluster-overview-card">
@@ -2231,9 +2232,37 @@
       if (initBtn) initBtn.onclick = startClusterInit;
       const checkBtn = $("#btn-check-cluster");
       if (checkBtn) checkBtn.onclick = startClusterCheck;
+      $("#btn-host-trust").onclick = startHostTrust;
       $("#btn-add-host").onclick = () => openHostForm();
       bindClusterOverviewButton();
       bindHostinfoNoteButton();
+    }
+
+    async function startHostTrust() {
+      const hosts = state.managedHosts || [];
+      if (hosts.length < 2) { flash("err", "至少需要定义两台主机才能建立互信"); return; }
+      if (!(await confirmDialog(`将为当前 ${hosts.length} 台主机检查或生成 ED25519 密钥，并把所有公钥分发到每台主机。确定继续？`))) return;
+      const button = $("#btn-host-trust");
+      if (button) { button.disabled = true; button.textContent = "正在建立互信…"; }
+      try {
+        const job = await api("/api/hosts/trust", { method: "POST" });
+        const poll = async () => {
+          try {
+            const current = await api("/api/jobs/" + encodeURIComponent(job.id));
+            if (button) button.textContent = current.done ? "主机互信" : `${current.message || "正在建立互信"} ${current.percent || 0}%`;
+            if (!current.done) { setTimeout(poll, 1000); return; }
+            if (button) button.disabled = false;
+            flash(current.error ? "err" : "ok", current.error || current.message || "主机互信已建立");
+          } catch (error) {
+            if (button) { button.disabled = false; button.textContent = "主机互信"; }
+            flash("err", error.message);
+          }
+        };
+        poll();
+      } catch (error) {
+        if (button) { button.disabled = false; button.textContent = "主机互信"; }
+        flash("err", error.message);
+      }
     }
 
     function clusterOverviewHeader() {
@@ -4310,10 +4339,16 @@
         <td>${file.present ? fmtBytes(file.bytes) : "—"}</td>
         <td>${file.modified ? fmtDateTime(file.modified * 1000) : "—"}</td>
       </tr>`).join("");
+      const nodeRows = (data.nodes || []).map(node => `<tr>
+        <td>${esc(node.name)}</td><td><code>${esc(node.address)}</code></td>
+        <td class="${node.ok ? "jar-status-ok" : "jar-status-missing"}">${node.ok ? "通过" : "失败"}</td>
+        <td>${esc(node.message || "—")}</td>
+        <td>${(node.targets || []).map(target => `<div><code>${esc(target.container)}</code> ← ${esc(target.jar)}</div>`).join("") || "—"}</td>
+      </tr>`).join("");
       $("#main").innerHTML = `
         <div class="title-row">
-          <div><h2>JAR 升级</h2><div class="path">上传到 incoming，先升级 19，再升级 18</div></div>
-          <button class="btn" id="btn-jar-refresh">刷新</button>
+          <div><h2>JAR 升级</h2><div class="path">检查已登记主机，自动生成升级脚本并依次更新匹配容器</div></div>
+          <div class="row"><button class="btn" id="btn-jar-check" ${data.upgrading ? "disabled" : ""}>检查环境</button><button class="btn" id="btn-jar-refresh">刷新</button></div>
         </div>
         <div id="flash" hidden></div>
         <div class="jar-upgrade-grid">
@@ -4333,10 +4368,15 @@
           </div>
           <div class="card">
             <h3>升级流程</h3>
-            <ol class="hint"><li>可选择 1～4 个固定名称的 JAR；每次上传会替换上一批待升级文件</li><li>以当前版本为基础，仅覆盖本次上传的 JAR</li><li>生成 SHA-256 并同步到 19</li><li>升级并验证 19、18</li><li>失败自动回滚上一版本</li></ol>
+            <ol class="hint"><li>点击“检查环境”，逐台检查主机中的运行容器和 JAR 挂载路径</li><li>检查通过后自动生成升级脚本</li><li>可选择 1～4 个固定名称的 JAR；仅更新与上传文件匹配的容器</li><li>每个目标先备份旧 JAR，再替换并重启验证</li></ol>
             <p class="hint">脚本：<code>${esc(data.script)}</code></p>
             <pre class="task-log" id="jar-upgrade-log">${data.upgrading ? "升级任务正在运行…" : "等待操作"}</pre>
           </div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>环境检查结果</h3>
+          <p class="hint">${data.checked_at ? `检查时间：${esc(fmtDateTime(data.checked_at))}` : "尚未检查环境。检查失败的节点不会进入升级脚本。"}</p>
+          <div class="table-scroll"><table><thead><tr><th>主机</th><th>地址</th><th>状态</th><th>说明</th><th>发现的容器</th></tr></thead><tbody>${nodeRows || '<tr><td colspan="5">尚无检查结果</td></tr>'}</tbody></table></div>
         </div>
         <div class="card" style="margin-top:14px">
           <div class="title-row" style="margin-bottom:8px">
@@ -4349,10 +4389,25 @@
           <p class="hint">固定迁移：<code>10.166.48.1:/yw</code> → <code>//10.166.48.1/yw</code>，挂载点保持 <code>/nfs1</code>。本次一次性凭据已内置，不会进入浏览器请求或任务日志。</p>
         </div>`;
       $("#btn-jar-refresh").onclick = renderJarUpgrade;
+      $("#btn-jar-check").onclick = checkJarEnvironment;
       $("#btn-jar-upload").onclick = () => $("#jar-files").click();
       $("#jar-files").onchange = uploadJarFiles;
       $("#btn-jar-run").onclick = runJarUpgrade;
       $("#btn-jar-repair-storage").onclick = openJarStorageRepair;
+    }
+
+    async function checkJarEnvironment() {
+      const button = $("#btn-jar-check");
+      if (button) { button.disabled = true; button.textContent = "正在检查…"; }
+      try {
+        const data = await api("/api/jar-upgrade/check", { method: "POST" });
+        drawJarUpgrade(data);
+        const failed = (data.nodes || []).filter(node => !node.ok);
+        flash(failed.length ? "err" : "ok", failed.length ? `环境检查完成，${failed.length} 个节点失败，请处理后重新检查` : "环境检查通过，升级脚本已生成");
+      } catch (e) {
+        flash("err", e.message);
+        if (button) { button.disabled = false; button.textContent = "检查环境"; }
+      }
     }
 
     function openJarStorageRepair() {
@@ -4474,7 +4529,7 @@
     }
 
     async function runJarUpgrade() {
-      if (!(await confirmDialog("确定使用 incoming 中现有的一个或多个 JAR 滚动升级 19 和 18？"))) return;
+      if (!(await confirmDialog("确定调用最近一次环境检查生成的脚本，依次升级匹配的运行容器？"))) return;
       const button = $("#btn-jar-run"); if (button) button.disabled = true;
       try {
         const job = await api("/api/jar-upgrade/run", { method: "POST" });

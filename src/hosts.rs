@@ -4,7 +4,7 @@ use crate::state::AppState;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::net::IpAddr;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path as FsPath;
+use std::process::{Command, Stdio};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -26,8 +27,269 @@ const KNOWN_HOSTS_FILE: &str = "ssh-known-hosts";
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/hosts", get(list).post(create))
+        .route("/api/hosts/trust", post(create_trust))
         .route("/api/hosts/{id}", put(update).delete(remove))
         .route("/api/hosts/{id}/terminal", get(terminal))
+}
+
+#[derive(Debug, Clone)]
+struct TrustHost {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+    local: bool,
+    password: Option<String>,
+}
+
+async fn create_trust(
+    State(state): State<AppState>,
+) -> Result<Json<crate::progress::JobProgress>, AppError> {
+    let rows = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        sync_inventory(&conn, &state)?;
+        let mut stmt = conn.prepare(
+            "SELECT id,name,host,ssh_port,username,password_enc,kind,cluster_node_id,created_at,updated_at
+             FROM managed_hosts ORDER BY CASE kind WHEN 'local' THEN 0 WHEN 'cluster' THEN 1 ELSE 2 END,name",
+        )?;
+        let rows = stmt.query_map([], map_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    if rows.len() < 2 {
+        return Err(AppError::bad("至少需要定义两台主机才能建立互信"));
+    }
+    let mut hosts = Vec::with_capacity(rows.len());
+    for row in rows {
+        hosts.push(TrustHost {
+            name: row.name,
+            host: row.host,
+            port: row.ssh_port,
+            username: row.username,
+            local: row.kind == "local",
+            password: if row.password_enc.is_empty() {
+                None
+            } else {
+                Some(decrypt_password(&state, &row.password_enc)?)
+            },
+        });
+    }
+    let job = state.jobs.create();
+    let job_id = job.id.clone();
+    let jobs = state.jobs.clone();
+    let known_hosts = state.paths.config_dir.join(KNOWN_HOSTS_FILE);
+    let config_dir = state.paths.config_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        let total = (hosts.len() * 2) as u64;
+        let result = establish_trust(&hosts, &known_hosts, &config_dir, |message, current| {
+            jobs.set(&job_id, "host-trust", message, current, total);
+        });
+        match result {
+            Ok(count) => jobs.finish_ok(&job_id, &format!("已完成 {count} 台主机的双向互信")),
+            Err(error) => jobs.finish_err(&job_id, &error.to_string()),
+        }
+    });
+    Ok(Json(job))
+}
+
+fn establish_trust<F>(
+    hosts: &[TrustHost],
+    known_hosts: &FsPath,
+    config_dir: &FsPath,
+    mut progress: F,
+) -> Result<usize, AppError>
+where
+    F: FnMut(&str, u64),
+{
+    let mut keys = Vec::with_capacity(hosts.len());
+    for (index, host) in hosts.iter().enumerate() {
+        progress(
+            &format!("正在检查 {} 的 ED25519 密钥…", host.name),
+            index as u64,
+        );
+        let output = run_host_script(
+            host,
+            known_hosts,
+            config_dir,
+            r#"set -eu
+umask 077
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+if [ ! -s "$HOME/.ssh/id_ed25519" ] || [ ! -s "$HOME/.ssh/id_ed25519.pub" ]; then
+  ssh-keygen -q -t ed25519 -N '' -f "$HOME/.ssh/id_ed25519"
+fi
+head -n 1 "$HOME/.ssh/id_ed25519.pub"
+"#,
+        )?;
+        let key = output
+            .lines()
+            .map(str::trim)
+            .find(|line| line.starts_with("ssh-ed25519 "))
+            .ok_or_else(|| {
+                AppError::internal(format!("{} 未返回有效的 ED25519 公钥", host.name))
+            })?;
+        let fields = key.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 2
+            || fields[1].len() > 4096
+            || !fields[1].chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '+' | '/' | '=')
+            })
+        {
+            return Err(AppError::internal(format!(
+                "{} 返回的 ED25519 公钥格式无效",
+                host.name
+            )));
+        }
+        keys.push(format!(
+            "ssh-ed25519 {} cangling@{}",
+            fields[1],
+            safe_comment(&host.name)
+        ));
+    }
+    for (index, host) in hosts.iter().enumerate() {
+        progress(
+            &format!("正在向 {} 分发 {} 个公钥…", host.name, keys.len()),
+            (hosts.len() + index) as u64,
+        );
+        let mut script = String::from(
+            "set -eu\numask 077\nmkdir -p \"$HOME/.ssh\"\nchmod 700 \"$HOME/.ssh\"\ntouch \"$HOME/.ssh/authorized_keys\" \"$HOME/.ssh/known_hosts\"\nchmod 600 \"$HOME/.ssh/authorized_keys\" \"$HOME/.ssh/known_hosts\"\n",
+        );
+        for key in &keys {
+            script.push_str(&format!(
+                "grep -qxF {} \"$HOME/.ssh/authorized_keys\" || printf '%s\\n' {} >> \"$HOME/.ssh/authorized_keys\"\n",
+                shell_quote(key),
+                shell_quote(key),
+            ));
+        }
+        for peer in hosts.iter().filter(|peer| !peer.host.is_empty()) {
+            script.push_str(&format!(
+                "ssh-keyscan -T 8 -p {} {} >> \"$HOME/.ssh/known_hosts\" 2>/dev/null\n",
+                peer.port,
+                shell_quote(&peer.host),
+            ));
+        }
+        script.push_str("sort -u \"$HOME/.ssh/known_hosts\" -o \"$HOME/.ssh/known_hosts\"\n");
+        run_host_script(host, known_hosts, config_dir, &script)?;
+    }
+    Ok(hosts.len())
+}
+
+fn run_host_script(
+    host: &TrustHost,
+    known_hosts: &FsPath,
+    config_dir: &FsPath,
+    script: &str,
+) -> Result<String, AppError> {
+    let mut command;
+    let askpass = if host.local {
+        command = Command::new("sh");
+        command.arg("-s");
+        None
+    } else {
+        command = Command::new("ssh");
+        command.args([
+            "-p",
+            &host.port.to_string(),
+            "-o",
+            "ConnectTimeout=12",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            &format!("UserKnownHostsFile={}", known_hosts.display()),
+            "-o",
+            "NumberOfPasswordPrompts=1",
+        ]);
+        if host.password.is_none() {
+            command.args(["-o", "BatchMode=yes"]);
+        }
+        command.args([&format!("{}@{}", host.username, host.host), "sh", "-s"]);
+        prepare_askpass(&mut command, host.password.as_deref(), config_dir)?
+    };
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            if let Some(path) = &askpass {
+                let _ = std::fs::remove_file(path);
+            }
+            return Err(AppError::internal(format!(
+                "无法连接主机 {}：{error}",
+                host.name
+            )));
+        }
+    };
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::internal("无法发送互信脚本"))
+        .and_then(|mut stdin| stdin.write_all(script.as_bytes()).map_err(AppError::from));
+    if let Err(error) = write_result {
+        if let Some(path) = &askpass {
+            let _ = std::fs::remove_file(path);
+        }
+        let _ = child.kill();
+        return Err(error);
+    }
+    let output = child.wait_with_output()?;
+    if let Some(path) = askpass {
+        let _ = std::fs::remove_file(path);
+    }
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::internal(format!(
+            "主机 {} 操作失败：{}",
+            host.name,
+            if message.is_empty() {
+                "SSH命令执行失败"
+            } else {
+                &message
+            }
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn prepare_askpass(
+    command: &mut Command,
+    password: Option<&str>,
+    config_dir: &FsPath,
+) -> Result<Option<std::path::PathBuf>, AppError> {
+    let Some(password) = password else {
+        return Ok(None);
+    };
+    let path = config_dir.join(format!(".ssh-askpass-{}.sh", Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o700)
+        .open(&path)?;
+    file.write_all(b"#!/bin/sh\nprintf '%s\\n' \"$CANGLING_SSH_PASSWORD\"\n")?;
+    file.sync_all()?;
+    command
+        .env("DISPLAY", "cangling:0")
+        .env("SSH_ASKPASS", &path)
+        .env("SSH_ASKPASS_REQUIRE", "force")
+        .env("CANGLING_SSH_PASSWORD", password);
+    Ok(Some(path))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn safe_comment(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
