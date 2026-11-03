@@ -57,16 +57,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/jobs", post(create_job))
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/meta", get(meta))
-        .route("/api/repo", get(crate::repo::list))
-        .route(
-            "/api/repo/{tab}/{package}/download",
-            get(crate::repo::download),
-        )
-        .route("/api/repo/install", post(crate::repo::install))
-        .route("/api/gitrepo/status", get(crate::gitrepo::status))
-        .route("/api/gitrepo/tree", get(crate::gitrepo::tree))
-        .route("/api/gitrepo/list", get(crate::gitrepo::list))
-        .route("/api/gitrepo/file", get(crate::gitrepo::file))
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/browse-directory", post(browse_directory))
         .route("/api/create-directory", post(create_directory))

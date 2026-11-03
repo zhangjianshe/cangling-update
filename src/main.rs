@@ -10,7 +10,6 @@ mod dbadmin;
 mod dbbackup;
 mod docker;
 mod error;
-mod gitrepo;
 mod hostinfo;
 mod hosts;
 mod images;

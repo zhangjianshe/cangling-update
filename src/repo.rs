@@ -23,10 +23,8 @@ use crate::cluster::Role;
 use crate::error::AppError;
 use crate::paths::AppPaths;
 use crate::state::AppState;
-use axum::extract::{Path, State};
 use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::path::{Path as FsPath, PathBuf};
@@ -92,12 +90,6 @@ pub struct RepoIndex {
     /// 本机平台（系统包格式 + CPU 架构）。
     pub host_platform: String,
     pub tabs: Vec<RepoTab>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct InstallBody {
-    pub tab: String,
-    pub package: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -244,46 +236,6 @@ pub fn np4_update_latest_dir(exe_dir: &FsPath) -> PathBuf {
         .join(NP4_UPDATE_VERSION)
 }
 
-/// 控制台入口：master/standalone 扫描本地仓库；worker 拉取 master 的仓库。
-pub async fn list(State(state): State<AppState>) -> Result<Json<RepoIndex>, AppError> {
-    if state.cluster.role == Role::Worker {
-        return remote_index(&state).await.map(Json);
-    }
-    let paths = state.paths.clone();
-    let idx = tokio::task::spawn_blocking(move || scan_index(&paths))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))?;
-    Ok(Json(idx))
-}
-
-/// 下载软件包（tar.gz）。master/standalone 直接本地打包；worker 从 master 代理。
-pub async fn download(
-    State(state): State<AppState>,
-    Path((tab, package)): Path<(String, String)>,
-) -> Result<Response, AppError> {
-    if state.cluster.role == Role::Worker {
-        return remote_download(&state, &tab, &package).await;
-    }
-    let root = repo_root(&state.paths);
-    let t = tab.clone();
-    let p = package.clone();
-    let bytes = tokio::task::spawn_blocking(move || build_tarball(&root, &t, &p))
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))??;
-    Ok(tarball_response(&package, bytes))
-}
-
-/// 安装软件包：统一把包内容解压到临时目录后运行安装脚本，避免污染仓库目录。
-pub async fn install(
-    State(state): State<AppState>,
-    Json(body): Json<InstallBody>,
-) -> Result<Json<InstallResult>, AppError> {
-    install_package(&state, &body.tab, &body.package, &[])
-        .await
-        .map(Json)
-}
-
-/// 安装指定平台下的某个软件包（本机角色自动决定本地/远端来源），可传入额外环境变量。
 pub async fn install_package(
     state: &AppState,
     tab: &str,
@@ -319,45 +271,6 @@ pub async fn install_package(
     };
 
     run_package_bytes(state, &bytes, package, envs).await
-}
-
-async fn remote_index(state: &AppState) -> Result<RepoIndex, AppError> {
-    let (master, token) = require_master(state)?;
-    let url = format!("{master}/api/cluster/repo");
-    let (status, value) = crate::cluster::http::get_json(&url, &token)
-        .await
-        .map_err(|e| AppError::bad(format!("拉取主节点仓库失败：{e:#}")))?;
-    if !status.is_success() {
-        return Err(AppError::bad(format!(
-            "拉取主节点仓库失败 {status}: {}",
-            json_error(&value)
-        )));
-    }
-    let mut idx: RepoIndex = serde_json::from_value(value)
-        .map_err(|e| AppError::bad(format!("解析仓库数据失败：{e}")))?;
-    idx.remote = true;
-    idx.master = Some(master);
-    idx.host_platform = host_platform().to_string();
-    Ok(idx)
-}
-
-async fn remote_download(state: &AppState, tab: &str, package: &str) -> Result<Response, AppError> {
-    let (master, token) = require_master(state)?;
-    let url = format!(
-        "{master}/api/cluster/repo/{}/{}/download",
-        pct_encode(tab),
-        pct_encode(package)
-    );
-    let (status, data) = crate::cluster::http::get_bytes(&url, &token)
-        .await
-        .map_err(|e| AppError::bad(format!("从主节点下载失败：{e:#}")))?;
-    if !status.is_success() {
-        return Err(AppError::bad(format!(
-            "从主节点下载失败 {status}: {}",
-            String::from_utf8_lossy(&data)
-        )));
-    }
-    Ok(tarball_response(package, data.to_vec()))
 }
 
 fn require_master(state: &AppState) -> Result<(String, String), AppError> {
@@ -811,14 +724,6 @@ fn pct_encode(s: &str) -> String {
         }
     }
     out
-}
-
-fn json_error(value: &serde_json::Value) -> String {
-    value
-        .get("error")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| value.to_string())
 }
 
 fn read_head_lines(path: &FsPath, max_bytes: usize) -> std::io::Result<Vec<String>> {

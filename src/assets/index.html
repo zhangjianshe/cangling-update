@@ -214,13 +214,11 @@
     .app[data-section="cluster"] .shell,
     .app[data-section="k3s"] .shell,
     .app[data-section="cangling"] .shell,
-    .app[data-section="repo"] .shell,
     .app[data-section="images"] .shell,
     .app[data-section="storage"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
     .app[data-section="k3s"] aside,
     .app[data-section="cangling"] aside,
-    .app[data-section="repo"] aside,
     .app[data-section="images"] aside,
     .app[data-section="storage"] aside { display: none; }
     .app[data-section="traffic"] .shell { grid-template-columns: 1fr; }
@@ -1302,7 +1300,6 @@
         </div>
       </a>
       <nav class="top-nav" aria-label="功能切换">
-        <button type="button" class="btn" id="btn-repo" title="软件仓库"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.3 9 5.1"/><path d="M21 8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>软件仓库</button>
         <button type="button" class="btn" id="btn-cluster" title="主机节点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/></svg>主机节点</button>
         <button type="button" class="btn" id="btn-k3s" title="K3s 资源"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 8.7 5v10L12 22l-8.7-5V7Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>K3s 资源</button>
         <button type="button" class="btn" id="btn-cangling" title="苍灵应用"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>苍灵应用</button>
@@ -1392,7 +1389,7 @@
       return proto + "://" + location.host + appPath(path);
     }
 
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", repo: null, repoTab: null, repoMode: "files", repoPath: "", repoSet: "", gitrepo: null, storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "internal-storage", canglingHostAuto: true, canglingHostSync: 0, canglingInternalNfs: null };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "internal-storage", canglingHostAuto: true, canglingHostSync: 0, canglingInternalNfs: null };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -2058,7 +2055,6 @@
       if (hash === "#/cluster") return "cluster";
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return "k3s";
       if (hash === "#/cangling") return "cangling";
-      if (hash === "#/repo") return "repo";
       if (hash === "#/images") return "images";
       if (hash === "#/jar-upgrade") return "jar-upgrade";
       if (hash === "#/storage") return "storage";
@@ -2071,7 +2067,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), cangling: $("#btn-cangling"), repo: $("#btn-repo"), images: $("#btn-images"), "jar-upgrade": $("#btn-jar-upgrade"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), cangling: $("#btn-cangling"), images: $("#btn-images"), "jar-upgrade": $("#btn-jar-upgrade"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -2098,7 +2094,6 @@
       if (hash === "#/cluster") return renderCluster();
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return renderK3s();
       if (hash === "#/cangling") return renderCanglingApps();
-      if (hash === "#/repo") return renderRepo();
       if (hash === "#/images") return renderImages();
       if (hash === "#/jar-upgrade") return renderJarUpgrade();
       if (hash === "#/storage") return renderStorage();
@@ -3911,359 +3906,6 @@
         } else {
           flash("err", e.message);
         }
-      }
-    }
-
-    async function loadRepo() {
-      try {
-        const data = await api("/api/repo");
-        state.repo = data;
-        renderRepoLayout(data);
-      } catch (e) {
-        $("#main").innerHTML = `<div class="card"><h3>软件仓库</h3><p class="hint">${esc(e.message)}</p></div>`;
-      }
-    }
-
-    function renderRepo() {
-      state.current = null;
-      renderList();
-      $("#main").classList.remove("db-fill");
-      if (state.repoMode === "packages") loadRepo();
-      else loadGitRepo();
-    }
-
-    const REPO_ICON_DIR = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
-    const REPO_ICON_FILE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
-
-    async function loadGitRepo() {
-      try {
-        const status = await api("/api/gitrepo/status");
-        state.gitrepo = { status };
-        renderGitRepoLayout(status);
-      } catch (e) {
-        $("#main").innerHTML = `<div class="card"><h3>软件仓库</h3><p class="hint">${esc(e.message)}</p></div>`;
-      }
-    }
-
-    function repoSetNames(status) {
-      return ((status && status.sets) || []).filter(Boolean);
-    }
-
-    function ensureRepoSet(sets) {
-      if (!sets.length) {
-        state.repoSet = "";
-        state.repoPath = "";
-        return;
-      }
-      if (!state.repoSet || !sets.includes(state.repoSet)) {
-        state.repoSet = sets.includes("cangling-repo") ? "cangling-repo" : sets[0];
-        state.repoPath = "";
-      }
-    }
-
-    function repoFullPath() {
-      const set = state.repoSet || "";
-      const rel = state.repoPath || "";
-      if (!set) return rel;
-      return rel ? set + "/" + rel : set;
-    }
-
-    function repoDisplayPath() {
-      return "/" + [state.repoSet, state.repoPath].filter(Boolean).join("/");
-    }
-
-    function resetRepoFilePreview(title) {
-      const head = $("#repo-file-title");
-      const pre = $("#repo-file-content");
-      if (head) head.textContent = title || "选择文件查看内容";
-      if (pre) pre.textContent = "";
-    }
-
-    function renderGitRepoLayout(status) {
-      const s = status || {};
-      const sets = repoSetNames(s);
-      const canBrowse = !!s.exists && sets.length > 0;
-      ensureRepoSet(sets);
-      const statusLine = canBrowse ? `<span class="ok">由维护中心同步</span>` : "";
-
-      $("#main").innerHTML = `
-        <div class="title-row">
-          <div><h2>软件仓库</h2><div class="path">${canBrowse ? esc(s.root) : "尚未由维护中心同步"}</div></div>
-          <div class="row">
-            <button class="btn" id="btn-repo-refresh">刷新</button>
-            <button class="btn" id="btn-repo-pkg">软件包</button>
-          </div>
-        </div>
-        ${statusLine ? `<div class="row" style="margin:-4px 0 12px">${statusLine}</div>` : ""}
-        ${canBrowse ? `
-          <div class="tabs" id="repo-set-tabs">
-            ${sets.map((name) => `<button type="button" class="tab repo-set-tab${name === state.repoSet ? " active" : ""}" data-set="${esc(name)}">${esc(name)}</button>`).join("")}
-          </div>
-          <div class="repo-browse">
-            <div class="repo-tree-panel">
-              <div class="repo-tree-toolbar">
-                <button class="btn" id="repo-up-btn" type="button" title="上级目录">↑ 上级</button>
-                <span class="repo-path" id="repo-current-path">${esc(repoDisplayPath())}</span>
-              </div>
-              <div class="repo-tree-list" id="repo-tree"></div>
-            </div>
-            <div class="repo-file-panel">
-              <div class="repo-file-head"><span class="repo-path" id="repo-file-title">选择文件查看内容</span></div>
-              <pre class="repo-file-content" id="repo-file-content"></pre>
-            </div>
-          </div>` : renderRepoEmptyCard()}`;
-
-      const refreshBtn = $("#btn-repo-refresh");
-      if (refreshBtn) refreshBtn.onclick = loadGitRepo;
-      const pkgBtn = $("#btn-repo-pkg");
-      if (pkgBtn) pkgBtn.onclick = () => { state.repoMode = "packages"; renderRepo(); };
-      document.querySelectorAll(".repo-set-tab").forEach((b) => {
-        b.onclick = () => selectRepoSet(b.dataset.set);
-      });
-      const upBtn = $("#repo-up-btn");
-      if (upBtn) upBtn.onclick = repoUp;
-      if (canBrowse) loadRepoDir();
-    }
-
-    function renderRepoEmptyCard() {
-      return `
-        <div class="card">
-          <h3>尚未同步软件仓库</h3>
-          <p class="hint">请在维护中心对 Master 主机执行「软件同步」，把本地已拉取的软件集写入本机 <code>repo/</code>（按软件集分子目录）。</p>
-          <pre class="task-log">repo/
-  cangling-repo/          # 离线安装包
-    kylin-arm/  kylin-x86/  linux-arm/  linux-x86/  windows/
-      └── 软件包/              # 任意文件；install.sh 可选
-  np4/
-    np4-update/latest/    # cangling-update 自我更新程序</pre>
-        </div>`;
-    }
-
-    function selectRepoSet(name) {
-      if (!name || name === state.repoSet) return;
-      state.repoSet = name;
-      state.repoPath = "";
-      document.querySelectorAll(".repo-set-tab").forEach((b) => {
-        b.classList.toggle("active", b.dataset.set === name);
-      });
-      resetRepoFilePreview();
-      loadRepoDir();
-    }
-
-    async function loadRepoDir() {
-      const el = $("#repo-tree");
-      const pathEl = $("#repo-current-path");
-      const upBtn = $("#repo-up-btn");
-      if (pathEl) pathEl.textContent = repoDisplayPath();
-      if (upBtn) upBtn.disabled = !state.repoPath;
-      if (!el) return;
-      el.innerHTML = `<div class="repo-list-empty">加载中…</div>`;
-      const full = repoFullPath();
-      try {
-        const entries = await api("/api/gitrepo/list" + (full ? "?path=" + encodeURIComponent(full) : ""));
-        renderRepoTree(entries || []);
-      } catch (e) {
-        el.innerHTML = `<div class="repo-list-empty">${esc(e.message)}</div>`;
-      }
-    }
-
-    function renderRepoTree(entries) {
-      const el = $("#repo-tree");
-      if (!el) return;
-      if (!entries.length) {
-        el.innerHTML = `<div class="repo-list-empty">空目录</div>`;
-        return;
-      }
-      el.innerHTML = entries.map((entry) => {
-        const isDir = entry.kind === "dir";
-        const icon = isDir ? REPO_ICON_DIR : REPO_ICON_FILE;
-        const size = isDir ? "" : fmtBytes(entry.size);
-        const attr = isDir ? `data-dir="${esc(entry.path)}"` : `data-file="${esc(entry.path)}"`;
-        return `<button type="button" class="repo-item" ${attr} title="${esc(entry.path)}"><span class="repo-item-icon">${icon}</span><span class="repo-item-name">${esc(entry.name)}</span><span class="repo-item-size">${esc(size)}</span></button>`;
-      }).join("");
-      el.querySelectorAll("[data-dir]").forEach((b) => {
-        b.onclick = () => {
-          state.repoPath = pathInsideSet(b.dataset.dir);
-          resetRepoFilePreview();
-          loadRepoDir();
-        };
-      });
-      el.querySelectorAll("[data-file]").forEach((b) => {
-        b.onclick = () => loadRepoFile(b.dataset.file);
-      });
-    }
-
-    function pathInsideSet(full) {
-      const set = state.repoSet || "";
-      const path = String(full || "").replace(/^\/+/, "");
-      if (!set) return path;
-      if (path === set) return "";
-      const prefix = set + "/";
-      return path.startsWith(prefix) ? path.slice(prefix.length) : path;
-    }
-
-    async function loadRepoFile(path) {
-      const title = $("#repo-file-title");
-      const pre = $("#repo-file-content");
-      if (!pre) return;
-      if (title) title.textContent = "/" + path;
-      pre.textContent = "加载中…";
-      try {
-        const f = await api("/api/gitrepo/file?path=" + encodeURIComponent(path));
-        if (title) title.textContent = `/${f.path} · ${fmtBytes(f.size)}${f.truncated ? " · 内容已截断" : ""}`;
-        if (f.binary) pre.textContent = `二进制文件，无法预览 · ${fmtBytes(f.size)}`;
-        else pre.textContent = f.content || "";
-      } catch (e) {
-        if (title) title.textContent = "/" + path;
-        pre.textContent = "无法预览: " + e.message;
-      }
-    }
-
-    function repoUp() {
-      if (!state.repoPath) return;
-      const parts = state.repoPath.split("/").filter(Boolean);
-      parts.pop();
-      state.repoPath = parts.join("/");
-      resetRepoFilePreview();
-      loadRepoDir();
-    }
-
-    function activeRepoTab(data) {
-      const tabs = data.tabs || [];
-      if (state.repoTab && tabs.some(t => t.id === state.repoTab)) return state.repoTab;
-      if (tabs.some(t => t.id === data.host_platform)) return data.host_platform;
-      return (tabs[0] && tabs[0].id) || "";
-    }
-
-    function renderRepoLayout(data) {
-      const tabs = data.tabs || [];
-      const source = data.remote
-        ? `来自主节点 ${esc(data.master || "")}`
-        : `本地仓库 ${esc(data.root)}`;
-      const empty = (!data.exists && !data.remote);
-      $("#main").innerHTML = `
-        <div class="title-row">
-          <div><h2>软件仓库</h2><div class="path">${source}</div></div>
-          <div class="row">
-            <button class="btn" id="btn-repo-files">文件浏览</button>
-            <button class="btn" onclick="loadRepo()">刷新</button>
-          </div>
-        </div>
-        <div id="repo-run-out" style="margin-bottom:16px"></div>
-        ${empty ? `
-          <div class="card">
-            <h3>未找到仓库目录</h3>
-            <p class="hint">由维护中心「软件同步」写入可执行文件旁的 <code>repo/</code>（按软件集分子目录）：</p>
-            <pre class="task-log">repo/
-  cangling-repo/          # 离线安装包（原 repo-templates）
-    kylin-arm/  kylin-x86/  linux-arm/  linux-x86/  windows/
-      └── 软件包/              # 任意文件；install.sh 可选
-  np4/
-    np4-update/latest/    # cangling-update 自我更新程序</pre>
-            <button class="btn primary" onclick="loadRepo()">重新扫描</button>
-          </div>` : `
-          <div class="tabs">
-            ${tabs.map(t => `<button type="button" class="tab repo-tab${t.id === activeRepoTab(data) ? " active" : ""}" data-tab="${esc(t.id)}">${esc(t.name)}</button>`).join("")}
-          </div>
-          <div id="repo-tab-body"></div>`}`;
-
-      document.querySelectorAll(".repo-tab").forEach(b => {
-        b.onclick = () => { state.repoTab = b.dataset.tab; renderRepoLayout(data); };
-      });
-      const filesBtn = $("#btn-repo-files");
-      if (filesBtn) filesBtn.onclick = () => { state.repoMode = "files"; renderRepo(); };
-      if (!empty) renderRepoTab(activeRepoTab(data));
-    }
-
-    function renderRepoTab(tabId) {
-      const data = state.repo;
-      const tab = (data.tabs || []).find(t => t.id === tabId);
-      const body = $("#repo-tab-body");
-      if (!body) return;
-      if (!tab) { body.innerHTML = `<div class="card"><p class="hint">暂无内容</p></div>`; return; }
-      const packages = tab.packages || [];
-      const cards = packages.map(pkg => {
-        const samePlatform = tab.id === data.host_platform;
-        const installable = !!pkg.install && samePlatform;
-        const installTitle = !pkg.install
-          ? "该软件包没有安装脚本，仅可下载"
-          : installable
-            ? "下载并运行安装脚本"
-            : "该平台与当前节点不匹配";
-        return `<div class="card">
-          <h3>${esc(pkg.name)}</h3>
-          <div class="hint" style="white-space:pre-line;margin-bottom:8px">${esc(pkg.description || "—")}</div>
-          <p class="path">${pkg.file_count} 个文件 · ${fmtBytes(pkg.bytes)}${pkg.install ? ` · 安装脚本 <code>${esc(pkg.install)}</code>` : " · 无安装脚本"}</p>
-          <div class="row" style="margin-top:10px">
-            <button class="btn" data-download="${esc(tab.id)}|${esc(pkg.name)}">下载</button>
-            ${pkg.install ? `<button class="btn primary" data-install="${esc(tab.id)}|${esc(pkg.name)}" ${installable ? "" : "disabled"} title="${installTitle}">安装</button>` : ""}
-          </div>
-        </div>`;
-      }).join("");
-      const emptyHint = tab.id === "np4"
-        ? `该软件集暂无内容，请通过维护中心同步 <code>repo/np4/</code>。`
-        : `该平台暂无软件包，请在 <code>repo/cangling-repo/${esc(tab.id)}/</code> 下建立软件包子目录（任意文件即可，install.sh 可选）。`;
-      body.innerHTML = packages.length ? cards : `<div class="card"><p class="hint">${emptyHint}</p></div>`;
-
-      body.querySelectorAll("[data-download]").forEach(b => {
-        b.onclick = () => downloadRepoPkg(b.dataset.download);
-      });
-      body.querySelectorAll("[data-install]").forEach(b => {
-        b.onclick = () => installRepoPkg(b.dataset.install);
-      });
-    }
-
-    async function downloadRepoPkg(key) {
-      const [tab, pkg] = key.split("|");
-      const out = $("#repo-run-out");
-      if (out) out.innerHTML = `<pre class="task-log">正在打包 ${esc(pkg)} …</pre>`;
-      try {
-        const res = await fetch(appPath(`/api/repo/${encodeURIComponent(tab)}/${encodeURIComponent(pkg)}/download`), withAuth());
-        if (res.status === 401) {
-          showGate("请先登录或登录已过期");
-          throw new Error("请先登录或登录已过期");
-        }
-        if (!res.ok) {
-          const text = await res.text();
-          let msg = text;
-          try { msg = JSON.parse(text).error || text; } catch {}
-          throw new Error(msg || res.statusText);
-        }
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${pkg}.tar.gz`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        if (out) out.innerHTML = `<p class="hint ok">已开始下载 ${esc(pkg)}.tar.gz</p>`;
-      } catch (e) {
-        if (out) out.innerHTML = `<pre class="task-log">下载失败：${esc(e.message)}</pre>`;
-      }
-    }
-
-    async function installRepoPkg(key) {
-      const [tab, pkg] = key.split("|");
-      const out = $("#repo-run-out");
-      if (!out) return;
-      out.innerHTML = `<pre class="task-log">正在下载并安装 ${esc(pkg)} …</pre>`;
-      document.querySelectorAll("#repo-tab-body [data-install], #repo-tab-body [data-download]").forEach(b => { b.disabled = true; });
-      try {
-        const r = await api("/api/repo/install", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tab, package: pkg }),
-        });
-        const body = ((r.stdout || "") + (r.stderr || "")).trim();
-        const exit = r.exit_code == null ? "无" : r.exit_code;
-        out.innerHTML = `<pre class="task-log">${esc(body || "（无输出）")}</pre>
-          <p class="hint">安装脚本 <code>${esc(r.installer)}</code> · 退出码 ${exit} · 耗时 ${r.elapsed_ms} ms${r.timed_out ? " · 已超时" : ""}</p>`;
-      } catch (e) {
-        out.innerHTML = `<pre class="task-log">安装失败：${esc(e.message)}</pre>`;
-      } finally {
-        document.querySelectorAll("#repo-tab-body [data-install], #repo-tab-body [data-download]").forEach(b => { b.disabled = false; });
       }
     }
 
@@ -8815,7 +8457,6 @@ access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
     $("#btn-cluster").onclick = () => goHash("#/cluster");
     $("#btn-k3s").onclick = () => goHash("#/k3s");
     $("#btn-cangling").onclick = () => goHash("#/cangling");
-    $("#btn-repo").onclick = () => goHash("#/repo");
     $("#btn-images").onclick = () => goHash("#/images");
     $("#btn-jar-upgrade").onclick = () => goHash("#/jar-upgrade");
     $("#btn-storage").onclick = () => goHash("#/storage");
