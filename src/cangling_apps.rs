@@ -678,6 +678,15 @@ fn validate_config(config: &CanglingConfig) -> Result<(), AppError> {
         if !ids.insert(app.id.as_str()) {
             return Err(AppError::bad(format!("应用 {} 重复", app.id)));
         }
+        if app.id == "cangling-broker"
+            && (app.group != ApplicationGroup::Single
+                || app.workload != WorkloadKind::Deployment
+                || app.replicas != 1)
+        {
+            return Err(AppError::bad(
+                "cangling-broker 必须使用 Deployment 并固定为单实例运行",
+            ));
+        }
         if app.image.trim().is_empty()
             || app.image.len() > 255
             || app.image.contains('/')
@@ -999,7 +1008,18 @@ fn patch_application_document(
     }
     let spec = child_mut(doc, "spec")?;
     if kind == "Deployment" {
-        mapping_mut(spec)?.insert(key("replicas"), Value::Number(app.replicas.into()));
+        let spec_map = mapping_mut(spec)?;
+        let replicas = if app.id == "cangling-broker" {
+            1
+        } else {
+            app.replicas
+        };
+        spec_map.insert(key("replicas"), Value::Number(replicas.into()));
+        if app.id == "cangling-broker" {
+            let mut strategy = Mapping::new();
+            set_mapping_string(&mut strategy, "type", "Recreate");
+            spec_map.insert(key("strategy"), Value::Mapping(strategy));
+        }
     }
     let template = child_mut(spec, "template")?;
     let pod_spec = child_mut(template, "spec")?;
@@ -1746,6 +1766,44 @@ mod tests {
             .unwrap();
         application.replicas = 2;
         assert!(render_manifest(&config).is_err());
+    }
+
+    #[test]
+    fn broker_cannot_be_reclassified_as_multi_instance() {
+        let mut config = default_config();
+        let broker = config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cangling-broker")
+            .unwrap();
+        broker.group = ApplicationGroup::Multi;
+        broker.replicas = 2;
+        assert!(render_manifest(&config).is_err());
+    }
+
+    #[test]
+    fn broker_manifest_is_singleton_with_recreate_strategy() {
+        let (yaml, _) = render_manifest(&default_config()).unwrap();
+        let broker = serde_yaml::Deserializer::from_str(&yaml)
+            .map(|document| Value::deserialize(document).unwrap())
+            .find(|document| {
+                metadata_name(document) == Some("cangling-broker")
+                    && value_str(document, &["kind"]) == Some("Deployment")
+            })
+            .unwrap();
+        assert_eq!(
+            broker
+                .as_mapping()
+                .and_then(|document| document.get(key("spec")))
+                .and_then(Value::as_mapping)
+                .and_then(|spec| spec.get(key("replicas")))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            value_str(&broker, &["spec", "strategy", "type"]),
+            Some("Recreate")
+        );
     }
 
     #[test]

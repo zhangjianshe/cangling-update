@@ -548,6 +548,7 @@ async fn workload_scale(
     let kind = workload_kind(&kind, true)?;
     validate_name(&namespace, "命名空间")?;
     validate_name(&name, "资源名称")?;
+    validate_scale_target(&name, body.replicas)?;
     if body.replicas > 1000 {
         return Err(AppError::bad("副本数不能超过 1000"));
     }
@@ -563,6 +564,15 @@ async fn workload_scale(
     )
     .await?;
     Ok(Json(json!({ "ok": true, "message": text.trim() })))
+}
+
+fn validate_scale_target(name: &str, replicas: u32) -> Result<(), AppError> {
+    if name == "cangling-broker" && replicas != 1 {
+        return Err(AppError::bad(
+            "cangling-broker 是集群协调中心，副本数必须固定为 1",
+        ));
+    }
+    Ok(())
 }
 
 async fn delete_pod(
@@ -697,5 +707,13 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    #[test]
+    fn broker_scale_is_fixed_to_one_replica() {
+        assert!(validate_scale_target("cangling-broker", 1).is_ok());
+        assert!(validate_scale_target("cangling-broker", 0).is_err());
+        assert!(validate_scale_target("cangling-broker", 2).is_err());
+        assert!(validate_scale_target("cangling-map", 3).is_ok());
     }
 }

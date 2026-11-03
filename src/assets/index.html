@@ -3727,7 +3727,8 @@
       const metadata = detail.metadata || {}, spec = detail.spec || {};
       const containers = (spec.containers || spec.template && spec.template.spec && spec.template.spec.containers || []);
       const canRestart = ["deployments", "statefulsets", "daemonsets"].includes(kind.id) && namespace !== "_cluster";
-      const canScale = ["deployments", "statefulsets"].includes(kind.id) && namespace !== "_cluster";
+      const fixedSingleton = metadata.name === "cangling-broker";
+      const canScale = ["deployments", "statefulsets"].includes(kind.id) && namespace !== "_cluster" && !fixedSingleton;
       const actions = [
         canRestart ? '<button type="button" class="btn" id="k3s-restart">滚动重启</button>' : "",
         canScale ? '<button type="button" class="btn" id="k3s-scale">调整副本</button>' : "",
@@ -3747,6 +3748,7 @@
           <div><span>创建时间：</span>${esc(fmtDateTime(metadata.creationTimestamp))}</div>
           <div><span>容器：</span>${esc(containers.map((container) => container.name).join(", ") || "—")}</div>
           <div><span>镜像：</span>${esc(containers.map((container) => container.image).join(", ") || "—")}</div>
+          ${fixedSingleton ? '<div><span>副本策略：</span>固定单实例 · Recreate</div>' : ""}
         </div>
         <div class="k3s-detail-tabs">
           <button type="button" class="btn active" data-k3s-detail-tab="yaml">YAML</button>
@@ -5192,7 +5194,7 @@
         <div id="orphan-box"></div>`;
       $("#btn-check").onclick = checkDir;
       $("#btn-create").onclick = createProject;
-      $("#btn-browse-dir").onclick = openDirPicker;
+      $("#btn-browse-dir").onclick = () => openDirPicker();
       $("#f-compose-only").onchange = (event) => {
         const stop = $("#f-stop");
         stop.disabled = event.target.checked;
