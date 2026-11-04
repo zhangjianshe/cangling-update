@@ -60,6 +60,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/validate-directory", post(validate_directory))
         .route("/api/browse-directory", post(browse_directory))
         .route("/api/create-directory", post(create_directory))
+        .route("/api/install-resources", get(install_resources_list))
+        .route(
+            "/api/install-resources/content",
+            get(install_resource_file_get),
+        )
         .route("/api/orphans", get(list_orphans))
         .route("/api/orphans/{*id}", axum::routing::delete(delete_orphan))
         .route("/api/np4/deploy/status", get(np4_deploy_status))
@@ -194,6 +199,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::images::console_routes())
         .merge(crate::jar_upgrade::routes())
         .merge(crate::nginx_stats::routes())
+        .merge(crate::certificate_manager::routes())
         .merge(crate::self_upgrade::routes())
         .route(
             "/api/storages",
@@ -1699,6 +1705,102 @@ async fn get_project(
 }
 
 const MAX_PROJECT_TEXT_SIZE: u64 = 2 * 1024 * 1024;
+
+fn install_resources_root(paths: &crate::paths::AppPaths) -> Result<PathBuf, AppError> {
+    let root = crate::repo::repo_root(paths);
+    root.canonicalize().map_err(|error| {
+        AppError::not_found(format!(
+            "安装资源目录不存在或无法访问：{}（{error}）",
+            root.display()
+        ))
+    })
+}
+
+fn install_resource_path(root: &FsPath, relative: &str) -> Result<(PathBuf, PathBuf), AppError> {
+    let relative =
+        clean_project_relative(relative).map_err(|_| AppError::bad("安装资源路径无效"))?;
+    let joined = root.join(&relative);
+    let resolved = joined
+        .canonicalize()
+        .map_err(|error| AppError::not_found(format!("无法访问 {}：{error}", joined.display())))?;
+    if !resolved.starts_with(root) {
+        return Err(AppError::bad("目标路径超出安装资源目录"));
+    }
+    Ok((relative, resolved))
+}
+
+async fn install_resources_list(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectFileQuery>,
+) -> Result<Json<Vec<ProjectFileEntry>>, AppError> {
+    let root = install_resources_root(&state.paths)?;
+    let (relative, directory) = install_resource_path(&root, &query.path)?;
+    if !directory.is_dir() {
+        return Err(AppError::bad("目标不是目录"));
+    }
+    let entries = std::fs::read_dir(&directory)
+        .map_err(|error| {
+            AppError::internal(format!("无法读取目录 {}：{error}", directory.display()))
+        })?
+        .flatten()
+        .filter_map(|entry| {
+            let resolved = entry.path().canonicalize().ok()?;
+            if !resolved.starts_with(&root) {
+                return None;
+            }
+            let metadata = resolved.metadata().ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel = relative.join(&name);
+            Some(ProjectFileEntry {
+                name,
+                path: rel.to_string_lossy().replace('\\', "/"),
+                is_dir: metadata.is_dir(),
+                size: if metadata.is_file() {
+                    metadata.len()
+                } else {
+                    0
+                },
+                editable: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut entries = entries;
+    entries.sort_by(|left, right| {
+        right
+            .is_dir
+            .cmp(&left.is_dir)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(Json(entries))
+}
+
+async fn install_resource_file_get(
+    State(state): State<AppState>,
+    Query(query): Query<ProjectFileQuery>,
+) -> Result<Json<ProjectFileView>, AppError> {
+    let root = install_resources_root(&state.paths)?;
+    let (relative, file) = install_resource_path(&root, &query.path)?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| AppError::internal(format!("无法读取文件信息：{error}")))?;
+    if !metadata.is_file() {
+        return Err(AppError::bad("目标不是文件"));
+    }
+    if metadata.len() > MAX_PROJECT_TEXT_SIZE {
+        return Err(AppError::bad(format!(
+            "文件超过 {} MB，无法预览",
+            MAX_PROJECT_TEXT_SIZE / 1024 / 1024
+        )));
+    }
+    let content = std::fs::read_to_string(&file)
+        .map_err(|error| AppError::bad(format!("文件不是可预览的 UTF-8 文本：{error}")))?;
+    Ok(Json(ProjectFileView {
+        path: relative.to_string_lossy().replace('\\', "/"),
+        size: metadata.len(),
+        content,
+        editable: false,
+    }))
+}
 
 fn project_file_is_editable(path: &FsPath) -> bool {
     let name = path

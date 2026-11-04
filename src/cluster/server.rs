@@ -17,6 +17,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -90,6 +91,7 @@ pub struct ClusterNode {
 #[derive(Debug, Serialize)]
 pub struct ClusterStatus {
     pub name: String,
+    pub k3s_data_dir: String,
     pub role: &'static str,
     pub token_set: bool,
     pub master_url: Option<String>,
@@ -272,6 +274,7 @@ pub async fn register(
             &info,
             &now,
         )?;
+        dedupe_nodes(&conn)?;
     }
 
     // 新加入/重新注册的 worker：把 master 的登录账号同步过去，保证各节点同一套账号密码。
@@ -367,12 +370,15 @@ pub async fn list_nodes(State(state): State<AppState>) -> Result<Json<Vec<Cluste
 pub async fn cluster_status(
     State(state): State<AppState>,
 ) -> Result<Json<ClusterStatus>, AppError> {
-    let (nodes, name) = {
+    let (nodes, name, k3s_data_dir) = {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         let nodes = list_cluster_nodes(&conn)?;
         let name = crate::db::cluster_setting(&conn, crate::cluster::init::CLUSTER_NAME_KEY)?
             .unwrap_or_default();
-        (nodes, name)
+        let k3s_data_dir =
+            crate::db::cluster_setting(&conn, crate::cluster::init::K3S_DATA_DIR_KEY)?
+                .unwrap_or_default();
+        (nodes, name, k3s_data_dir)
     };
     let online = nodes.iter().filter(|n| n.status == "online").count();
     let binaries = if state.cluster.role == crate::cluster::Role::Master {
@@ -382,6 +388,7 @@ pub async fn cluster_status(
     };
     Ok(Json(ClusterStatus {
         name,
+        k3s_data_dir,
         role: state.cluster.role.as_str(),
         token_set: state.cluster.token.is_some(),
         master_url: state.cluster.master_url.clone(),
@@ -471,6 +478,38 @@ fn upsert_node(
     Ok(())
 }
 
+/// 同一角色和地址只保留最后心跳最新的节点。Worker 重新安装后 node_id 会变化，
+/// 旧记录及其自动生成的主机条目必须一并移除，避免列表出现在线/离线两份。
+fn dedupe_nodes(conn: &Connection) -> rusqlite::Result<usize> {
+    let mut stmt = conn.prepare(
+        "SELECT id, role, addr FROM cluster_nodes ORDER BY last_seen DESC, registered_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut seen = HashSet::new();
+    let mut stale = Vec::new();
+    for row in rows {
+        let (id, role, addr) = row?;
+        if !seen.insert((role, addr)) {
+            stale.push(id);
+        }
+    }
+    drop(stmt);
+    for id in &stale {
+        conn.execute(
+            "DELETE FROM managed_hosts WHERE kind = 'cluster' AND cluster_node_id = ?1",
+            params![id],
+        )?;
+        conn.execute("DELETE FROM cluster_nodes WHERE id = ?1", params![id])?;
+    }
+    Ok(stale.len())
+}
+
 fn touch_node(
     conn: &Connection,
     id: &str,
@@ -550,6 +589,7 @@ pub fn workers(state: &AppState) -> Result<Vec<(String, String, bool)>, AppError
 }
 
 fn list_cluster_nodes(conn: &Connection) -> rusqlite::Result<Vec<ClusterNode>> {
+    dedupe_nodes(conn)?;
     let mut stmt = conn.prepare(
         "SELECT id, name, addr, version, role, info_json, registered_at, last_seen
          FROM cluster_nodes ORDER BY name",

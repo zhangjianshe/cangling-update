@@ -215,11 +215,15 @@
     .app[data-section="k3s"] .shell,
     .app[data-section="cangling"] .shell,
     .app[data-section="images"] .shell,
+    .app[data-section="certificates"] .shell,
+    .app[data-section="install-resources"] .shell,
     .app[data-section="storage"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
     .app[data-section="k3s"] aside,
     .app[data-section="cangling"] aside,
     .app[data-section="images"] aside,
+    .app[data-section="certificates"] aside,
+    .app[data-section="install-resources"] aside,
     .app[data-section="storage"] aside { display: none; }
     .app[data-section="traffic"] .shell { grid-template-columns: 1fr; }
     .app[data-section="traffic"] aside { display: none; }
@@ -569,12 +573,17 @@
     .tab:focus-visible { outline: 2px solid var(--accent-emphasis); outline-offset: -2px; }
     .tab-panel[hidden] { display: none !important; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .cluster-init-row { flex-wrap: nowrap; }
+    .cluster-init-row > label { color: var(--muted); white-space: nowrap; }
+    .cluster-init-row #cluster-name { width: 190px; }
+    .cluster-init-row #cluster-k3s-data-dir { flex: 1 1 320px; min-width: 240px; }
+    @media (max-width: 1050px) { .cluster-init-row { flex-wrap: wrap; } }
     label { display: block; color: var(--muted); margin: 0 0 6px; }
-    input[type=text], input[type=password], textarea {
+    input[type=text], input[type=password], input[type=number], textarea {
       width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
       padding: 9px 11px; outline: none;
     }
-    input[type=text]:focus, input[type=password]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
+    input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
     .dir-row { display: flex; gap: 8px; align-items: center; }
@@ -704,6 +713,18 @@
     #panel-files .repo-file-content,
     #panel-files .project-file-editor { border-radius: 0; }
     #panel-files .repo-tree-panel { border-right: 0; }
+    #install-resources-panel {
+      height: calc(100vh - 112px); min-height: 480px; margin-bottom: 0; overflow: hidden;
+      display: flex; flex-direction: column; border: 0; border-radius: 0; padding: 0;
+    }
+    #install-resources-panel .repo-browse { gap: 0; }
+    #install-resources-panel .repo-tree-panel,
+    #install-resources-panel .repo-file-panel,
+    #install-resources-panel .repo-tree-toolbar,
+    #install-resources-panel .repo-tree-list,
+    #install-resources-panel .repo-file-head,
+    #install-resources-panel .repo-file-content { border-radius: 0; }
+    #install-resources-panel .repo-tree-panel { border-right: 0; }
     .project-file-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .project-file-editor { flex: 1; min-height: 0; width: 100%; }
     .project-file-editor.ace_editor {
@@ -1054,6 +1075,8 @@
     }
     .password-form .field { margin-bottom: 16px; }
     .password-form .field:last-of-type { margin-bottom: 0; }
+    .password-form .host-credentials-row { align-items: flex-start; }
+    .password-form .host-credentials-row > .field { margin-bottom: 16px; }
     .password-form .flash { margin-top: 16px; }
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1305,6 +1328,8 @@
         <button type="button" class="btn" id="btn-k3s" title="K3s 资源"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 8.7 5v10L12 22l-8.7-5V7Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></svg>K3s 资源</button>
         <button type="button" class="btn" id="btn-cangling" title="苍灵应用"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>苍灵应用</button>
         <button type="button" class="btn" id="btn-images" title="容器镜像"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 2 9 5-9 5-9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></svg>镜像</button>
+        <button type="button" class="btn" id="btn-certificates" title="证书管理"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V6Z"/><path d="m9 12 2 2 4-5"/></svg>证书管理</button>
+        <button type="button" class="btn" id="btn-install-resources" title="安装资源"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 12h8M12 8v8"/></svg>安装资源</button>
         <button type="button" class="btn" id="btn-jar-upgrade" title="JAR 升级"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>JAR升级</button>
         <button type="button" class="btn" id="btn-storage" title="存储"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v7c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12v7c0 1.7 4 3 9 3s9-1.3 9-3v-7"/></svg>存储</button>
         <button type="button" class="btn" id="btn-traffic" title="入口流量统计"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19V2"/></svg>流量</button>
@@ -1426,8 +1451,11 @@
     const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null, k3sLogToken: 0 };
     const dirPicker = { path: "", selected: "", parent: null, token: 0 };
     const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
+    const REPO_ICON_DIR = DIR_ICON;
+    const REPO_ICON_FILE = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5C2 14.216 2.784 15 3.75 15h8.5A1.75 1.75 0 0 0 14 13.25V5.06a1.75 1.75 0 0 0-.513-1.237l-2.31-2.31A1.75 1.75 0 0 0 9.94 1Zm6.5 1.56L12.44 4.75h-1.69a.5.5 0 0 1-.5-.5ZM3.5 2.75a.25.25 0 0 1 .25-.25h5v1.75c0 1.105.895 2 2 2h1.75v7a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25Z"/></svg>';
     const composePoll = { timer: null, inflight: false };
     const projectFiles = { path: "", selected: "", editor: null, resizeObs: null, loadedProject: "" };
+    const installResources = { path: "", selected: "" };
     const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false, statusTimer: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
@@ -2056,6 +2084,8 @@
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return "k3s";
       if (hash === "#/cangling") return "cangling";
       if (hash === "#/images") return "images";
+      if (hash === "#/certificates") return "certificates";
+      if (hash === "#/install-resources") return "install-resources";
       if (hash === "#/jar-upgrade") return "jar-upgrade";
       if (hash === "#/storage") return "storage";
       if (hash === "#/traffic") return "traffic";
@@ -2067,7 +2097,7 @@
       const section = sectionFromHash(hash);
       const app = $("#app");
       if (app) app.dataset.section = section;
-      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), cangling: $("#btn-cangling"), images: $("#btn-images"), "jar-upgrade": $("#btn-jar-upgrade"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
+      const map = { projects: $("#btn-projects"), cluster: $("#btn-cluster"), k3s: $("#btn-k3s"), cangling: $("#btn-cangling"), images: $("#btn-images"), certificates: $("#btn-certificates"), "install-resources": $("#btn-install-resources"), "jar-upgrade": $("#btn-jar-upgrade"), storage: $("#btn-storage"), traffic: $("#btn-traffic") };
       Object.keys(map).forEach((id) => {
         if (map[id]) map[id].classList.toggle("active", section === id);
       });
@@ -2095,6 +2125,8 @@
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return renderK3s();
       if (hash === "#/cangling") return renderCanglingApps();
       if (hash === "#/images") return renderImages();
+      if (hash === "#/certificates") return renderCertificates();
+      if (hash === "#/install-resources") return renderInstallResources();
       if (hash === "#/jar-upgrade") return renderJarUpgrade();
       if (hash === "#/storage") return renderStorage();
       if (hash === "#/traffic") return renderTraffic();
@@ -2197,12 +2229,16 @@
       const initCard = st.role === "master"
         ? `<div class="card">
             <h3>初始化 / 检查修复</h3>
-            <div class="row" style="margin-bottom:8px">
-              <input id="cluster-name" type="text" placeholder="集群名称" value="${esc(st.name || "")}" style="max-width:240px" />
+            <div class="row cluster-init-row" style="margin-bottom:8px">
+              <label for="cluster-name">集群名称</label>
+              <input id="cluster-name" type="text" title="cangling-k3s（双击自动填入）" placeholder="cangling-k3s" value="${esc(st.name || "")}" />
+              <label for="cluster-k3s-data-dir">K3s 数据目录</label>
+              <input id="cluster-k3s-data-dir" type="text" placeholder="留空自动选择最大本地磁盘" value="${esc(st.k3s_data_dir || "")}" />
+              <button class="btn" id="btn-pick-k3s-data-dir" type="button">选择</button>
               <button class="btn primary" id="btn-init-cluster">初始化集群</button>
               <button class="btn" id="btn-check-cluster">检查并修复</button>
             </div>
-            <p class="hint">初始化：全新安装各节点基线软件。检查并修复：对每个节点检查缺失软件并补装（含新加入节点），已安装的会自动跳过；主节点还会检查 kubectl/k9s 的 <code>~/.kube/config</code>，缺失则从 k3s.yaml 拷贝。软件来自离线仓库。</p>
+            <p class="hint">K3s 数据目录可指定绝对路径；留空时由各节点选择可用空间最大的本地持久化磁盘。初始化：全新安装各节点基线软件。检查并修复：对每个节点检查缺失软件并补装（含新加入节点），已安装的会自动跳过。软件来自程序目录下的 <code>cangling-repo/&lt;当前平台&gt;/</code>。</p>
             <div id="cluster-init-body"></div>
           </div>`
         : "";
@@ -2227,6 +2263,10 @@
       if (initBtn) initBtn.onclick = startClusterInit;
       const checkBtn = $("#btn-check-cluster");
       if (checkBtn) checkBtn.onclick = startClusterCheck;
+      const clusterName = $("#cluster-name");
+      if (clusterName) clusterName.ondblclick = () => { clusterName.value = "cangling-k3s"; clusterName.select(); };
+      const pickK3sDataDir = $("#btn-pick-k3s-data-dir");
+      if (pickK3sDataDir) pickK3sDataDir.onclick = () => openDirPicker("cluster-k3s-data-dir", () => {}, "/");
       $("#btn-host-trust").onclick = startHostTrust;
       $("#btn-add-host").onclick = () => openHostForm();
       bindClusterOverviewButton();
@@ -2442,6 +2482,7 @@
     async function startClusterInit() {
       const nameEl = $("#cluster-name");
       const name = (nameEl && nameEl.value || "").trim();
+      const k3sDataDir = (($("#cluster-k3s-data-dir") || {}).value || "").trim();
       if (!name) { flash("err", "请填写集群名称"); return; }
       const btn = $("#btn-init-cluster");
       if (btn) btn.disabled = true;
@@ -2449,7 +2490,7 @@
         await api("/api/cluster/init", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name }),
+          body: JSON.stringify({ name, k3s_data_dir: k3sDataDir }),
         });
         flash("ok", "已开始初始化集群，请稍候…");
         await loadInitStatus();
@@ -2541,7 +2582,7 @@
       $("#dialog-body").innerHTML = `<div class="password-form">
         <div class="field"><label>名称</label><input id="host-name" type="text" value="${esc(host ? host.name : "")}" placeholder="例如：计算节点 01" /></div>
         <div class="field"><label>主机 IP</label><input id="host-address" type="text" value="${esc(host ? host.host : "")}" placeholder="192.168.3.121" /></div>
-        <div class="row">
+        <div class="row host-credentials-row">
           <div class="field" style="flex:1"><label>SSH 端口</label><input id="host-port" type="number" min="1" max="65535" value="${host ? host.ssh_port : 22}" /></div>
           <div class="field" style="flex:2"><label>SSH 用户</label><input id="host-user" type="text" value="${esc(host ? host.username : "root")}" /></div>
         </div>
@@ -3907,6 +3948,291 @@
           flash("err", e.message);
         }
       }
+    }
+
+    async function renderCertificates() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      $("#main").innerHTML = `
+        <div id="flash" hidden></div>
+        <div class="title-row">
+          <div><h2>证书管理</h2><div class="path">维护本地根证书，并为负载均衡签发 IP 证书</div></div>
+          <button class="btn" id="cert-refresh" type="button">刷新</button>
+        </div>
+        <div id="certificate-content"><div class="card"><div class="empty">正在读取证书状态…</div></div></div>`;
+      $("#cert-refresh").onclick = loadCertificates;
+      await loadCertificates();
+    }
+
+    async function loadCertificates() {
+      if ((location.hash || "#/") !== "#/certificates") return;
+      const content = $("#certificate-content");
+      if (!content) return;
+      try {
+        const s = await api("/api/certificates");
+        content.innerHTML = `
+          <div class="card storage-form">
+            <div class="form-section">
+              <div class="form-section-title">根证书</div>
+              <p class="hint">根证书私钥使用 AES-256 加密，密码不会写入磁盘，也不会由系统保存。请妥善保管密码；遗失后无法继续签发证书。</p>
+              <div class="form-grid">
+                <div class="field"><label>状态</label><div class="path">${s.root_initialized ? '<span class="ok">已初始化</span>' : '<span class="bad">尚未初始化</span>'}</div></div>
+                <div class="field"><label>根证书路径</label><div class="path">${esc(s.root_certificate_path)}</div></div>
+              </div>
+              ${s.root_initialized ? `
+                <div class="form-grid">
+                  <div class="field"><label>主题</label><div class="path">${esc(s.root_subject || "—")}</div></div>
+                  <div class="field"><label>到期时间</label><div class="path">${esc(fmtDateTime(s.root_expires))}</div></div>
+                </div>
+                <div class="field"><label>SHA-256 指纹</label><div class="path">${esc(s.root_fingerprint || "—")}</div></div>
+                <div class="row" style="margin:12px 0"><button class="btn primary" id="ca-download" type="button">下载根证书</button></div>
+                <details class="traffic-guide">
+                  <summary>如何让浏览器信任此根证书</summary>
+                  <p class="hint">只应在受管理且确认属于本系统的设备上安装。安装前请核对上方 SHA-256 指纹。</p>
+                  <h4>Windows · Chrome / Edge</h4>
+                  <ol>
+                    <li>点击“下载根证书”，双击下载的 <code>cangling-root-ca.crt</code>。</li>
+                    <li>选择“安装证书”，按使用范围选择“当前用户”或“本地计算机”。</li>
+                    <li>选择“将所有证书放入下列存储”，存储位置选择“受信任的根证书颁发机构”。</li>
+                    <li>完成导入并重新启动 Chrome 或 Edge。</li>
+                  </ol>
+                  <h4>Firefox</h4>
+                  <ol>
+                    <li>打开“设置 → 隐私与安全 → 证书 → 查看证书”。</li>
+                    <li>在“证书颁发机构”中选择“导入”，选择下载的根证书。</li>
+                    <li>勾选“信任此 CA 来标识网站”，确认后重新打开目标页面。</li>
+                  </ol>
+                  <h4>macOS · Safari / Chrome</h4>
+                  <ol>
+                    <li>用“钥匙串访问”打开下载的根证书，并加入“系统”钥匙串。</li>
+                    <li>双击证书，展开“信任”，将“使用此证书时”设置为“始终信任”。</li>
+                    <li>输入管理员密码确认，然后重新启动浏览器。</li>
+                  </ol>
+                  <h4>Linux · Chrome / Edge</h4>
+                  <p>Debian/Ubuntu：将文件复制到 <code>/usr/local/share/ca-certificates/cangling-root-ca.crt</code>，执行 <code>sudo update-ca-certificates</code>。</p>
+                  <p>Chrome/Edge 仍不信任时，需要同时导入当前用户的 NSS 库：<code>certutil -A -d sql:$HOME/.pki/nssdb -n "Cangling Local Root CA" -t "CT,C,C" -i /usr/local/share/ca-certificates/cangling-root-ca.crt</code>。若没有 certutil，请先安装 <code>libnss3-tools</code>。</p>
+                  <p>RHEL/Kylin：将文件复制到 <code>/etc/pki/ca-trust/source/anchors/</code>，执行 <code>sudo update-ca-trust</code>；必要时再按上面的方法导入 NSS 库。</p>
+                  <p>最后完全退出浏览器，确认所有 Chrome/Edge 后台进程均已结束，再重新打开。</p>
+                </details>` : `
+                <div class="form-grid">
+                  <div class="field"><label for="ca-common-name">根证书名称</label><input id="ca-common-name" type="text" value="Cangling Local Root CA" maxlength="100" /></div>
+                  <div class="field"><label for="ca-password">保护密码（至少 12 位）</label><input id="ca-password" type="password" autocomplete="new-password" /></div>
+                </div>
+                <div class="form-grid">
+                  <div class="field"><label for="ca-password-confirm">确认密码</label><input id="ca-password-confirm" type="password" autocomplete="new-password" /></div>
+                  <div class="field"><label>&nbsp;</label><button class="btn primary" id="ca-init" type="button">初始化根证书</button></div>
+                </div>`}
+            </div>
+            <div class="form-section">
+              <div class="form-section-title">负载均衡 IP 证书</div>
+              <p class="hint">签发后自动更新 Load Balancer，并在保留 HTTP 7800 的同时启用 HTTPS 7443。</p>
+              <div class="form-grid">
+                <div class="field"><label>状态</label><div class="path">${s.loadbalance_issued ? '<span class="ok">已签发</span>' : '<span class="bad">尚未签发</span>'}</div></div>
+                <div class="field"><label>证书路径</label><div class="path">${esc(s.loadbalance_certificate_path)}</div></div>
+              </div>
+              ${s.loadbalance_issued ? `
+                <div class="form-grid">
+                  <div class="field"><label>证书 IP</label><div class="path">${esc(s.loadbalance_ip || "—")}</div></div>
+                  <div class="field"><label>证书域名</label><div class="path">${esc((s.loadbalance_domains || []).join(", ") || "—")}</div></div>
+                </div>
+                <div class="form-grid">
+                  <div class="field"><label>到期时间</label><div class="path">${esc(fmtDateTime(s.loadbalance_expires))}</div></div>
+                </div>
+                <p class="hint">HTTPS 地址：<code>${esc(s.https_url || "—")}</code></p>` : ""}
+              <div class="form-grid">
+                <div class="field"><label for="lb-cert-ip">负载均衡 IP</label><input id="lb-cert-ip" type="text" value="${esc(s.loadbalance_ip || s.suggested_ip || "")}" /></div>
+                <div class="field"><label for="lb-cert-domains">域名（可选，多个用逗号分隔）</label><input id="lb-cert-domains" type="text" value="${esc((s.loadbalance_domains || []).join(", ") || "4np.tjj")}" placeholder="例如：4np.tjj" /></div>
+              </div>
+              <div class="hint hint-soft" style="margin-bottom:16px">
+                <strong>域名解析配置：</strong><br>
+                Linux：编辑 <code>/etc/hosts</code>，添加 <code>192.168.3.121 4np.tjj</code>。例如执行 <code>echo '192.168.3.121 4np.tjj' | sudo tee -a /etc/hosts</code>。<br>
+                Windows：以管理员身份打开记事本，编辑 <code>C:\\Windows\\System32\\drivers\\etc\\hosts</code>，添加 <code>192.168.3.121 4np.tjj</code>，保存后可执行 <code>ipconfig /flushdns</code>。<br>
+                配置后请使用 <code>https://4np.tjj:7443/update/</code> 访问；每台需要访问的客户端都要配置该域名。
+              </div>
+              <div class="form-grid">
+                <div class="field"><label for="lb-ca-password">根证书密码</label><input id="lb-ca-password" type="password" autocomplete="current-password" /></div>
+              </div>
+              <div class="row" style="align-items:center;flex-wrap:wrap">
+                <button class="btn primary" id="lb-cert-issue" type="button" ${s.root_initialized ? "" : "disabled"}>${s.loadbalance_issued ? "重新签发并应用" : "签发并应用"}</button>
+                <div class="flash err" id="lb-cert-error" style="margin:0;flex:1 1 320px" hidden></div>
+              </div>
+            </div>
+          </div>`;
+        const init = $("#ca-init");
+        if (init) init.onclick = initRootCertificate;
+        const download = $("#ca-download");
+        if (download) download.onclick = downloadRootCertificate;
+        const issue = $("#lb-cert-issue");
+        if (issue) issue.onclick = issueLoadbalanceCertificate;
+      } catch (error) {
+        content.innerHTML = `<div class="card"><div class="empty bad">${esc(error.message)}</div></div>`;
+      }
+    }
+
+    async function downloadRootCertificate() {
+      try {
+        const response = await fetch(appPath("/api/certificates/root"), withAuth());
+        if (!response.ok) {
+          let message = response.statusText;
+          try { message = (await response.json()).error || message; } catch (_) {}
+          throw new Error(message);
+        }
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "cangling-root-ca.crt";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        flash("ok", "根证书已下载，请按照下方说明加入受信任的根证书颁发机构");
+      } catch (error) {
+        flash("err", "下载根证书失败：" + error.message);
+      }
+    }
+
+    async function initRootCertificate() {
+      const password = $("#ca-password").value;
+      const confirm = $("#ca-password-confirm").value;
+      if (password !== confirm) return flash("err", "两次输入的根证书密码不一致");
+      const button = $("#ca-init");
+      button.disabled = true;
+      try {
+        const result = await api("/api/certificates/root", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password, common_name: $("#ca-common-name").value.trim() }),
+        });
+        flash("ok", result.message || "根证书已初始化");
+        await loadCertificates();
+      } catch (error) {
+        flash("err", error.message);
+        button.disabled = false;
+      }
+    }
+
+    async function issueLoadbalanceCertificate() {
+      const button = $("#lb-cert-issue");
+      const localError = $("#lb-cert-error");
+      localError.hidden = true;
+      localError.textContent = "";
+      button.disabled = true;
+      try {
+        const result = await api("/api/certificates/loadbalance", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: $("#lb-ca-password").value, ip: $("#lb-cert-ip").value.trim(), domains: $("#lb-cert-domains").value.trim() }),
+        });
+        flash("ok", result.message || "负载均衡证书已签发并应用");
+        await loadCertificates();
+      } catch (error) {
+        localError.textContent = error.message;
+        localError.hidden = false;
+        button.disabled = false;
+      }
+    }
+
+    function installResourcesDisplayPath() {
+      return "<程序目录>/cangling-repo" + (installResources.path ? "/" + installResources.path.replace(/^\/+|\/+$/g, "") : "");
+    }
+
+    function resetInstallResourcePreview(title) {
+      installResources.selected = "";
+      const head = $("#install-resource-title");
+      const preview = $("#install-resource-preview");
+      if (head) head.textContent = title || "选择文本文件查看内容";
+      if (preview) preview.textContent = "";
+    }
+
+    async function renderInstallResources() {
+      state.current = null;
+      renderList();
+      $("#main").classList.remove("db-fill");
+      $("#main").innerHTML = `
+        <div id="flash" hidden></div>
+        <div class="title-row">
+          <div><h2>安装资源</h2><div class="path">浏览 cangling-repo 提供的多架构离线安装资源</div></div>
+        </div>
+        <div class="card" id="install-resources-panel">
+          <div class="repo-browse">
+            <div class="repo-tree-panel">
+              <div class="repo-tree-toolbar">
+                <button class="btn" id="install-resources-up" type="button" title="上级目录">↑ 上级</button>
+                <button class="btn" id="install-resources-refresh" type="button" title="刷新目录">刷新</button>
+                <span class="repo-path" id="install-resources-path">${esc(installResourcesDisplayPath())}</span>
+              </div>
+              <div class="repo-tree-list" id="install-resources-tree"><div class="repo-list-empty">加载中…</div></div>
+            </div>
+            <div class="repo-file-panel">
+              <div class="repo-file-head project-file-head">
+                <span class="repo-path" id="install-resource-title">选择文本文件查看内容</span>
+                <span class="hint">只读预览</span>
+              </div>
+              <pre class="repo-file-content" id="install-resource-preview"></pre>
+            </div>
+          </div>
+        </div>`;
+      $("#install-resources-up").onclick = installResourcesUp;
+      $("#install-resources-refresh").onclick = loadInstallResources;
+      await loadInstallResources();
+    }
+
+    async function loadInstallResources() {
+      if ((location.hash || "#/") !== "#/install-resources") return;
+      const tree = $("#install-resources-tree");
+      const path = $("#install-resources-path");
+      const up = $("#install-resources-up");
+      if (!tree) return;
+      if (path) path.textContent = installResourcesDisplayPath();
+      if (up) up.disabled = !installResources.path;
+      tree.innerHTML = `<div class="repo-list-empty">加载中…</div>`;
+      try {
+        const entries = await api("/api/install-resources?path=" + encodeURIComponent(installResources.path));
+        if (!entries.length) {
+          tree.innerHTML = `<div class="repo-list-empty">空目录</div>`;
+          return;
+        }
+        tree.innerHTML = entries.map(entry => `
+          <button type="button" class="repo-item" data-install-resource-path="${esc(entry.path)}" data-install-resource-dir="${entry.is_dir ? "1" : "0"}">
+            <span class="repo-item-icon">${entry.is_dir ? REPO_ICON_DIR : REPO_ICON_FILE}</span>
+            <span class="repo-item-name">${esc(entry.name)}</span>
+            <span class="repo-item-size">${entry.is_dir ? "" : fmtBytes(entry.size || 0)}</span>
+          </button>`).join("");
+        tree.querySelectorAll("[data-install-resource-path]").forEach(button => {
+          button.onclick = () => {
+            const target = button.getAttribute("data-install-resource-path") || "";
+            if (button.getAttribute("data-install-resource-dir") === "1") {
+              installResources.path = target;
+              resetInstallResourcePreview();
+              loadInstallResources();
+            } else {
+              openInstallResourceFile(target);
+            }
+          };
+        });
+      } catch (error) {
+        tree.innerHTML = `<div class="repo-list-empty bad">${esc(error.message)}</div>`;
+      }
+    }
+
+    async function openInstallResourceFile(path) {
+      resetInstallResourcePreview("<程序目录>/cangling-repo/" + path + " · 加载中…");
+      try {
+        const file = await api("/api/install-resources/content?path=" + encodeURIComponent(path));
+        installResources.selected = file.path;
+        $("#install-resource-title").textContent = "<程序目录>/cangling-repo/" + file.path + " · " + fmtBytes(file.size || 0);
+        $("#install-resource-preview").textContent = file.content || "";
+      } catch (error) {
+        $("#install-resource-preview").textContent = "无法预览：" + error.message;
+      }
+    }
+
+    function installResourcesUp() {
+      if (!installResources.path) return;
+      const parts = installResources.path.split("/").filter(Boolean);
+      parts.pop();
+      installResources.path = parts.join("/");
+      resetInstallResourcePreview();
+      loadInstallResources();
     }
 
     async function renderImages() {
@@ -8458,6 +8784,8 @@ access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
     $("#btn-k3s").onclick = () => goHash("#/k3s");
     $("#btn-cangling").onclick = () => goHash("#/cangling");
     $("#btn-images").onclick = () => goHash("#/images");
+    $("#btn-certificates").onclick = () => goHash("#/certificates");
+    $("#btn-install-resources").onclick = () => goHash("#/install-resources");
     $("#btn-jar-upgrade").onclick = () => goHash("#/jar-upgrade");
     $("#btn-storage").onclick = () => goHash("#/storage");
     $("#btn-traffic").onclick = () => goHash("#/traffic");

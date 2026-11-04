@@ -4,6 +4,7 @@ mod backup;
 mod binaries;
 mod cangling_apps;
 mod cert;
+mod certificate_manager;
 mod cluster;
 mod db;
 mod dbadmin;

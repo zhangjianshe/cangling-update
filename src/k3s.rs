@@ -46,9 +46,21 @@ pub fn fix() -> Result<()> {
     }
 }
 
-/// 供集群初始化调用：确保 Traefik 端口覆盖 manifest 已写入（best-effort）。
-pub fn ensure_traefik_config() -> Result<String> {
-    let manifests = PathBuf::from(MANIFESTS_DIR);
+pub fn effective_data_dir(configured: &str) -> String {
+    let configured = configured.trim();
+    if configured.is_empty() {
+        std::fs::read_to_string("/etc/rancher/k3s/cangling-data-dir")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| value.starts_with('/') && value != "/")
+            .unwrap_or_else(|| K3S_DATA_DIR.to_string())
+    } else {
+        configured.trim_end_matches('/').to_string()
+    }
+}
+
+pub fn ensure_traefik_config_at(data_dir: &str) -> Result<String> {
+    let manifests = PathBuf::from(data_dir).join("server/manifests");
     if !manifests.is_dir() {
         std::fs::create_dir_all(&manifests)
             .with_context(|| format!("创建 {}，需要 root 权限", manifests.display()))?;

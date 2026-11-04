@@ -1,20 +1,18 @@
-//! 软件仓库：解析可执行文件旁的 `repo/` 目录。
+//! 安装资源：解析 cangling-update 可执行文件同目录下的 `cangling-repo/`。
 //!
 //! 布局与 cangling-keeper「软件同步」一致（按软件集分子目录）：
 //! ```text
-//! cangling-update
-//! repo/
-//!   cangling-repo/         # 离线安装包（原 repo-templates / git 仓库）
-//!     kylin-arm/<软件包>/     # RPM 系 ARM64；install.sh 可选
-//!     kylin-x86/<软件包>/...  # RPM 系 x86_64
-//!     linux-arm/<软件包>/...  # Debian 系 ARM64
-//!     linux-x86/<软件包>/...  # Debian 系 x86_64
-//!     windows/<软件包>/...
+//! <cangling-update 所在目录>/cangling-repo/
+//!   kylin-arm/<软件包>/     # RPM 系 ARM64；install.sh 可选
+//!   kylin-x86/<软件包>/...  # RPM 系 x86_64
+//!   linux-arm/<软件包>/...  # Debian 系 ARM64
+//!   linux-x86/<软件包>/...  # Debian 系 x86_64
+//!   windows/<软件包>/...
 //!   np4/                   # 维护中心 Manifest 集
 //!     np4-update/latest/   # cangling-update 自我更新二进制
 //! ```
 //!
-//! 仍兼容旧布局（平台目录直接放在 `repo/` 下）。
+//! 仍兼容仓库内嵌套一层 `cangling-repo/` 的旧布局。
 //!
 //! master 本地扫描仓库并对外提供打包下载（m2m 接口），worker 通过 master 拉取
 //! 仓库清单、下载软件包；有安装脚本时也可在本机运行。
@@ -48,6 +46,8 @@ pub const NP4_SET: &str = "np4";
 /// np4 集里的自我更新软件。
 pub const NP4_UPDATE: &str = "np4-update";
 pub const NP4_UPDATE_VERSION: &str = "latest";
+/// 初始化/检查集群及安装资源浏览共用的仓库目录名。
+pub const INSTALL_RESOURCES_DIR: &str = "cangling-repo";
 
 /// 安装脚本执行超时（安装可能比普通脚本更久）。
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -214,10 +214,10 @@ fn ensure_install_platform(tab: &str) -> Result<(), AppError> {
 }
 
 pub fn repo_root(paths: &AppPaths) -> PathBuf {
-    paths.exe_dir.join("repo")
+    paths.exe_dir.join(INSTALL_RESOURCES_DIR)
 }
 
-/// 离线安装包根：优先 `repo/cangling-repo/`，否则回退到 `repo/`（旧布局）。
+/// 离线安装包根：优先兼容嵌套的 `cangling-repo/`，否则使用固定仓库根。
 pub fn packages_root(repo: &FsPath) -> PathBuf {
     let nested = repo.join(CANGLING_REPO_SET);
     if nested.is_dir() {

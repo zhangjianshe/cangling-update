@@ -179,6 +179,9 @@ fn run_host_script(
     config_dir: &FsPath,
     script: &str,
 ) -> Result<String, AppError> {
+    let script = format!(
+        "if [ -z \"${{HOME:-}}\" ]; then\n  HOME=\"$(awk -F: -v uid=\"$(id -u)\" '$3 == uid {{ print $6; exit }}' /etc/passwd)\"\n  export HOME\nfi\nif [ -z \"${{HOME:-}}\" ]; then\n  echo '无法确定目标用户主目录' >&2\n  exit 1\nfi\n{script}"
+    );
     let mut command;
     let askpass = if host.local {
         command = Command::new("sh");

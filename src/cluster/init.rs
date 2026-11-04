@@ -1,4 +1,4 @@
-//! 集群初始化：master 一键安装本机与各 worker 的基线软件（全部来自 `repo/cangling-repo/`）。
+//! 集群初始化：master 一键安装本机与各 worker 的基线软件（全部来自程序目录下的 `cangling-repo/`）。
 //!
 //! master 角色：git、samba、CIFS/NFS、docker、k3s-server（含 Traefik 端口 8020/8443）、k9s。
 //! worker 角色：git、samba、CIFS/NFS、docker、k3s-agent（携带 K3S_URL/K3S_TOKEN 加入集群）。
@@ -8,13 +8,17 @@ use crate::db;
 use crate::error::AppError;
 use crate::hostinfo;
 use crate::k3s;
+use crate::models::Project;
 use crate::repo;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use uuid::Uuid;
 
 pub const MASTER_SOFTWARE: &[&str] = &[
     "git",
@@ -36,9 +40,20 @@ pub const WORKER_SOFTWARE: &[&str] = &[
     "k3s-agent",
 ];
 pub const CLUSTER_NAME_KEY: &str = "cluster_name";
+pub const K3S_DATA_DIR_KEY: &str = "k3s_data_dir";
 const TRAEFIK_STEP: &str = "traefik-8020/8443";
 const KUBECONFIG_STEP: &str = "~/.kube/config";
-const K3S_TOKEN_PATH: &str = "/var/lib/rancher/k3s/server/node-token";
+const HOSTNAME_STEP: &str = "设置主机名";
+const WORKER_BOOTSTRAP_STEP: &str = "安装 cangling-update Worker";
+const LOADBALANCE_STEP: &str = "Load Balancer :7800/update";
+
+#[derive(Debug, Clone)]
+struct BootstrapHost {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct InitStep {
@@ -68,6 +83,8 @@ pub type InitState = Arc<Mutex<InitStatus>>;
 #[derive(Debug, Deserialize)]
 pub struct StartInitBody {
     pub name: String,
+    #[serde(default)]
+    pub k3s_data_dir: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,6 +94,10 @@ pub struct WorkerInitRequest {
     pub k3s_url: String,
     #[serde(default)]
     pub k3s_token: String,
+    #[serde(default)]
+    pub k3s_data_dir: String,
+    #[serde(default)]
+    pub hostname: String,
     #[serde(default)]
     pub software: Vec<String>,
 }
@@ -98,7 +119,34 @@ pub async fn start_init(
     if name.is_empty() {
         return Err(AppError::bad("集群名称不能为空"));
     }
-    launch(state, Some(name), "init".to_string()).await
+    validate_k3s_data_dir(&body.k3s_data_dir)?;
+    validate_cluster_hostnames(&state)?;
+    launch(
+        state,
+        Some(name),
+        Some(body.k3s_data_dir.trim().to_string()),
+        "init".to_string(),
+    )
+    .await
+}
+
+fn validate_k3s_data_dir(value: &str) -> Result<(), AppError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(());
+    }
+    let path = Path::new(value);
+    if !path.is_absolute()
+        || path == Path::new("/")
+        || path
+            .components()
+            .any(|part| matches!(part, Component::ParentDir))
+    {
+        return Err(AppError::bad(
+            "K3s 数据目录必须是安全的绝对路径，且不能是根目录 /",
+        ));
+    }
+    Ok(())
 }
 
 /// 控制台（登录态）入口：检查各节点并修复（含新加入节点），使用已保存的集群名。
@@ -109,12 +157,17 @@ pub async fn start_check(
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         db::cluster_setting(&conn, CLUSTER_NAME_KEY)?.unwrap_or_default()
     };
-    launch(state, Some(name), "check".to_string()).await
+    let data_dir = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        db::cluster_setting(&conn, K3S_DATA_DIR_KEY)?.unwrap_or_default()
+    };
+    launch(state, Some(name), Some(data_dir), "check".to_string()).await
 }
 
 async fn launch(
     state: AppState,
     name: Option<String>,
+    k3s_data_dir: Option<String>,
     mode: String,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let name = name.unwrap_or_default();
@@ -133,12 +186,18 @@ async fn launch(
     if !name.trim().is_empty() {
         let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
         db::set_cluster_setting(&conn, CLUSTER_NAME_KEY, name.trim())?;
+        db::set_cluster_setting(
+            &conn,
+            K3S_DATA_DIR_KEY,
+            k3s_data_dir.as_deref().unwrap_or_default(),
+        )?;
     }
 
     let state2 = state.clone();
     let name = name.trim().to_string();
+    let k3s_data_dir = k3s_data_dir.unwrap_or_default();
     tokio::spawn(async move {
-        run_init(state2, name, mode).await;
+        run_init(state2, name, k3s_data_dir, mode).await;
     });
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -162,6 +221,15 @@ pub async fn run_worker_init(
     }
     let mut packages = Vec::new();
     let mut ok = true;
+    if !body.hostname.trim().is_empty() {
+        match set_system_hostname(&body.hostname) {
+            Ok(output) => packages.push(step_result(HOSTNAME_STEP, output, true)),
+            Err(error) => {
+                ok = false;
+                packages.push(step_result(HOSTNAME_STEP, format!("{error:#}"), false));
+            }
+        }
+    }
     for pkg in &body.software {
         let envs = vec![
             (
@@ -170,6 +238,7 @@ pub async fn run_worker_init(
             ),
             ("K3S_URL".to_string(), body.k3s_url.clone()),
             ("K3S_TOKEN".to_string(), body.k3s_token.clone()),
+            ("K3S_DATA_DIR".to_string(), body.k3s_data_dir.clone()),
         ];
         match repo::install_package(&state, repo::host_platform(), pkg, &envs).await {
             Ok(r) => {
@@ -200,7 +269,7 @@ pub async fn run_worker_init(
     }))
 }
 
-async fn run_init(state: AppState, name: String, mode: String) {
+async fn run_init(state: AppState, name: String, k3s_data_dir: String, mode: String) {
     let now = now_rfc3339();
     {
         let mut st = match state.init.lock() {
@@ -216,7 +285,7 @@ async fn run_init(state: AppState, name: String, mode: String) {
         st.steps = build_steps(&state);
     }
 
-    let result = run_init_inner(&state, &name).await;
+    let result = run_init_inner(&state, &name, &k3s_data_dir).await;
 
     let mut st = match state.init.lock() {
         Ok(g) => g,
@@ -233,7 +302,15 @@ async fn run_init(state: AppState, name: String, mode: String) {
 
 fn build_steps(state: &AppState) -> Vec<InitStep> {
     let mut steps = Vec::new();
-    let me = node_label();
+    let me = managed_master_name(state).unwrap_or_else(|_| node_label());
+    steps.push(InitStep {
+        node: me.clone(),
+        role: "master".to_string(),
+        package: HOSTNAME_STEP.to_string(),
+        state: "pending".to_string(),
+        output: String::new(),
+        elapsed_ms: 0,
+    });
     for pkg in MASTER_SOFTWARE {
         steps.push(InitStep {
             node: me.clone(),
@@ -261,8 +338,25 @@ fn build_steps(state: &AppState) -> Vec<InitStep> {
         elapsed_ms: 0,
     });
 
-    if let Ok(workers) = online_workers(state) {
-        for (wname, _addr) in workers {
+    if let Ok(workers) = managed_worker_hosts(state) {
+        for worker in workers {
+            let wname = worker.name;
+            steps.push(InitStep {
+                node: wname.clone(),
+                role: "worker".to_string(),
+                package: HOSTNAME_STEP.to_string(),
+                state: "pending".to_string(),
+                output: String::new(),
+                elapsed_ms: 0,
+            });
+            steps.push(InitStep {
+                node: wname.clone(),
+                role: "worker".to_string(),
+                package: WORKER_BOOTSTRAP_STEP.to_string(),
+                state: "pending".to_string(),
+                output: String::new(),
+                elapsed_ms: 0,
+            });
             for pkg in WORKER_SOFTWARE {
                 steps.push(InitStep {
                     node: wname.clone(),
@@ -275,17 +369,64 @@ fn build_steps(state: &AppState) -> Vec<InitStep> {
             }
         }
     }
+    steps.push(InitStep {
+        node: me,
+        role: "master".to_string(),
+        package: LOADBALANCE_STEP.to_string(),
+        state: "pending".to_string(),
+        output: String::new(),
+        elapsed_ms: 0,
+    });
     steps
 }
 
-async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
-    let me = node_label();
+async fn run_init_inner(state: &AppState, name: &str, k3s_data_dir: &str) -> Result<(), AppError> {
+    let me = managed_master_name(state)?;
+
+    update_step(
+        state,
+        &me,
+        "master",
+        HOSTNAME_STEP,
+        "running",
+        String::new(),
+        0,
+    );
+    let started = Instant::now();
+    match set_system_hostname(&me) {
+        Ok(output) => update_step(
+            state,
+            &me,
+            "master",
+            HOSTNAME_STEP,
+            "ok",
+            output,
+            started.elapsed().as_millis() as u64,
+        ),
+        Err(error) => {
+            update_step(
+                state,
+                &me,
+                "master",
+                HOSTNAME_STEP,
+                "failed",
+                format!("{error:#}"),
+                started.elapsed().as_millis() as u64,
+            );
+            return Err(error);
+        }
+    }
+
+    bootstrap_workers(state).await?;
 
     // 1) 本机（master）软件依次安装。单个软件失败只记录结果，继续后续项目；
     // 最终状态会根据 failed 步骤提示“部分步骤失败”。
     for pkg in MASTER_SOFTWARE {
         update_step(state, &me, "master", pkg, "running", String::new(), 0);
-        let envs = vec![("CANGLING_CLUSTER_NAME".to_string(), name.to_string())];
+        let envs = vec![
+            ("CANGLING_CLUSTER_NAME".to_string(), name.to_string()),
+            ("K3S_DATA_DIR".to_string(), k3s_data_dir.to_string()),
+        ];
         let started = Instant::now();
         let res = repo::install_package(state, repo::host_platform(), pkg, &envs).await;
         let elapsed = started.elapsed().as_millis() as u64;
@@ -300,7 +441,7 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
             }
             Err(e) => {
                 update_step(
-                    state,
+                    &state,
                     &me,
                     "master",
                     pkg,
@@ -324,7 +465,8 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
     );
     let started = Instant::now();
     let elapsed = started.elapsed().as_millis() as u64;
-    match k3s::ensure_traefik_config() {
+    let effective_data_dir = k3s::effective_data_dir(k3s_data_dir);
+    match k3s::ensure_traefik_config_at(&effective_data_dir) {
         Ok(msg) => update_step(state, &me, "master", TRAEFIK_STEP, "ok", msg, elapsed),
         Err(e) => update_step(
             state,
@@ -370,15 +512,264 @@ async fn run_init_inner(state: &AppState, name: &str) -> Result<(), AppError> {
     }
 
     // 3) 读取 k3s 加入令牌与主节点地址，下发给 worker。
-    let k3s_token = read_file(K3S_TOKEN_PATH).unwrap_or_default();
+    let token_path = format!("{effective_data_dir}/server/node-token");
+    let k3s_token = read_file(&token_path).unwrap_or_default();
     let k3s_url = format!("https://{}:6443", hostinfo::primary_ip());
 
     // 4) 各 worker 依次初始化（失败不阻断其它 worker）。
     for (wname, waddr) in online_workers(state)? {
-        init_worker(state, &wname, &waddr, name, &k3s_url, &k3s_token).await;
+        init_worker(
+            state,
+            &wname,
+            &waddr,
+            name,
+            &k3s_url,
+            &k3s_token,
+            k3s_data_dir,
+        )
+        .await;
+    }
+
+    update_step(
+        state,
+        &me,
+        "master",
+        LOADBALANCE_STEP,
+        "running",
+        String::new(),
+        0,
+    );
+    let started = Instant::now();
+    match ensure_loadbalance(state) {
+        Ok(output) => update_step(
+            state,
+            &me,
+            "master",
+            LOADBALANCE_STEP,
+            "ok",
+            output,
+            started.elapsed().as_millis() as u64,
+        ),
+        Err(error) => update_step(
+            state,
+            &me,
+            "master",
+            LOADBALANCE_STEP,
+            "failed",
+            format!("{error:#}"),
+            started.elapsed().as_millis() as u64,
+        ),
     }
 
     Ok(())
+}
+
+pub(crate) fn ensure_loadbalance(state: &AppState) -> Result<String, AppError> {
+    const DIR: &str = "/opt/cangling/loadbalance";
+    const IMAGE: &str = "hub.cangling.cn/cangling/nginx-rtmp:v4.2.35";
+    const NGINX: &str = r#"worker_processes auto;
+worker_rlimit_nofile 65535;
+events {
+  worker_connections 16384;
+  multi_accept on;
+  use epoll;
+}
+http {
+  map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+  keepalive_timeout 65s;
+  keepalive_requests 10000;
+  client_max_body_size 0;
+  access_log /var/log/nginx/access.log;
+  error_log /var/log/nginx/error.log warn;
+  server {
+    listen 7800;
+    server_name _;
+    location = /update { return 308 /update/; }
+    location /update/ {
+      proxy_pass http://127.0.0.1:5400/;
+      proxy_http_version 1.1;
+      proxy_cache off;
+      proxy_request_buffering off;
+      proxy_buffering off;
+      proxy_max_temp_file_size 0;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Forwarded-Prefix /update;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_read_timeout 3600s;
+      proxy_send_timeout 3600s;
+    }
+  }
+}
+"#;
+    crate::certificate_manager::ensure_embedded_root()?;
+    let nginx = if Path::new("/opt/cangling/loadbalance/certs/loadbalance.crt.pem").is_file()
+        && Path::new("/opt/cangling/loadbalance/certs/loadbalance.key.pem").is_file()
+    {
+        NGINX.replace(
+            "    listen 7800;\n",
+            "    listen 7800;\n    listen 7443 ssl;\n    ssl_certificate /etc/nginx/certs/loadbalance.crt.pem;\n    ssl_certificate_key /etc/nginx/certs/loadbalance.key.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_cache shared:TLS:20m;\n    ssl_session_timeout 1d;\n",
+        )
+    } else {
+        NGINX.to_string()
+    };
+    let compose = format!(
+        "services:\n  loadbalance:\n    image: {IMAGE}\n    container_name: cangling-loadbalance\n    network_mode: host\n    restart: unless-stopped\n    ulimits:\n      nofile:\n        soft: 65535\n        hard: 65535\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./logs:/var/log/nginx\n      - ./certs:/etc/nginx/certs:ro\n    command: [\"/usr/local/nginx/sbin/nginx\", \"-g\", \"daemon off;\"]\n"
+    );
+    std::fs::create_dir_all(format!("{DIR}/logs"))
+        .map_err(|error| AppError::internal(format!("创建 Load Balancer 目录失败：{error}")))?;
+    std::fs::create_dir_all(format!("{DIR}/certs"))
+        .map_err(|error| AppError::internal(format!("创建证书目录失败：{error}")))?;
+    std::fs::write(format!("{DIR}/nginx.conf"), nginx)
+        .map_err(|error| AppError::internal(format!("写入 Nginx 配置失败：{error}")))?;
+    std::fs::write(format!("{DIR}/docker-compose.yaml"), compose)
+        .map_err(|error| AppError::internal(format!("写入 Compose 配置失败：{error}")))?;
+    let output = Command::new("docker")
+        .args([
+            "compose",
+            "-f",
+            &format!("{DIR}/docker-compose.yaml"),
+            "up",
+            "-d",
+        ])
+        .output()
+        .map_err(|error| AppError::internal(format!("启动 Load Balancer 失败：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(format!(
+            "启动 Load Balancer 失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    ensure_loadbalance_log_rotation()?;
+    let project_action = register_loadbalance_project(state, DIR)?;
+    Ok(format!(
+        "Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；日志每 5 分钟检查并按 500 MB 轮转；项目面板{}“负载均衡”项目",
+        hostinfo::primary_ip(),
+        project_action
+    ))
+}
+
+fn ensure_loadbalance_log_rotation() -> Result<(), AppError> {
+    const LOGROTATE_PATH: &str = "/etc/logrotate.d/cangling-loadbalance";
+    const SERVICE_PATH: &str = "/etc/systemd/system/cangling-loadbalance-logrotate.service";
+    const TIMER_PATH: &str = "/etc/systemd/system/cangling-loadbalance-logrotate.timer";
+    const LOGROTATE: &str = r#"/opt/cangling/loadbalance/logs/*.log {
+    size 500M
+    rotate 10
+    compress
+    delaycompress
+    dateext
+    missingok
+    notifempty
+    create 0640 root root
+    su root root
+    sharedscripts
+    postrotate
+        /usr/bin/docker kill -s USR1 cangling-loadbalance >/dev/null 2>&1 || true
+    endscript
+}
+"#;
+    const SERVICE: &str = r#"[Unit]
+Description=Rotate cangling load balancer logs
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/logrotate /etc/logrotate.d/cangling-loadbalance
+Nice=10
+"#;
+    const TIMER: &str = r#"[Unit]
+Description=Check cangling load balancer logs every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=cangling-loadbalance-logrotate.service
+
+[Install]
+WantedBy=timers.target
+"#;
+
+    for (path, content) in [
+        (LOGROTATE_PATH, LOGROTATE),
+        (SERVICE_PATH, SERVICE),
+        (TIMER_PATH, TIMER),
+    ] {
+        std::fs::write(path, content).map_err(|error| {
+            AppError::internal(format!("写入日志轮转配置 {path} 失败：{error}"))
+        })?;
+    }
+
+    let check = Command::new("/usr/sbin/logrotate")
+        .args(["--debug", LOGROTATE_PATH])
+        .output()
+        .map_err(|error| AppError::internal(format!("检查日志轮转配置失败：{error}")))?;
+    if !check.status.success() {
+        return Err(AppError::internal(format!(
+            "日志轮转配置无效：{}",
+            String::from_utf8_lossy(&check.stderr).trim()
+        )));
+    }
+
+    let reload = Command::new("systemctl")
+        .arg("daemon-reload")
+        .output()
+        .map_err(|error| AppError::internal(format!("刷新 systemd 配置失败：{error}")))?;
+    if !reload.status.success() {
+        return Err(AppError::internal(format!(
+            "刷新 systemd 配置失败：{}",
+            String::from_utf8_lossy(&reload.stderr).trim()
+        )));
+    }
+    let enable = Command::new("systemctl")
+        .args(["enable", "--now", "cangling-loadbalance-logrotate.timer"])
+        .output()
+        .map_err(|error| AppError::internal(format!("启用日志轮转定时器失败：{error}")))?;
+    if !enable.status.success() {
+        return Err(AppError::internal(format!(
+            "启用日志轮转定时器失败：{}",
+            String::from_utf8_lossy(&enable.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+fn register_loadbalance_project(
+    state: &AppState,
+    directory: &str,
+) -> Result<&'static str, AppError> {
+    const NAME: &str = "负载均衡";
+    const DESCRIPTION: &str = "集群负载均衡入口：7800 端口的 /update/ 转发到主节点 cangling-update";
+
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let now = db::now_rfc3339();
+    if let Some(existing) = db::list_projects(&conn)?
+        .into_iter()
+        .find(|project| project.name == NAME)
+    {
+        db::update_project(&conn, &existing.id, NAME, DESCRIPTION, directory, &now)?;
+        return Ok("已更新");
+    }
+
+    db::insert_project(
+        &conn,
+        &Project {
+            id: Uuid::new_v4().to_string(),
+            name: NAME.to_string(),
+            description: DESCRIPTION.to_string(),
+            directory: directory.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+            current_version_no: None,
+            current_version_id: None,
+            version_count: 0,
+        },
+    )?;
+    Ok("已创建")
 }
 
 async fn init_worker(
@@ -388,15 +779,71 @@ async fn init_worker(
     name: &str,
     k3s_url: &str,
     k3s_token: &str,
+    k3s_data_dir: &str,
 ) {
     let token = state.cluster.token.clone().unwrap_or_default();
     let url = format!("http://{waddr}/api/cluster/init/run");
+    update_step(
+        state,
+        wname,
+        "worker",
+        HOSTNAME_STEP,
+        "running",
+        String::new(),
+        0,
+    );
+    let hostname_started = Instant::now();
+    let hostname_request = WorkerInitRequest {
+        cluster_name: name.to_string(),
+        k3s_url: k3s_url.to_string(),
+        k3s_token: k3s_token.to_string(),
+        k3s_data_dir: k3s_data_dir.to_string(),
+        hostname: wname.to_string(),
+        software: Vec::new(),
+    };
+    let hostname_body = serde_json::to_value(&hostname_request).unwrap_or_default();
+    let hostname_result = crate::cluster::http::post_json(&url, &token, &hostname_body).await;
+    let (hostname_ok, hostname_output) = match hostname_result {
+        Ok((status, value)) if status.is_success() => {
+            match serde_json::from_value::<WorkerInitResult>(value) {
+                Ok(mut response) => {
+                    let output = response
+                        .packages
+                        .pop()
+                        .map(|result| combined_output(&result))
+                        .unwrap_or_else(|| "工作节点未返回主机名修改结果".to_string());
+                    (response.ok, output)
+                }
+                Err(error) => (false, format!("解析工作节点返回失败：{error:#}")),
+            }
+        }
+        Ok((status, value)) => (
+            false,
+            format!("工作节点请求失败 {status}: {}", json_error(&value)),
+        ),
+        Err(error) => (false, format!("{error:#}")),
+    };
+    update_step(
+        state,
+        wname,
+        "worker",
+        HOSTNAME_STEP,
+        if hostname_ok { "ok" } else { "failed" },
+        hostname_output,
+        hostname_started.elapsed().as_millis() as u64,
+    );
+    if !hostname_ok {
+        mark_worker_remaining_failed(state, wname, 0, "设置主机名失败，已停止该节点初始化".into());
+        return;
+    }
     for (index, package) in WORKER_SOFTWARE.iter().enumerate() {
         update_step(state, wname, "worker", package, "running", String::new(), 0);
         let req = WorkerInitRequest {
             cluster_name: name.to_string(),
             k3s_url: k3s_url.to_string(),
             k3s_token: k3s_token.to_string(),
+            k3s_data_dir: k3s_data_dir.to_string(),
+            hostname: String::new(),
             software: vec![package.to_string()],
         };
         let body = serde_json::to_value(&req).unwrap_or(serde_json::Value::Null);
@@ -418,7 +865,7 @@ async fn init_worker(
             }
             Ok((status, value)) => {
                 mark_worker_remaining_failed(
-                    state,
+                    &state,
                     wname,
                     index,
                     format!("worker 初始化请求失败 {status}: {}", json_error(&value)),
@@ -499,12 +946,242 @@ fn combined_output(r: &repo::InstallResult) -> String {
     out
 }
 
+fn managed_worker_hosts(state: &AppState) -> Result<Vec<BootstrapHost>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let mut stmt = conn.prepare(
+        "SELECT name, host, ssh_port, username FROM managed_hosts
+         WHERE kind != 'local' ORDER BY name",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(BootstrapHost {
+            name: row.get(0)?,
+            host: row.get(1)?,
+            port: row.get::<_, u16>(2)?,
+            username: row.get(3)?,
+        })
+    })?;
+    let mut hosts = Vec::new();
+    for row in rows {
+        let host = row?;
+        validate_hostname(&host.name)?;
+        if !hosts
+            .iter()
+            .any(|item: &BootstrapHost| item.host == host.host)
+        {
+            hosts.push(host);
+        }
+    }
+    Ok(hosts)
+}
+
+async fn bootstrap_workers(state: &AppState) -> Result<(), AppError> {
+    let hosts = managed_worker_hosts(state)?;
+    let token = state
+        .cluster
+        .token
+        .as_deref()
+        .ok_or_else(|| AppError::bad("未配置集群令牌"))?
+        .to_string();
+    let master = format!("http://{}:5400", hostinfo::primary_ip());
+    for host in hosts.clone() {
+        let state = state.clone();
+        let token = token.clone();
+        let master = master.clone();
+        let host_for_task = host.clone();
+        update_step(
+            &state,
+            &host.name,
+            "worker",
+            HOSTNAME_STEP,
+            "running",
+            String::new(),
+            0,
+        );
+        let started = Instant::now();
+        let task_state = state.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            bootstrap_worker_blocking(&task_state, &host_for_task, &master, &token)
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Worker 引导任务失败：{error}")))?;
+        match result {
+            Ok(output) => {
+                update_step(
+                    &state,
+                    &host.name,
+                    "worker",
+                    HOSTNAME_STEP,
+                    "ok",
+                    format!("主机名已设置为 {}", host.name),
+                    started.elapsed().as_millis() as u64,
+                );
+                update_step(
+                    &state,
+                    &host.name,
+                    "worker",
+                    WORKER_BOOTSTRAP_STEP,
+                    "ok",
+                    output,
+                    started.elapsed().as_millis() as u64,
+                );
+            }
+            Err(error) => {
+                update_step(
+                    &state,
+                    &host.name,
+                    "worker",
+                    HOSTNAME_STEP,
+                    "failed",
+                    format!("{error:#}"),
+                    started.elapsed().as_millis() as u64,
+                );
+                update_step(
+                    &state,
+                    &host.name,
+                    "worker",
+                    WORKER_BOOTSTRAP_STEP,
+                    "failed",
+                    format!("{error:#}"),
+                    started.elapsed().as_millis() as u64,
+                );
+                return Err(error);
+            }
+        }
+    }
+    for _ in 0..30 {
+        let online = online_workers(state)?;
+        if hosts
+            .iter()
+            .all(|host| online.iter().any(|(name, _)| name == &host.name))
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let online = online_workers(state)?;
+    let missing = hosts
+        .iter()
+        .filter(|host| !online.iter().any(|(name, _)| name == &host.name))
+        .map(|host| host.name.as_str())
+        .collect::<Vec<_>>()
+        .join("、");
+    Err(AppError::internal(format!(
+        "Worker 安装后 30 秒内未注册到主节点：{missing}"
+    )))
+}
+
+fn bootstrap_worker_blocking(
+    state: &AppState,
+    host: &BootstrapHost,
+    master: &str,
+    token: &str,
+) -> Result<String, AppError> {
+    let target = format!("{}@{}", host.username, host.host);
+    let ssh_base = || {
+        let mut command = Command::new("ssh");
+        command.args([
+            "-p",
+            &host.port.to_string(),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=12",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            &target,
+        ]);
+        command
+    };
+    let arch_output = ssh_base()
+        .arg("uname -m")
+        .output()
+        .map_err(|error| AppError::internal(format!("连接 {} 失败：{error}", host.name)))?;
+    if !arch_output.status.success() {
+        return Err(AppError::internal(format!(
+            "连接 {} 失败：{}",
+            host.name,
+            String::from_utf8_lossy(&arch_output.stderr).trim()
+        )));
+    }
+    let arch_name = String::from_utf8_lossy(&arch_output.stdout);
+    let arch = crate::binaries::Arch::parse(arch_name.trim()).ok_or_else(|| {
+        AppError::bad(format!(
+            "{} 的 CPU 架构不受支持：{}",
+            host.name,
+            arch_name.trim()
+        ))
+    })?;
+    let slot = crate::binaries::binary_path(&state.paths.exe_dir, arch);
+    let binary = if crate::binaries::elf_arch_file(&slot) == Some(arch) {
+        slot.display().to_string()
+    } else {
+        crate::binaries::stored(&state.paths.exe_dir, arch)
+            .and_then(|item| item.path)
+            .ok_or_else(|| AppError::not_found(format!("缺少 {} Worker 安装程序", arch.label())))?
+    };
+    let remote_temp = "/tmp/cangling-update-worker.new";
+    let copy = Command::new("scp")
+        .args([
+            "-P",
+            &host.port.to_string(),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=12",
+            &binary,
+            &format!("{target}:{remote_temp}"),
+        ])
+        .output()
+        .map_err(|error| {
+            AppError::internal(format!("复制 Worker 到 {} 失败：{error}", host.name))
+        })?;
+    if !copy.status.success() {
+        return Err(AppError::internal(format!(
+            "复制 Worker 到 {} 失败：{}",
+            host.name,
+            String::from_utf8_lossy(&copy.stderr).trim()
+        )));
+    }
+    let script = format!(
+        "set -eu; test \"$(id -u)\" = 0; hostnamectl set-hostname {}; mkdir -p /opt/cangling-update; systemctl stop cangling-update 2>/dev/null || true; install -m 0755 {} /opt/cangling-update/cangling-update; /opt/cangling-update/cangling-update --bind 0.0.0.0 --port 5400 --role worker --master {} --cluster-token {} install-service; systemctl is-active --quiet cangling-update; systemctl show -p ExecStart --value cangling-update | grep -q -- '--role worker'; /opt/cangling-update/cangling-update version",
+        shell_quote(&host.name),
+        shell_quote(remote_temp),
+        shell_quote(master),
+        shell_quote(token),
+    );
+    let install = ssh_base()
+        .arg(script)
+        .output()
+        .map_err(|error| AppError::internal(format!("安装 {} Worker 失败：{error}", host.name)))?;
+    if !install.status.success() {
+        return Err(AppError::internal(format!(
+            "安装 {} Worker 失败：{}",
+            host.name,
+            String::from_utf8_lossy(&install.stderr).trim()
+        )));
+    }
+    Ok(format!(
+        "已通过 SSH 安装 {} Worker，并连接到 {}",
+        arch.label(),
+        master
+    ))
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
     let self_id = crate::cluster::load_or_create_node_id(&state.paths);
     let self_ip = hostinfo::primary_ip().parse::<std::net::IpAddr>().ok();
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let mut stmt = conn
-        .prepare("SELECT id, name, addr, last_seen FROM cluster_nodes WHERE role = 'worker'")
+        .prepare(
+            "SELECT cn.id, COALESCE(NULLIF(mh.name, ''), cn.name), cn.addr, cn.last_seen
+             FROM cluster_nodes cn
+             LEFT JOIN managed_hosts mh ON mh.cluster_node_id = cn.id
+             WHERE cn.role = 'worker'",
+        )
         .map_err(AppError::from)?;
     let rows = stmt
         .query_map([], |r| {
@@ -525,6 +1202,84 @@ fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
         }
     }
     Ok(out)
+}
+
+fn managed_master_name(state: &AppState) -> Result<String, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let name = conn
+        .query_row(
+            "SELECT name FROM managed_hosts WHERE kind = 'local' ORDER BY updated_at DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_else(|_| node_label());
+    validate_hostname(&name)?;
+    Ok(name)
+}
+
+fn validate_cluster_hostnames(state: &AppState) -> Result<(), AppError> {
+    validate_hostname(&managed_master_name(state)?)?;
+    for (name, _) in online_workers(state)? {
+        validate_hostname(&name)?;
+    }
+    Ok(())
+}
+
+fn validate_hostname(name: &str) -> Result<(), AppError> {
+    let name = name.trim();
+    let valid = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !valid {
+        return Err(AppError::bad(format!(
+            "主机名称“{name}”不是有效的 Linux hostname；仅允许字母、数字、短横线和点"
+        )));
+    }
+    Ok(())
+}
+
+fn set_system_hostname(name: &str) -> Result<String, AppError> {
+    validate_hostname(name)?;
+    let current = node_label();
+    if current == name {
+        return Ok(format!("主机名已经是 {name}"));
+    }
+    let output = Command::new("hostnamectl")
+        .args(["set-hostname", name])
+        .output()
+        .map_err(|error| AppError::internal(format!("执行 hostnamectl 失败：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(format!(
+            "修改主机名失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(format!("主机名已由 {current} 修改为 {name}"))
+}
+
+fn step_result(package: &str, output: String, ok: bool) -> repo::InstallResult {
+    let (stdout, stderr) = if ok {
+        (output, String::new())
+    } else {
+        (String::new(), output)
+    };
+    repo::InstallResult {
+        package: package.to_string(),
+        installer: "hostnamectl".to_string(),
+        stdout,
+        stderr,
+        exit_code: Some(if ok { 0 } else { 1 }),
+        timed_out: false,
+        elapsed_ms: 0,
+    }
 }
 
 fn is_self_worker(
