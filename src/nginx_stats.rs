@@ -58,6 +58,7 @@ DROP INDEX IF EXISTS idx_nginx_devices_bucket;
 "#;
 
 const MAX_PATHS_PER_BUCKET: i64 = 500;
+pub const LOADBALANCE_LOG_DIR: &str = "/opt/cangling/loadbalance/logs";
 
 pub fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(SCHEMA)?;
@@ -72,6 +73,20 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/nginx-stats/scan", post(scan_now))
         .route("/api/nginx-stats/report", get(report))
+}
+
+pub fn configure_loadbalance_logs(state: &AppState) -> Result<String, AppError> {
+    let dir = validate_log_dir(LOADBALANCE_LOG_DIR)?;
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    ensure_schema(&conn).map_err(AppError::from)?;
+    conn.execute(
+        "UPDATE nginx_stats_settings SET enabled=1,log_dir=?1,last_status='configured',last_message=?2 WHERE id=1",
+        params![
+            dir.to_string_lossy(),
+            "已由集群检查配置为负载均衡访问日志"
+        ],
+    )?;
+    Ok(format!("流量统计已启用，日志目录：{}", dir.display()))
 }
 
 #[derive(Debug, Serialize)]

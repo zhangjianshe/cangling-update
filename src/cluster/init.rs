@@ -645,9 +645,11 @@ http {
     }
     ensure_loadbalance_log_rotation()?;
     let project_action = register_loadbalance_project(state, DIR)?;
+    let traffic = crate::nginx_stats::configure_loadbalance_logs(state)?;
     Ok(format!(
-        "Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；日志每 5 分钟检查并按 500 MB 轮转；项目面板{}“负载均衡”项目",
+        "Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
         hostinfo::primary_ip(),
+        traffic,
         project_action
     ))
 }
