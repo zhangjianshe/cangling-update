@@ -14,6 +14,9 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::Read;
 use std::path::{Component, Path};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -47,6 +50,7 @@ const KUBECONFIG_STEP: &str = "~/.kube/config";
 const HOSTNAME_STEP: &str = "设置主机名";
 const WORKER_BOOTSTRAP_STEP: &str = "安装 cangling-update Worker";
 const LOADBALANCE_STEP: &str = "Load Balancer :7800/update";
+const LOADBALANCE_IMAGE: &str = "hub.cangling.cn/cangling/nginx-rtmp:v4.2.35";
 
 #[derive(Debug, Clone)]
 struct BootstrapHost {
@@ -567,7 +571,7 @@ async fn run_init_inner(state: &AppState, name: &str, k3s_data_dir: &str) -> Res
 
 pub(crate) fn ensure_loadbalance(state: &AppState) -> Result<String, AppError> {
     const DIR: &str = "/opt/cangling/loadbalance";
-    const IMAGE: &str = "hub.cangling.cn/cangling/nginx-rtmp:v4.2.35";
+    let image_action = ensure_loadbalance_image(state)?;
     const NGINX: &str = r#"worker_processes auto;
 worker_rlimit_nofile 65535;
 events {
@@ -618,7 +622,7 @@ http {
         NGINX.to_string()
     };
     let compose = format!(
-        "services:\n  loadbalance:\n    image: {IMAGE}\n    container_name: cangling-loadbalance\n    network_mode: host\n    restart: unless-stopped\n    ulimits:\n      nofile:\n        soft: 65535\n        hard: 65535\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./logs:/var/log/nginx\n      - ./certs:/etc/nginx/certs:ro\n    command: [\"/usr/local/nginx/sbin/nginx\", \"-g\", \"daemon off;\"]\n"
+        "services:\n  loadbalance:\n    image: {LOADBALANCE_IMAGE}\n    container_name: cangling-loadbalance\n    network_mode: host\n    restart: unless-stopped\n    ulimits:\n      nofile:\n        soft: 65535\n        hard: 65535\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./logs:/var/log/nginx\n      - ./certs:/etc/nginx/certs:ro\n    command: [\"/usr/local/nginx/sbin/nginx\", \"-g\", \"daemon off;\"]\n"
     );
     std::fs::create_dir_all(format!("{DIR}/logs"))
         .map_err(|error| AppError::internal(format!("创建 Load Balancer 目录失败：{error}")))?;
@@ -648,11 +652,110 @@ http {
     let project_action = register_loadbalance_project(state, DIR)?;
     let traffic = crate::nginx_stats::configure_loadbalance_logs(state)?;
     Ok(format!(
-        "Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
+        "{image_action}；Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
         hostinfo::primary_ip(),
         traffic,
         project_action
     ))
+}
+
+fn ensure_loadbalance_image(state: &AppState) -> Result<String, AppError> {
+    let inspect = Command::new("docker")
+        .args(["image", "inspect", LOADBALANCE_IMAGE])
+        .output()
+        .map_err(|error| AppError::internal(format!("检查负载均衡镜像失败：{error}")))?;
+    if inspect.status.success() {
+        return Ok(format!("镜像已存在：{LOADBALANCE_IMAGE}"));
+    }
+
+    let arch = loadbalance_image_arch(std::env::consts::ARCH)?;
+    let filename = format!("nginx-rtmp-v4.2.35-linux-{arch}.tar.gz");
+    let image_dir = repo::repo_root(&state.paths)
+        .join("apps")
+        .join("base-images")
+        .join("linux")
+        .join(arch);
+    let archive = image_dir.join(&filename);
+    let sums = image_dir.join("SHA256SUMS");
+    if !archive.is_file() {
+        return Err(AppError::internal(format!(
+            "缺少 {arch} 负载均衡离线镜像：{}",
+            archive.display()
+        )));
+    }
+    verify_image_checksum(&archive, &sums)?;
+
+    let output = Command::new("docker")
+        .args(["load", "-i"])
+        .arg(&archive)
+        .output()
+        .map_err(|error| AppError::internal(format!("导入负载均衡镜像失败：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(format!(
+            "导入负载均衡镜像失败：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let inspect = Command::new("docker")
+        .args(["image", "inspect", LOADBALANCE_IMAGE])
+        .output()
+        .map_err(|error| AppError::internal(format!("验证负载均衡镜像失败：{error}")))?;
+    if !inspect.status.success() {
+        return Err(AppError::internal(format!(
+            "离线包导入后仍未找到镜像：{LOADBALANCE_IMAGE}"
+        )));
+    }
+    Ok(format!("已从离线仓库导入镜像：{filename}"))
+}
+
+fn loadbalance_image_arch(arch: &str) -> Result<&'static str, AppError> {
+    match arch {
+        "x86_64" | "amd64" => Ok("amd64"),
+        "aarch64" | "arm64" => Ok("arm64"),
+        other => Err(AppError::internal(format!(
+            "负载均衡离线镜像不支持当前 CPU 架构：{other}"
+        ))),
+    }
+}
+
+fn verify_image_checksum(archive: &Path, sums: &Path) -> Result<(), AppError> {
+    let filename = archive
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AppError::internal("负载均衡镜像文件名不是有效 UTF-8"))?;
+    let sum_text = std::fs::read_to_string(sums).map_err(|error| {
+        AppError::internal(format!("读取镜像校验清单 {} 失败：{error}", sums.display()))
+    })?;
+    let expected = sum_text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some((fields.next()?, fields.next()?.trim_start_matches('*')))
+        })
+        .find_map(|(sum, name)| (name == filename).then_some(sum))
+        .ok_or_else(|| AppError::internal(format!("SHA256SUMS 中未找到 {filename}")))?;
+
+    let mut file = File::open(archive).map_err(|error| {
+        AppError::internal(format!("打开离线镜像 {} 失败：{error}", archive.display()))
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| {
+            AppError::internal(format!("校验离线镜像 {} 失败：{error}", archive.display()))
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(AppError::internal(format!(
+            "离线镜像 {filename} SHA-256 校验失败：期望 {expected}，实际 {actual}"
+        )));
+    }
+    Ok(())
 }
 
 fn ensure_loadbalance_log_rotation() -> Result<(), AppError> {
@@ -1355,6 +1458,33 @@ mod tests {
         assert!(!WORKER_SOFTWARE.contains(&"nfs-server"));
         assert!(MASTER_SOFTWARE.contains(&"nfs-common"));
         assert!(WORKER_SOFTWARE.contains(&"nfs-common"));
+    }
+
+    #[test]
+    fn loadbalance_image_arch_uses_repository_directory_names() {
+        assert_eq!(loadbalance_image_arch("x86_64").unwrap(), "amd64");
+        assert_eq!(loadbalance_image_arch("amd64").unwrap(), "amd64");
+        assert_eq!(loadbalance_image_arch("aarch64").unwrap(), "arm64");
+        assert_eq!(loadbalance_image_arch("arm64").unwrap(), "arm64");
+        assert!(loadbalance_image_arch("riscv64").is_err());
+    }
+
+    #[test]
+    fn loadbalance_image_checksum_matches_named_archive() {
+        let root = std::env::temp_dir().join(format!("cangling-image-sum-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("image.tar.gz");
+        let sums = root.join("SHA256SUMS");
+        std::fs::write(&archive, b"offline image").unwrap();
+        std::fs::write(
+            &sums,
+            "173b4e756a894d63256ab6dac256c9c9b5b761284cb9d6cfeb8ddca3143456a1  image.tar.gz\n",
+        )
+        .unwrap();
+        assert!(verify_image_checksum(&archive, &sums).is_ok());
+        std::fs::write(&archive, b"changed").unwrap();
+        assert!(verify_image_checksum(&archive, &sums).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
