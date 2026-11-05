@@ -14,7 +14,6 @@ mod error;
 mod hostinfo;
 mod hosts;
 mod images;
-mod internal_nfs;
 mod jar_upgrade;
 mod k3s;
 mod k3s_resources;

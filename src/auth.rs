@@ -520,7 +520,7 @@ mod tests {
         assert!(is_public(&Method::GET, "/api/cluster/repo"));
         assert!(is_public(
             &Method::GET,
-            "/api/cluster/repo/linux-x86/demo/download"
+            "/api/cluster/repo/ubuntu-x86-22.04-deb/demo/download"
         ));
         assert!(is_public(&Method::POST, "/api/cluster/auth/sync"));
         assert!(is_public(&Method::POST, "/api/cluster/storage/start-share"));
@@ -545,7 +545,10 @@ mod tests {
             "/api/cluster/images/archive/images.tar.gz"
         ));
         assert!(!is_public(&Method::GET, "/api/cluster/nodes"));
-        assert!(!is_public(&Method::GET, "/api/cluster/repo/linux-x86/demo"));
+        assert!(!is_public(
+            &Method::GET,
+            "/api/cluster/repo/ubuntu-x86-22.04-deb/demo"
+        ));
         assert!(!is_public(&Method::GET, "/api/cluster/packages/abc/file"));
         assert!(!is_public(&Method::POST, "/api/cluster/tasks/run"));
     }

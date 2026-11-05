@@ -25,6 +25,7 @@ pub const MASTER_SOFTWARE: &[&str] = &[
     "samba",
     "cifs-utils",
     "nfs-common",
+    "nfs-server",
     "docker",
     "docker-compose",
     "k3s-server",
@@ -1346,6 +1347,14 @@ mod tests {
     fn kubeconfig_is_a_post_k3s_step() {
         assert!(!MASTER_SOFTWARE.contains(&KUBECONFIG_STEP));
         assert_eq!(KUBECONFIG_STEP, "~/.kube/config");
+    }
+
+    #[test]
+    fn nfs_server_is_installed_only_on_the_master() {
+        assert!(MASTER_SOFTWARE.contains(&"nfs-server"));
+        assert!(!WORKER_SOFTWARE.contains(&"nfs-server"));
+        assert!(MASTER_SOFTWARE.contains(&"nfs-common"));
+        assert!(WORKER_SOFTWARE.contains(&"nfs-common"));
     }
 
     #[test]

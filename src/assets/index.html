@@ -401,28 +401,6 @@
     .cangling-storage-mapped input { color: var(--muted); background: var(--bg-3); cursor: default; }
     .cangling-storage-type { width: 130px; }
     .cangling-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-    .cangling-nfs-status {
-      display: grid; grid-template-columns: minmax(180px, .65fr) minmax(260px, 1.35fr) auto;
-      gap: 14px; align-items: center; margin-bottom: 16px; padding: 14px 16px;
-      border: 1px solid var(--line); border-radius: 7px; background: var(--bg-3);
-    }
-    .cangling-nfs-state { display: flex; align-items: center; gap: 9px; min-width: 0; }
-    .cangling-nfs-state strong { display: block; font-size: 14px; }
-    .cangling-nfs-state span:last-child { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
-    .cangling-nfs-status .dot { flex: 0 0 auto; width: 10px; height: 10px; margin: 0; }
-    .cangling-nfs-location { min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-    .cangling-nfs-location code { color: var(--text); overflow-wrap: anywhere; }
-    .cangling-nfs-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
-    .cangling-nfs-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
-    .cangling-nfs-form .field { margin: 0; }
-    .cangling-nfs-form label { display: block; margin: 0 0 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
-    .cangling-nfs-form input {
-      width: 100%; height: 36px; padding: 0 10px; box-sizing: border-box;
-      border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--bg-input);
-    }
-    .cangling-nfs-form input[readonly] { color: var(--muted); background: var(--bg-3); }
-    .cangling-nfs-risk { margin-top: 16px; padding: 11px 13px; border: 1px solid var(--warning-line, #ead5a0); border-radius: 6px; color: var(--muted); background: var(--warning-bg, #fff8e8); font-size: 12px; line-height: 1.6; }
-    .cangling-nfs-output { max-height: 150px; margin: 12px 0 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--line); background: var(--log-bg); color: var(--log-text); white-space: pre-wrap; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .cangling-section-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       margin: 0 0 12px;
@@ -508,9 +486,6 @@
       .cangling-global { grid-template-columns: 1fr; }
       .cangling-section-head { align-items: flex-start; flex-direction: column; }
       .cangling-section-head .hint { text-align: left; }
-      .cangling-nfs-status { grid-template-columns: 1fr; }
-      .cangling-nfs-actions { justify-content: flex-start; }
-      .cangling-nfs-form { grid-template-columns: 1fr; }
     }
     .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
     .dot.online { background: var(--success); }
@@ -1414,7 +1389,7 @@
       return proto + "://" + location.host + appPath(path);
     }
 
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "internal-storage", canglingHostAuto: true, canglingHostSync: 0, canglingInternalNfs: null };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "cluster", canglingHostAuto: true, canglingHostSync: 0 };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -2705,12 +2680,8 @@
         <div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取部署模板…</div></div>
       </div>`;
       try {
-        const [config, internalNfs] = await Promise.all([
-          state.canglingConfig ? Promise.resolve(state.canglingConfig) : api("/api/cangling/apps/defaults"),
-          api("/api/cangling/internal-nfs"),
-        ]);
+        const config = state.canglingConfig || await api("/api/cangling/apps/defaults");
         state.canglingConfig = config;
-        state.canglingInternalNfs = internalNfs;
         renderCanglingAppsForm();
       } catch (e) {
         main.innerHTML = `<div class="cangling-page"><div class="title-row"><div><h2>苍灵应用</h2></div></div><div class="card"><h3>无法读取部署模板</h3><p class="hint">${esc(e.message)}</p><button type="button" class="btn" id="cangling-retry">重试</button></div></div>`;
@@ -2721,51 +2692,6 @@
 
     function canglingField(label, field, value, type = "text", hint = "") {
       return `<div class="field"><label for="cangling-${field}">${esc(label)}</label><input id="cangling-${field}" data-cangling-global="${esc(field)}" type="${type}" value="${esc(value)}" autocomplete="${type === "password" ? "new-password" : "off"}" />${hint ? `<p class="hint">${esc(hint)}</p>` : ""}</div>`;
-    }
-
-    function canglingNfsExportPath(value) {
-      let path = String(value || "/").trim();
-      if (!path.startsWith("/")) path = "/" + path;
-      path = path.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
-      return path || "/";
-    }
-
-    function canglingNfsAddress(server, exportPath, suffix = "") {
-      const root = canglingNfsExportPath(exportPath);
-      const tail = String(suffix || "").replace(/^\/+/, "");
-      const path = tail ? `${root === "/" ? "" : root}/${tail}` : root;
-      return `${String(server || "").trim()}:${path}`;
-    }
-
-    function canglingInternalNfsPanel(config) {
-      const status = state.canglingInternalNfs || {};
-      const nfs = status.config || { dataDir: "/opt/local/nfs/data", image: "ghcr.io/kubernetes-sigs/nfs-ganesha:v6.5", namespace: config.namespace, exportPath: "/" };
-      const serverAddress = nfs.serverAddress || status.detectedServerAddress || "";
-      const exportPath = canglingNfsExportPath(nfs.exportPath || status.exportRoot || "/");
-      const running = Boolean(status.running);
-      const stateTitle = running ? "运行中" : status.configured ? "已停止" : "未配置";
-      const detail = status.detail || "尚未读取 NFS 服务状态";
-      const manifestDir = status.manifestDir || "/opt/local/nfs";
-      const manifestFile = status.manifestFile || `${manifestDir}/ganesha.yaml`;
-      const output = status.actionOutput ? `<pre class="cangling-nfs-output">${esc(status.actionOutput)}</pre>` : "";
-      return `<div class="card">
-        <div class="cangling-section-head"><div><h3>集群内存储</h3><p class="hint">在 K3s 内运行单实例 NFS-Ganesha，为不同节点上的 Pod 提供 NFSv4 RWX 目录共享</p></div></div>
-        <div class="cangling-nfs-status">
-          <div class="cangling-nfs-state"><span class="dot ${running ? "online" : "offline"}"></span><div><strong>${esc(stateTitle)}</strong><span>${esc(detail)}</span></div></div>
-          <div class="cangling-nfs-location">K3s 清单：<code>${esc(manifestFile)}</code><br/>导出根：<code>${esc(canglingNfsAddress(serverAddress || "待识别地址", exportPath))}</code></div>
-          <div class="cangling-nfs-actions"><button type="button" class="btn" id="cangling-nfs-refresh">刷新状态</button><button type="button" class="btn" id="cangling-nfs-apply" ${running ? "" : "disabled"}>应用到苍灵配置</button><button type="button" class="btn danger" id="cangling-nfs-stop" ${running ? "" : "disabled"}>停止</button><button type="button" class="btn primary" id="cangling-nfs-start">保存配置并部署</button></div>
-        </div>
-        <div class="cangling-nfs-form">
-          <div class="field"><label for="cangling-nfs-compose-dir">K3s 清单目录</label><input id="cangling-nfs-compose-dir" type="text" value="${esc(manifestDir)}" readonly /><p class="hint">系统固定位置，不随数据目录变化</p></div>
-          <div class="field"><label for="cangling-nfs-data-dir">存储节点数据目录</label><input id="cangling-nfs-data-dir" type="text" value="${esc(nfs.dataDir || "/opt/local/nfs/data")}" spellcheck="false" /><p class="hint">通过 hostPath 持久化；Ganesha Pod 固定在当前 cangling-update 所在 K3s 节点</p></div>
-          <div class="field"><label for="cangling-nfs-image">NFS-Ganesha 容器镜像</label><input id="cangling-nfs-image" type="text" value="${esc(nfs.image || "ghcr.io/kubernetes-sigs/nfs-ganesha:v6.5")}" spellcheck="false" /><p class="hint">Kubernetes SIG Storage 发布的 amd64/arm64 多架构用户态 NFS 镜像</p></div>
-          <div class="field"><label for="cangling-nfs-server-address">NFS 服务地址</label><div class="cangling-global-select"><input id="cangling-nfs-server-address" type="text" value="${esc(serverAddress)}" placeholder="例如 192.168.3.121" spellcheck="false" /><button type="button" class="btn" id="cangling-nfs-detect-address">自动识别</button></div><p class="hint">默认读取当前 cangling-update 所在 K3s 节点的 InternalIP，也可手动指定其他可被所有节点访问的地址</p></div>
-          <div class="field"><label for="cangling-nfs-export-path">Export path</label><input id="cangling-nfs-export-path" type="text" value="${esc(exportPath)}" placeholder="/" spellcheck="false" /><p class="hint">NFS 导出根下的逻辑路径，缺省为 /；例如 /cangling</p></div>
-          <div class="field"><label for="cangling-nfs-export">苍灵应用 NFS 地址</label><input id="cangling-nfs-export" type="text" value="${esc(canglingNfsAddress(serverAddress, exportPath))}" readonly /><p class="hint">启动时自动建立 ${esc(exportPath === "/" ? "" : exportPath)}/shared/${esc(config.namespace)} 与 ${esc(exportPath === "/" ? "" : exportPath)}/jars/${esc(config.namespace)}</p></div>
-        </div>
-        <div class="cangling-nfs-risk"><strong>部署说明：</strong>Ganesha 作为 K3s Deployment 运行，数据通过存储节点 <code>hostPath</code> 持久化，并以该节点 InternalIP:2049 供 kubelet 挂载。为兼容现有 root 容器写入采用 <code>No_Root_Squash</code>、必要 capabilities 与宽松 seccomp，仅允许 RFC1918 内网客户端。</div>
-        ${output}
-      </div>`;
     }
 
     const CANGLING_PATH_ROOTS = {
@@ -3179,16 +3105,12 @@
         </div>
         <div id="flash" hidden></div>
         <div class="cangling-tabs" role="tablist" aria-label="苍灵应用配置">
-          <button type="button" class="cangling-tab" data-cangling-tab="internal-storage" role="tab" aria-controls="cangling-panel-internal-storage">集群内存储</button>
           <button type="button" class="cangling-tab" data-cangling-tab="cluster" role="tab" aria-controls="cangling-panel-cluster">集群与存储</button>
           <button type="button" class="cangling-tab" data-cangling-tab="environment" role="tab" aria-controls="cangling-panel-environment">环境变量</button>
           <button type="button" class="cangling-tab" data-cangling-tab="secrets" role="tab" aria-controls="cangling-panel-secrets">密钥</button>
           <button type="button" class="cangling-tab" data-cangling-tab="deployment" role="tab" aria-controls="cangling-panel-deployment">部署</button>
         </div>
-        <section class="cangling-tab-panel" id="cangling-panel-internal-storage" data-cangling-tab-panel="internal-storage" role="tabpanel">
-          ${canglingInternalNfsPanel(config)}
-        </section>
-        <section class="cangling-tab-panel" id="cangling-panel-cluster" data-cangling-tab-panel="cluster" role="tabpanel" hidden>
+        <section class="cangling-tab-panel" id="cangling-panel-cluster" data-cangling-tab-panel="cluster" role="tabpanel">
           <div class="card">
           <div class="cangling-section-head"><h3>集群与存储</h3><p class="hint">路径均为 K3s 节点上的绝对路径</p></div>
           <div class="cangling-global">
@@ -3242,10 +3164,6 @@
           config.namespace = next;
         }
         namespaceInput.value = next;
-        const nfsExport = $("#cangling-nfs-export");
-        const nfsExportPath = canglingNfsExportPath($("#cangling-nfs-export-path") && $("#cangling-nfs-export-path").value);
-        const prefix = nfsExportPath === "/" ? "" : nfsExportPath;
-        if (nfsExport) nfsExport.nextElementSibling.textContent = `启动时自动建立 ${prefix}/shared/${next} 与 ${prefix}/jars/${next}`;
       };
       const hostInput = $("#cangling-hostIp");
       const hostAuto = $("#cangling-host-auto");
@@ -3265,24 +3183,6 @@
         }
       };
       if (hostRefresh) hostRefresh.onclick = () => syncCanglingHostFromEntryNode();
-      const nfsRefresh = $("#cangling-nfs-refresh");
-      const nfsStart = $("#cangling-nfs-start");
-      const nfsStop = $("#cangling-nfs-stop");
-      const nfsApply = $("#cangling-nfs-apply");
-      const nfsServerAddress = $("#cangling-nfs-server-address");
-      const nfsExportPath = $("#cangling-nfs-export-path");
-      const nfsDetectAddress = $("#cangling-nfs-detect-address");
-      if (nfsRefresh) nfsRefresh.onclick = refreshCanglingInternalNfs;
-      if (nfsStart) nfsStart.onclick = startCanglingInternalNfs;
-      if (nfsStop) nfsStop.onclick = stopCanglingInternalNfs;
-      if (nfsApply) nfsApply.onclick = applyCanglingInternalNfs;
-      const updateNfsExportAddress = () => {
-        const nfsExport = $("#cangling-nfs-export");
-        if (nfsExport) nfsExport.value = canglingNfsAddress(nfsServerAddress && nfsServerAddress.value, nfsExportPath && nfsExportPath.value);
-      };
-      if (nfsServerAddress) nfsServerAddress.oninput = updateNfsExportAddress;
-      if (nfsExportPath) nfsExportPath.oninput = updateNfsExportAddress;
-      if (nfsDetectAddress) nfsDetectAddress.onclick = detectCanglingInternalNfsAddress;
       const imagePrefix = $("#cangling-imagePrefix");
       if (imagePrefix) imagePrefix.onchange = () => {
         const next = imagePrefix.value.trim().replace(/\/+$/, "");
@@ -3297,113 +3197,6 @@
       bindCanglingNodeSelectors();
       updateCanglingHostMode();
       if (state.canglingHostAuto) syncCanglingHostFromEntryNode({ quiet: true });
-    }
-
-    async function refreshCanglingInternalNfs() {
-      const button = $("#cangling-nfs-refresh");
-      if (button) button.disabled = true;
-      try {
-        state.canglingInternalNfs = await api("/api/cangling/internal-nfs");
-        renderCanglingAppsForm();
-        flash("ok", "已刷新集群内 NFS 状态");
-      } catch (error) {
-        flash("err", error.message);
-      } finally {
-        const current = $("#cangling-nfs-refresh");
-        if (current) current.disabled = false;
-      }
-    }
-
-    async function detectCanglingInternalNfsAddress() {
-      const button = $("#cangling-nfs-detect-address");
-      if (button) button.disabled = true;
-      try {
-        const status = await api("/api/cangling/internal-nfs");
-        const address = String(status.detectedServerAddress || "").trim();
-        if (!address) throw new Error("未能识别当前 cangling-update 主机的 K3s InternalIP");
-        state.canglingInternalNfs = status;
-        if (status.config) status.config.serverAddress = address;
-        const input = $("#cangling-nfs-server-address");
-        const output = $("#cangling-nfs-export");
-        const exportPath = $("#cangling-nfs-export-path");
-        if (input) input.value = address;
-        if (output) output.value = canglingNfsAddress(address, exportPath && exportPath.value);
-        flash("ok", `已识别 NFS 服务地址：${address}`);
-      } catch (error) {
-        flash("err", error.message);
-      } finally {
-        const current = $("#cangling-nfs-detect-address");
-        if (current) current.disabled = false;
-      }
-    }
-
-    async function startCanglingInternalNfs() {
-      const dataDir = $("#cangling-nfs-data-dir");
-      const image = $("#cangling-nfs-image");
-      const serverAddress = $("#cangling-nfs-server-address");
-      const exportPath = $("#cangling-nfs-export-path");
-      const button = $("#cangling-nfs-start");
-      if (!dataDir || !image || !serverAddress || !exportPath) return;
-      const config = readCanglingConfig();
-      if (button) button.disabled = true;
-      try {
-        state.canglingInternalNfs = await api("/api/cangling/internal-nfs/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dataDir: dataDir.value.trim(),
-            image: image.value.trim(),
-            namespace: config.namespace,
-            serverAddress: serverAddress.value.trim(),
-            exportPath: canglingNfsExportPath(exportPath.value),
-          }),
-        });
-        renderCanglingAppsForm();
-        flash("ok", "集群内 NFS 已生成配置并启动");
-      } catch (error) {
-        flash("err", error.message);
-      } finally {
-        const current = $("#cangling-nfs-start");
-        if (current) current.disabled = false;
-      }
-    }
-
-    async function stopCanglingInternalNfs() {
-      if (!(await confirmDialog("停止集群内 NFS 后，尚未启动或正在重建的苍灵 Pod 将无法挂载共享存储。确定停止？", { danger: true, confirmText: "停止 NFS" }))) return;
-      const button = $("#cangling-nfs-stop");
-      if (button) button.disabled = true;
-      try {
-        state.canglingInternalNfs = await api("/api/cangling/internal-nfs/stop", { method: "POST" });
-        renderCanglingAppsForm();
-        flash("ok", "集群内 NFS 已停止，Compose 配置和数据仍保留");
-      } catch (error) {
-        flash("err", error.message);
-      } finally {
-        const current = $("#cangling-nfs-stop");
-        if (current) current.disabled = false;
-      }
-    }
-
-    function applyCanglingInternalNfs() {
-      const status = state.canglingInternalNfs;
-      if (!status || !status.running) {
-        flash("err", "请先启动集群内 NFS");
-        return;
-      }
-      const config = readCanglingConfig();
-      const nfs = status.config || {};
-      const server = String(nfs.serverAddress || status.detectedServerAddress || "").trim();
-      const exportPath = canglingNfsExportPath(nfs.exportPath || status.exportRoot || "/");
-      const namespace = config.namespace.trim();
-      if (!server || !namespace) {
-        flash("err", "请先配置 NFS 服务地址和命名空间");
-        return;
-      }
-      config.sharedStorage = { type: "nfs", server, source: canglingNfsAddress(server, exportPath, `shared/${namespace}`) };
-      config.jarStorage = { type: "nfs", server, source: canglingNfsAddress(server, exportPath, `jars/${namespace}`) };
-      state.canglingConfig = config;
-      renderCanglingAppsForm();
-      flash("ok", "已将外部共享存储和 JAR 发布源切换到集群内 NFS；命名空间变化后请再次保存并启动 NFS 以创建目录");
     }
 
     function readCanglingConfig() {
@@ -3465,9 +3258,6 @@
         });
         state.canglingYaml = result.yaml || "";
         const warnings = [...(result.warnings || [])];
-        if (!state.canglingInternalNfs || !state.canglingInternalNfs.running) {
-          warnings.unshift("集群内 NFS 当前未运行：只能审查清单，启动苍灵应用前必须先启动 NFS 服务");
-        }
         await openCanglingYamlPreview(result.filename || "cangling.yaml", state.canglingYaml, warnings);
       } catch (e) {
         flash("err", e.message);

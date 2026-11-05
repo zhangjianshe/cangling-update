@@ -3,16 +3,16 @@
 //! 布局与 cangling-keeper「软件同步」一致（按软件集分子目录）：
 //! ```text
 //! <cangling-update 所在目录>/cangling-repo/
-//!   kylin-arm/<软件包>/     # RPM 系 ARM64；install.sh 可选
-//!   kylin-x86/<软件包>/...  # RPM 系 x86_64
-//!   linux-arm/<软件包>/...  # Debian 系 ARM64
-//!   linux-x86/<软件包>/...  # Debian 系 x86_64
-//!   windows/<软件包>/...
+//!   platforms/kylin/x86/v10/rpm/<软件包>/
+//!   platforms/kylin/x86/v10/deb/<软件包>/
+//!   platforms/kylin/x86/v11/rpm/<软件包>/
+//!   platforms/kylin/arm/v10/rpm/<软件包>/
+//!   platforms/kylin/arm/v11/rpm/<软件包>/
+//!   platforms/ubuntu/x86/22.04/deb/<软件包>/
+//!   platforms/ubuntu/x86/24.04/deb/<软件包>/
 //!   np4/                   # 维护中心 Manifest 集
 //!     np4-update/latest/   # cangling-update 自我更新二进制
 //! ```
-//!
-//! 仍兼容仓库内嵌套一层 `cangling-repo/` 的旧布局。
 //!
 //! master 本地扫描仓库并对外提供打包下载（m2m 接口），worker 通过 master 拉取
 //! 仓库清单、下载软件包；有安装脚本时也可在本机运行。
@@ -29,14 +29,54 @@ use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-/// 平台 Tab（目录名 → 展示名）。Linux 必须同时区分包格式和 CPU 架构，
-/// 不能只按架构把麒麟 x86_64 误归到 Debian/Ubuntu 的 `.deb` 目录。
-pub const PLATFORMS: &[(&str, &str)] = &[
-    ("kylin-arm", "麒麟/RPM Linux (ARM64)"),
-    ("kylin-x86", "麒麟/RPM Linux (x86_64)"),
-    ("linux-arm", "Debian/Ubuntu (ARM64)"),
-    ("linux-x86", "Debian/Ubuntu (x86_64)"),
-    ("windows", "Windows"),
+struct Platform {
+    id: &'static str,
+    name: &'static str,
+    directory: &'static str,
+}
+
+/// API 使用不含斜杠的稳定 ID，磁盘按发行版、架构、版本和包格式分层。
+const PLATFORMS: &[Platform] = &[
+    Platform {
+        id: "kylin-x86-v10-rpm",
+        name: "Kylin / x86 / V10 (RPM)",
+        directory: "platforms/kylin/x86/v10/rpm",
+    },
+    Platform {
+        id: "kylin-x86-v10-deb",
+        name: "Kylin / x86 / V10 (DEB)",
+        directory: "platforms/kylin/x86/v10/deb",
+    },
+    Platform {
+        id: "kylin-x86-v11-rpm",
+        name: "Kylin / x86 / V11 (RPM)",
+        directory: "platforms/kylin/x86/v11/rpm",
+    },
+    Platform {
+        id: "kylin-arm-v10-rpm",
+        name: "Kylin / ARM / V10 (RPM)",
+        directory: "platforms/kylin/arm/v10/rpm",
+    },
+    Platform {
+        id: "kylin-arm-v11-rpm",
+        name: "Kylin / ARM / V11 (RPM)",
+        directory: "platforms/kylin/arm/v11/rpm",
+    },
+    Platform {
+        id: "ubuntu-x86-22.04-deb",
+        name: "Ubuntu / x86 / 22.04",
+        directory: "platforms/ubuntu/x86/22.04/deb",
+    },
+    Platform {
+        id: "ubuntu-x86-24.04-deb",
+        name: "Ubuntu / x86 / 24.04",
+        directory: "platforms/ubuntu/x86/24.04/deb",
+    },
+    Platform {
+        id: "windows-current",
+        name: "Windows",
+        directory: "platforms/windows/current",
+    },
 ];
 
 /// keeper 同步的 Git 离线安装集（原 repo-templates）。
@@ -155,12 +195,39 @@ fn detect_host_platform(
         ],
     ) || (has_rpm && !has_dpkg);
 
-    match (rpm_family, arm) {
-        (true, true) => "kylin-arm",
-        (true, false) => "kylin-x86",
-        (false, true) => "linux-arm",
-        (false, false) => "linux-x86",
+    let version = os_release_value(&distro, "version_id").unwrap_or_default();
+    let kylin_v11 = version.starts_with("11") || distro.contains("ky11") || distro.contains("v11");
+    let kylin_v10 = version.starts_with("10") || distro.contains("ky10") || distro.contains("v10");
+    let is_kylin = os_release_has_any(&distro, &["kylin"])
+        || distro.contains("kylin")
+        || distro.contains(".ky10")
+        || distro.contains(".ky11");
+    if is_kylin {
+        return match (arm, kylin_v11, rpm_family) {
+            (true, true, _) => "kylin-arm-v11-rpm",
+            (true, false, _) => "kylin-arm-v10-rpm",
+            (false, true, _) => "kylin-x86-v11-rpm",
+            (false, false, false) if kylin_v10 => "kylin-x86-v10-deb",
+            (false, false, _) => "kylin-x86-v10-rpm",
+        };
     }
+    if !arm && os_release_has_any(&distro, &["ubuntu"]) {
+        if version.starts_with("22.04") {
+            return "ubuntu-x86-22.04-deb";
+        }
+        if version.starts_with("24.04") {
+            return "ubuntu-x86-24.04-deb";
+        }
+    }
+    "unsupported"
+}
+
+fn os_release_value<'a>(os_release: &'a str, wanted: &str) -> Option<&'a str> {
+    os_release.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        key.eq_ignore_ascii_case(wanted)
+            .then(|| value.trim_matches(|character| matches!(character, '"' | '\'')))
+    })
 }
 
 fn os_release_has_any(os_release: &str, ids: &[&str]) -> bool {
@@ -197,13 +264,13 @@ fn command_available(program: &str) -> bool {
 fn platform_name(id: &str) -> &str {
     PLATFORMS
         .iter()
-        .find_map(|(platform, name)| (*platform == id).then_some(*name))
+        .find_map(|platform| (platform.id == id).then_some(platform.name))
         .unwrap_or(id)
 }
 
 fn ensure_install_platform(tab: &str) -> Result<(), AppError> {
     let current = host_platform();
-    if PLATFORMS.iter().any(|(id, _)| *id == tab) && tab != current {
+    if PLATFORMS.iter().any(|platform| platform.id == tab) && tab != current {
         return Err(AppError::bad(format!(
             "软件包平台“{}”与当前系统“{}”不匹配；请把对应架构和包格式的软件包同步到 {current}/ 目录",
             platform_name(tab),
@@ -217,14 +284,8 @@ pub fn repo_root(paths: &AppPaths) -> PathBuf {
     paths.exe_dir.join(INSTALL_RESOURCES_DIR)
 }
 
-/// 离线安装包根：优先兼容嵌套的 `cangling-repo/`，否则使用固定仓库根。
 pub fn packages_root(repo: &FsPath) -> PathBuf {
-    let nested = repo.join(CANGLING_REPO_SET);
-    if nested.is_dir() {
-        nested
-    } else {
-        repo.to_path_buf()
-    }
+    repo.to_path_buf()
 }
 
 /// `repo/np4/np4-update/latest`
@@ -378,16 +439,16 @@ pub fn scan_index(paths: &AppPaths) -> RepoIndex {
     let pkg_root = packages_root(&root);
     let exists = root.is_dir();
     let mut tabs = Vec::new();
-    for (id, name) in PLATFORMS {
-        let tab_dir = pkg_root.join(id);
+    for platform in PLATFORMS {
+        let tab_dir = pkg_root.join(platform.directory);
         let packages = if tab_dir.is_dir() {
             scan_tab(&tab_dir)
         } else {
             Vec::new()
         };
         tabs.push(RepoTab {
-            id: id.to_string(),
-            name: name.to_string(),
+            id: platform.id.to_string(),
+            name: platform.name.to_string(),
             packages,
         });
     }
@@ -666,11 +727,11 @@ fn package_dir(root: &FsPath, tab: &str, package: &str) -> Result<PathBuf, AppEr
     if tab == NP4_SET {
         return Ok(root.join(NP4_SET).join(package));
     }
-    let nested = root.join(CANGLING_REPO_SET).join(tab).join(package);
-    if nested.is_dir() {
-        return Ok(nested);
-    }
-    Ok(root.join(tab).join(package))
+    let platform = PLATFORMS
+        .iter()
+        .find(|platform| platform.id == tab)
+        .ok_or_else(|| AppError::bad("不支持的平台"))?;
+    Ok(packages_root(root).join(platform.directory).join(package))
 }
 
 fn valid_segment(s: &str) -> bool {
@@ -842,35 +903,43 @@ mod tests {
     #[test]
     fn host_platform_is_known() {
         let p = host_platform();
-        assert!(PLATFORMS.iter().any(|(id, _)| *id == p));
+        assert!(PLATFORMS.iter().any(|platform| platform.id == p));
     }
 
     #[test]
     fn detects_platform_by_distribution_and_architecture() {
         assert_eq!(
             detect_host_platform("x86_64", "ID=kylin\nID_LIKE=rhel", false, true),
-            "kylin-x86"
+            "kylin-x86-v10-rpm"
         );
         assert_eq!(
             detect_host_platform("aarch64", "ID=kylin", false, true),
-            "kylin-arm"
+            "kylin-arm-v10-rpm"
         );
         assert_eq!(
-            detect_host_platform("x86_64", "ID=ubuntu\nID_LIKE=debian", true, false),
-            "linux-x86"
+            detect_host_platform(
+                "x86_64",
+                "ID=ubuntu\nID_LIKE=debian\nVERSION_ID=22.04",
+                true,
+                false
+            ),
+            "ubuntu-x86-22.04-deb"
         );
         assert_eq!(
             detect_host_platform("aarch64", "ID=debian", true, false),
-            "linux-arm"
+            "unsupported"
         );
     }
 
     #[test]
     fn package_manager_is_used_when_os_release_is_unknown() {
-        assert_eq!(detect_host_platform("x86_64", "", false, true), "kylin-x86");
+        assert_eq!(
+            detect_host_platform("x86_64", "", false, true),
+            "unsupported"
+        );
         assert_eq!(
             detect_host_platform("aarch64", "", true, false),
-            "linux-arm"
+            "unsupported"
         );
     }
 
@@ -892,22 +961,19 @@ mod tests {
     #[test]
     fn path_validation_rejects_traversal() {
         let root = FsPath::new("/tmp/repo");
-        assert!(package_dir(root, "linux-x86", "pkg").is_ok());
+        assert!(package_dir(root, "ubuntu-x86-22.04-deb", "pkg").is_ok());
         assert!(package_dir(root, "../x", "pkg").is_err());
-        assert!(package_dir(root, "linux-x86", "../pkg").is_err());
-        assert!(package_dir(root, "linux-x86", "a/b").is_err());
+        assert!(package_dir(root, "ubuntu-x86-22.04-deb", "../pkg").is_err());
+        assert!(package_dir(root, "ubuntu-x86-22.04-deb", "a/b").is_err());
     }
 
     #[test]
-    fn package_dir_prefers_cangling_repo_set() {
+    fn package_dir_uses_versioned_platform_tree() {
         let dir = tmpdir("nested");
-        let legacy = dir.join("linux-x86").join("git");
-        let nested = dir.join(CANGLING_REPO_SET).join("linux-x86").join("git");
-        std::fs::create_dir_all(&legacy).unwrap();
+        let nested = dir.join("platforms/ubuntu/x86/22.04/deb/git");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(legacy.join("old"), "old").unwrap();
         std::fs::write(nested.join("new"), "new").unwrap();
-        let got = package_dir(&dir, "linux-x86", "git").unwrap();
+        let got = package_dir(&dir, "ubuntu-x86-22.04-deb", "git").unwrap();
         assert_eq!(got, nested);
         let np4 = package_dir(&dir, NP4_SET, NP4_UPDATE).unwrap();
         assert_eq!(np4, dir.join(NP4_SET).join(NP4_UPDATE));
@@ -915,11 +981,11 @@ mod tests {
     }
 
     #[test]
-    fn packages_root_uses_nested_when_present() {
+    fn packages_root_is_the_repository_root() {
         let dir = tmpdir("pkgroot");
         assert_eq!(packages_root(&dir), dir);
         std::fs::create_dir_all(dir.join(CANGLING_REPO_SET)).unwrap();
-        assert_eq!(packages_root(&dir), dir.join(CANGLING_REPO_SET));
+        assert_eq!(packages_root(&dir), dir);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -955,12 +1021,12 @@ mod tests {
     #[test]
     fn tar_roundtrip_keeps_files() {
         let dir = tmpdir("tar");
-        let pkg = dir.join("linux-x86").join("demo");
+        let pkg = dir.join("platforms/ubuntu/x86/22.04/deb/demo");
         std::fs::create_dir_all(pkg.join("sub")).unwrap();
         std::fs::write(pkg.join("install.sh"), "#!/bin/bash\necho ok\n").unwrap();
         std::fs::write(pkg.join("sub").join("a.txt"), "hello").unwrap();
 
-        let bytes = build_tarball(&dir, "linux-x86", "demo").unwrap();
+        let bytes = build_tarball(&dir, "ubuntu-x86-22.04-deb", "demo").unwrap();
         let out = dir.join("out");
         std::fs::create_dir_all(&out).unwrap();
         extract_tarball(&bytes, &out).unwrap();

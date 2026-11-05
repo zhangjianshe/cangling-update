@@ -14,7 +14,6 @@ use tokio::process::Command;
 use tokio::time::timeout;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(20);
-const NODE_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 const LOG_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_LOG_TAIL: u32 = 5000;
 const NODE_ID_LABEL: &str = "cangling.cn/node-id";
@@ -306,55 +305,6 @@ async fn kubectl_json(args: Vec<String>) -> Result<Value, AppError> {
         .map_err(|error| AppError::internal(format!("解析 kubectl 输出失败：{error}")))
 }
 
-pub(crate) async fn local_node_internal_ip() -> Option<String> {
-    let text = kubectl(
-        vec!["get".into(), "nodes".into(), "-o".into(), "json".into()],
-        NODE_DISCOVERY_TIMEOUT,
-    )
-    .await
-    .ok()?;
-    let nodes: Value = serde_json::from_str(&text).ok()?;
-    select_local_node_internal_ip(
-        &nodes,
-        &crate::hostinfo::hostname(),
-        &crate::hostinfo::primary_ip(),
-    )
-}
-
-fn select_local_node_internal_ip(nodes: &Value, hostname: &str, local_ip: &str) -> Option<String> {
-    let items = nodes["items"].as_array()?;
-    let matches_name = |node: &&Value| {
-        let metadata = &node["metadata"];
-        [
-            metadata["name"].as_str(),
-            metadata["labels"]["kubernetes.io/hostname"].as_str(),
-            metadata["labels"][NODE_ID_LABEL].as_str(),
-        ]
-        .into_iter()
-        .flatten()
-        .any(|value| value.eq_ignore_ascii_case(hostname))
-    };
-    let matches_ip = |node: &&Value| {
-        node_internal_ip(node)
-            .as_deref()
-            .is_some_and(|address| address == local_ip)
-    };
-    items
-        .iter()
-        .find(matches_name)
-        .or_else(|| items.iter().find(matches_ip))
-        .and_then(node_internal_ip)
-}
-
-fn node_internal_ip(node: &Value) -> Option<String> {
-    node["status"]["addresses"]
-        .as_array()?
-        .iter()
-        .find(|address| address["type"] == "InternalIP")?["address"]
-        .as_str()
-        .map(str::to_owned)
-}
-
 async fn cluster_status() -> Result<Json<Value>, AppError> {
     let version = kubectl_json(vec!["version".into(), "-o".into(), "json".into()]).await?;
     let nodes = kubectl_json(vec![
@@ -627,28 +577,6 @@ mod tests {
         );
         let nodes = resource_kind("nodes").unwrap();
         assert!(namespace_args(nodes, "ignored").unwrap().is_empty());
-    }
-
-    #[test]
-    fn local_node_ip_prefers_hostname_then_matches_local_ip() {
-        let nodes = json!({"items": [
-            {
-                "metadata": {"name": "worker-a", "labels": {"kubernetes.io/hostname": "worker-a"}},
-                "status": {"addresses": [{"type": "InternalIP", "address": "10.0.0.2"}]}
-            },
-            {
-                "metadata": {"name": "generated-name", "labels": {"cangling.cn/node-id": "worker-b"}},
-                "status": {"addresses": [{"type": "InternalIP", "address": "10.0.0.3"}]}
-            }
-        ]});
-        assert_eq!(
-            select_local_node_internal_ip(&nodes, "worker-b", "10.0.0.2").as_deref(),
-            Some("10.0.0.3")
-        );
-        assert_eq!(
-            select_local_node_internal_ip(&nodes, "unknown", "10.0.0.2").as_deref(),
-            Some("10.0.0.2")
-        );
     }
 
     #[test]
