@@ -307,15 +307,7 @@ async fn run_init(state: AppState, name: String, k3s_data_dir: String, mode: Str
 
 fn build_steps(state: &AppState) -> Vec<InitStep> {
     let mut steps = Vec::new();
-    let me = managed_master_name(state).unwrap_or_else(|_| node_label());
-    steps.push(InitStep {
-        node: me.clone(),
-        role: "master".to_string(),
-        package: HOSTNAME_STEP.to_string(),
-        state: "pending".to_string(),
-        output: String::new(),
-        elapsed_ms: 0,
-    });
+    let me = node_label();
     for pkg in MASTER_SOFTWARE {
         steps.push(InitStep {
             node: me.clone(),
@@ -386,41 +378,9 @@ fn build_steps(state: &AppState) -> Vec<InitStep> {
 }
 
 async fn run_init_inner(state: &AppState, name: &str, k3s_data_dir: &str) -> Result<(), AppError> {
-    let me = managed_master_name(state)?;
-
-    update_step(
-        state,
-        &me,
-        "master",
-        HOSTNAME_STEP,
-        "running",
-        String::new(),
-        0,
-    );
-    let started = Instant::now();
-    match set_system_hostname(&me) {
-        Ok(output) => update_step(
-            state,
-            &me,
-            "master",
-            HOSTNAME_STEP,
-            "ok",
-            output,
-            started.elapsed().as_millis() as u64,
-        ),
-        Err(error) => {
-            update_step(
-                state,
-                &me,
-                "master",
-                HOSTNAME_STEP,
-                "failed",
-                format!("{error:#}"),
-                started.elapsed().as_millis() as u64,
-            );
-            return Err(error);
-        }
-    }
+    // The master keeps the hostname configured by the operating system. Only
+    // worker hostnames are managed from the host list during initialization.
+    let me = node_label();
 
     bootstrap_workers(state).await?;
 
@@ -1310,21 +1270,7 @@ fn online_workers(state: &AppState) -> Result<Vec<(String, String)>, AppError> {
     Ok(out)
 }
 
-fn managed_master_name(state: &AppState) -> Result<String, AppError> {
-    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
-    let name = conn
-        .query_row(
-            "SELECT name FROM managed_hosts WHERE kind = 'local' ORDER BY updated_at DESC LIMIT 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .unwrap_or_else(|_| node_label());
-    validate_hostname(&name)?;
-    Ok(name)
-}
-
 fn validate_cluster_hostnames(state: &AppState) -> Result<(), AppError> {
-    validate_hostname(&managed_master_name(state)?)?;
     for (name, _) in online_workers(state)? {
         validate_hostname(&name)?;
     }
