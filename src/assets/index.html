@@ -53,6 +53,8 @@
       --log-bg: #010409;
       --log-text: #f0f6fc;
       --progress-bg: #212830;
+      --progress-check: #4493f8;
+      --progress-upload: #d29922;
       --shadow: 0 0 0 1px #3d444d;
     }
     :root[data-theme="light"] {
@@ -91,6 +93,8 @@
       --log-bg: #f6f8fa;
       --log-text: #1f2328;
       --progress-bg: #d1d9e0;
+      --progress-check: #0969da;
+      --progress-upload: #bf8700;
       --shadow: 0 1px 0 rgba(31, 35, 40, 0.04);
     }
     * { box-sizing: border-box; border-radius: 6px; }
@@ -146,10 +150,15 @@
     }
     .mark svg { width: 100%; height: 100%; display: block; }
     .mark-lg { width: 40px; height: 40px; }
+    .topbar-logo {
+      display: block; width: 140px; height: 40px;
+      object-fit: contain;
+    }
     .gate-brand { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; }
     .gate-brand h3 { margin: 0; }
     .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; font-weight: 650; }
     .brand small { display: block; color: var(--muted); margin-top: 1px; }
+    .brand .brand-version { font-size: 12px; line-height: 1.2; }
     .app-ver {
       display: inline-block; margin-left: 8px; padding: 1px 8px;
       border: 1px solid var(--line); background: var(--bg-3); color: var(--muted);
@@ -614,6 +623,10 @@
     .progress-sub { color: var(--muted); margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; word-break: break-all; }
     .progress { height: 10px; background: var(--progress-bg); overflow: hidden; }
     .progress > span { display: block; height: 100%; width: 0; background: var(--success-emphasis); transition: width 0.15s linear; }
+    #cangling-jar-prog.phase-check .progress > span { background: var(--progress-check); }
+    #cangling-jar-prog.phase-upload .progress > span { background: var(--progress-upload); }
+    #cangling-jar-prog.phase-sync .progress > span { background: var(--success-emphasis); }
+    #cangling-jar-prog.phase-error .progress > span { background: var(--danger-emphasis); }
     .progress.unknown > span { width: 32%; animation: prog-slide 1.1s ease-in-out infinite; }
     @keyframes prog-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
     @media (max-width: 900px) { .upgrade-upload-grid, .jar-upgrade-grid { grid-template-columns: 1fr; } }
@@ -1256,7 +1269,7 @@
     @media (max-width: 900px) {
       .shell { grid-template-columns: minmax(160px, 34vw) minmax(0, 1fr); }
       .top-nav { margin-left: 4px; }
-      .brand small { display: none; }
+      .topbar-logo { width: 116px; height: 34px; }
       .modal { height: 100%; }
       .compose-edit {
         grid-template-columns: 1fr;
@@ -1300,16 +1313,10 @@
     <header>
       <div class="header-left">
         <a class="brand" href="./" title="返回首页">
-        <span class="mark" title="系统更新" aria-hidden="true">
-          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-            <rect width="32" height="32" rx="6" fill="currentColor"/>
-            <path fill="#fff" d="M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z"/>
-            <rect x="8" y="21.4" width="16" height="2.5" rx="1.2" fill="#fff"/>
-            <rect x="10.4" y="24.8" width="11.2" height="2.2" rx="1.1" fill="#fff" opacity=".72"/>
-          </svg>
-        </span>
+        <img class="topbar-logo" src="image-bot.svg?v=__APP_VERSION__" alt="IMAGE BOT" />
         <div>
-          <h1>系统更新 <span class="app-ver">v__APP_VERSION__</span></h1>
+          <h1>系统更新</h1>
+          <small class="brand-version">版本 v__APP_VERSION__</small>
         </div>
       </a>
       <nav class="top-nav" aria-label="功能切换">
@@ -1382,6 +1389,7 @@
     <div id="combo-list" role="listbox"></div>
   </div>
   <script src="vendor/compose-canvas.js?v=interactive-85"></script>
+  <script src="vendor/sha256.js?v=1"></script>
   <script>
     function normalizeAppBase(value) {
       const trimmed = String(value || "").trim().replace(/^\/+|\/+$/g, "");
@@ -1404,7 +1412,7 @@
       return proto + "://" + location.host + appPath(path);
     }
 
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "cluster", canglingHostAuto: true, canglingHostSync: 0 };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "jars", canglingJars: [], canglingJarDirectory: "/opt/cangling/jar-deploy/incoming", canglingJarDistributionDirectory: "/opt/cangling/jars", canglingHostAuto: true, canglingHostSync: 0 };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -2827,14 +2835,13 @@
       sharedRoot: "/opt/cl/share",
       localRoot: "/opt/cl/local",
       coreRoot: "/opt/cl/core",
-      jarRoot: "/opt/cl/jars",
+      jarRoot: "/opt/cangling/jars",
     };
 
     const CANGLING_STORAGE_ROOTS = [
       { label: "外部共享存储", detail: "跨节点业务数据", path: "sharedRoot", storage: "sharedStorage", defaultType: "nfs" },
       { label: "本地数据", detail: "缓存与高性能临时数据", path: "localRoot", storage: "localStorage", defaultType: "local" },
       { label: "核心数据", detail: "数据库与服务状态", path: "coreRoot", storage: "coreStorage", defaultType: "local" },
-      { label: "JAR 发布源", detail: "启动时复制到 emptyDir", path: "jarRoot", storage: "jarStorage", defaultType: "nfs" },
     ];
 
     function canglingStorageRows(config) {
@@ -2883,6 +2890,7 @@
 
     function canglingDefaultPath(field, namespace) {
       const root = CANGLING_PATH_ROOTS[field];
+      if (field === "jarRoot") return root || "";
       return root && namespace ? `${root}/${namespace}` : root || "";
     }
 
@@ -3189,9 +3197,178 @@
       });
     }
 
+    function renderCanglingJars() {
+      const rows = $("#cangling-jar-rows");
+      const directory = $("#cangling-jar-directory");
+      const distribution = $("#cangling-jar-distribution-directory");
+      if (directory) directory.textContent = state.canglingJarDirectory || "/opt/cangling/jar-deploy/incoming";
+      if (distribution) distribution.textContent = state.canglingJarDistributionDirectory || "/opt/cangling/jars";
+      if (!rows) return;
+      rows.innerHTML = state.canglingJars.length ? state.canglingJars.map((file) => `<tr><td class="path">${esc(file.name)}</td><td>${fmtBytes(file.size || 0)}</td><td>${esc(fmtDateTime(file.modifiedAt))}</td></tr>`).join("") : `<tr><td colspan="3" class="empty">目录中还没有 JAR 包</td></tr>`;
+    }
+
+    async function loadCanglingJars() {
+      const rows = $("#cangling-jar-rows");
+      if (!rows || state.canglingTab !== "jars") return;
+      rows.innerHTML = `<tr><td colspan="3" class="empty db-loading"><span class="spin"></span>正在读取 JAR 包…</td></tr>`;
+      try {
+        const result = await api("/api/cangling/apps/jars");
+        state.canglingJars = result.files || [];
+        state.canglingJarDirectory = result.directory || "/opt/cangling/jar-deploy/incoming";
+        state.canglingJarDistributionDirectory = result.distributionDirectory || "/opt/cangling/jars";
+        renderCanglingJars();
+      } catch (error) {
+        rows.innerHTML = `<tr><td colspan="3" class="empty bad">${esc(error.message)}</td></tr>`;
+      }
+    }
+
+    async function waitCanglingJarJob(id, successPrefix = "") {
+      const sync = $("#cangling-jar-sync");
+      const upload = $("#cangling-jar-select");
+      if (sync) sync.disabled = true;
+      if (upload) upload.disabled = true;
+      setCanglingJarProgressPhase("sync");
+      showProgress("cangling-jar-prog", true);
+      try {
+        while (true) {
+          const job = await api("/api/jobs/" + id);
+          renderProgress("cangling-jar-prog", job);
+          if (job.done) {
+            if (job.error) throw new Error(job.error);
+            flash("ok", successPrefix + (job.message || "JAR 同步完成"));
+            return job;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      } catch (error) {
+        await showCanglingJarProgressError(error.message);
+        error.canglingJarProgressShown = true;
+        throw error;
+      } finally {
+        if (sync) sync.disabled = false;
+        if (upload) upload.disabled = false;
+        showProgress("cangling-jar-prog", false);
+        await loadCanglingJars();
+      }
+    }
+
+    async function syncCanglingJars() {
+      try {
+        const job = await api("/api/cangling/apps/jars/sync", { method: "POST" });
+        await waitCanglingJarJob(job.id);
+      } catch (error) {
+        if (!error.canglingJarProgressShown) await showCanglingJarProgressError(error.message);
+        flash("err", "同步 JAR 失败：" + error.message);
+      }
+    }
+
+    async function sha256JarFile(file, onProgress) {
+      if (!window.CanglingSha256) throw new Error("SHA-256 模块未加载，请刷新页面重试");
+      const digest = new window.CanglingSha256();
+      const chunkSize = 4 * 1024 * 1024;
+      let offset = 0;
+      while (offset < file.size) {
+        const end = Math.min(offset + chunkSize, file.size);
+        digest.update(new Uint8Array(await file.slice(offset, end).arrayBuffer()));
+        offset = end;
+        if (onProgress) onProgress(offset);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      return digest.hex();
+    }
+
+    async function preflightCanglingJars(files) {
+      const total = files.reduce((sum, file) => sum + (file.size || 0), 0);
+      let completed = 0;
+      const checks = [];
+      setCanglingJarProgressPhase("check");
+      showProgress("cangling-jar-prog", true);
+      for (const file of files) {
+        const base = completed;
+        renderProgress("cangling-jar-prog", { message: `正在校验 ${file.name}…`, percent: total ? Math.round(base / total * 100) : 0, current: base, total });
+        const sha256 = await sha256JarFile(file, (current) => {
+          const loaded = base + current;
+          renderProgress("cangling-jar-prog", { message: `正在校验 ${file.name}…`, percent: total ? Math.round(loaded / total * 100) : 100, current: loaded, total });
+        });
+        completed += file.size || 0;
+        checks.push({ name: file.name, size: file.size || 0, sha256 });
+      }
+      renderProgress("cangling-jar-prog", { message: "正在与服务器 JAR 比较…", percent: 100, current: total, total });
+      return api("/api/cangling/apps/jars/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: checks }),
+      });
+    }
+
+    async function uploadCanglingJars(fileList) {
+      const files = Array.from(fileList || []);
+      const input = $("#cangling-jar-file");
+      if (!files.length) return;
+      const invalid = files.find((file) => !/\.jar$/i.test(file.name));
+      if (invalid) {
+        flash("err", `${invalid.name} 不是 JAR 包`);
+        if (input) input.value = "";
+        return;
+      }
+      const names = new Set();
+      const duplicate = files.find((file) => names.has(file.name) || !names.add(file.name));
+      if (duplicate) {
+        flash("err", `不能同时上传两个同名文件：${duplicate.name}`);
+        if (input) input.value = "";
+        return;
+      }
+      try {
+        const preflight = await preflightCanglingJars(files);
+        const statuses = new Map((preflight.files || []).map((item) => [item.name, item]));
+        const changed = files.filter((file) => !(statuses.get(file.name) || {}).same);
+        const skipped = files.length - changed.length;
+        if (!changed.length) {
+          const job = await api("/api/cangling/apps/jars/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ files: files.map((file) => file.name) }),
+          });
+          await waitCanglingJarJob(job.id, `${skipped} 个 JAR 与服务器一致，已跳过上传；`);
+          return;
+        }
+        const form = new FormData();
+        form.append("sync_names", JSON.stringify(files.map((file) => file.name)));
+        changed.forEach((file) => form.append("files", file, file.name));
+        const total = changed.reduce((sum, file) => sum + (file.size || 0), 0);
+        setCanglingJarProgressPhase("upload");
+        showProgress("cangling-jar-prog", true);
+        renderProgress("cangling-jar-prog", { message: skipped ? `${skipped} 个相同文件已跳过，正在上传其余 JAR…` : "正在上传 JAR 包…", percent: 0, current: 0, total });
+        const result = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) renderProgress("cangling-jar-prog", { message: skipped ? `${skipped} 个相同文件已跳过，正在上传其余 JAR…` : "正在上传 JAR 包…", percent: Math.round(event.loaded / event.total * 100), current: event.loaded, total: event.total });
+          };
+          xhr.onload = () => {
+            let payload = {};
+            try { payload = JSON.parse(xhr.responseText || "{}"); } catch { payload = { error: xhr.responseText }; }
+            if (xhr.status >= 400) reject(new Error(payload.error || xhr.statusText));
+            else resolve(payload);
+          };
+          xhr.onerror = () => reject(new Error("上传连接失败"));
+          xhr.open("POST", appPath("/api/cangling/apps/jars/upload"));
+          xhr.send(form);
+        });
+        if (!result.syncJob || !result.syncJob.id) throw new Error("服务器未创建同步任务");
+        renderProgress("cangling-jar-prog", { message: "上传完成，准备同步到其他节点…", percent: 100, current: total, total });
+        await waitCanglingJarJob(result.syncJob.id, skipped ? `${skipped} 个相同 JAR 已跳过上传；` : "");
+      } catch (error) {
+        if (!error.canglingJarProgressShown) await showCanglingJarProgressError(error.message);
+        flash("err", "上传 JAR 失败：" + error.message);
+      } finally {
+        if (input) input.value = "";
+        showProgress("cangling-jar-prog", false);
+      }
+    }
+
     function selectCanglingTab(tab) {
-      const tabs = ["internal-storage", "cluster", "environment", "secrets", "deployment"];
-      const selected = tabs.includes(tab) ? tab : "internal-storage";
+      const tabs = ["jars", "cluster", "environment", "secrets", "deployment"];
+      const selected = tabs.includes(tab) ? tab : "jars";
       state.canglingTab = selected;
       document.querySelectorAll("[data-cangling-tab]").forEach((button) => {
         const active = button.dataset.canglingTab === selected;
@@ -3202,6 +3379,7 @@
       document.querySelectorAll("[data-cangling-tab-panel]").forEach((panel) => {
         panel.hidden = panel.dataset.canglingTabPanel !== selected;
       });
+      if (selected === "jars") loadCanglingJars();
     }
 
     function bindCanglingTabs() {
@@ -3234,11 +3412,20 @@
         </div>
         <div id="flash" hidden></div>
         <div class="cangling-tabs" role="tablist" aria-label="苍灵应用配置">
+          <button type="button" class="cangling-tab" data-cangling-tab="jars" role="tab" aria-controls="cangling-panel-jars">JAR 包</button>
           <button type="button" class="cangling-tab" data-cangling-tab="cluster" role="tab" aria-controls="cangling-panel-cluster">集群与存储</button>
           <button type="button" class="cangling-tab" data-cangling-tab="environment" role="tab" aria-controls="cangling-panel-environment">环境变量</button>
           <button type="button" class="cangling-tab" data-cangling-tab="secrets" role="tab" aria-controls="cangling-panel-secrets">密钥</button>
           <button type="button" class="cangling-tab" data-cangling-tab="deployment" role="tab" aria-controls="cangling-panel-deployment">部署</button>
         </div>
+        <section class="cangling-tab-panel" id="cangling-panel-jars" data-cangling-tab-panel="jars" role="tabpanel">
+          <div class="card">
+            <div class="cangling-section-head"><div><h3>JAR 包</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
+            <div class="progress-wrap" id="cangling-jar-prog" hidden><div class="progress-meta"><span id="cangling-jar-prog-msg">准备中</span><span id="cangling-jar-prog-pct">0%</span></div><div class="progress" id="cangling-jar-prog-bar"><span></span></div><div class="progress-sub" id="cangling-jar-prog-sub"></div></div>
+            <p class="hint hint-soft">上传前分块计算 SHA-256，与服务器一致的文件会跳过上传；同步采用临时文件传输、校验和原子替换。正在运行的容器不会被中断，仍使用原来的只读挂载；重启或重新部署 Pod 后才会加载新 JAR。</p>
+            <div class="cangling-table-wrap"><table><thead><tr><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="3" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
+          </div>
+        </section>
         <section class="cangling-tab-panel" id="cangling-panel-cluster" data-cangling-tab-panel="cluster" role="tabpanel">
           <div class="card">
           <div class="cangling-section-head"><h3>集群与存储</h3><p class="hint">路径均为 K3s 节点上的绝对路径</p></div>
@@ -3249,7 +3436,7 @@
             <div class="field"><label for="cangling-hostIp">入口主机地址</label><div class="cangling-global-select"><input id="cangling-hostIp" data-cangling-global="hostIp" type="text" value="${esc(config.hostIp)}" autocomplete="off" /><button type="button" class="btn" id="cangling-host-refresh">自动获取</button></div><div class="cangling-host-controls"><label class="cangling-host-follow" for="cangling-host-auto"><input id="cangling-host-auto" type="checkbox" />跟随入口节点</label><p class="hint cangling-host-status" id="cangling-host-status">自动读取统一入口节点的 InternalIP</p></div></div>
           </div>
           <div class="cangling-storage-config"><table class="cangling-storage-table"><thead><tr><th>数据目录</th><th>存储类型</th><th>Value</th><th>映射到本地位置</th></tr></thead><tbody>${canglingStorageRows(config)}</tbody></table></div>
-          <p class="cangling-note">Value 填写实际本地目录或 <code>服务器:/NFS/导出路径</code>；应用统一使用只读展示的标准位置 <code>/opt/cl/&lt;类型&gt;/&lt;namespace&gt;</code>。本地 Value 不同时，生成的节点准备 Job 会创建“标准位置 → 实际目录”软链接；NFS 仍使用原生 NFS volume。</p>
+          <p class="cangling-note">Value 填写实际本地目录或 <code>服务器:/NFS/导出路径</code>；应用统一使用只读展示的标准位置 <code>/opt/cl/&lt;类型&gt;/&lt;namespace&gt;</code>。本地 Value 不同时，生成的节点准备 Job 会创建“标准位置 → 实际目录”软链接；NFS 仍使用原生 NFS volume。JAR 包由“JAR 包”页统一同步到各节点的 <code>/opt/cangling/jars</code>。</p>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-environment" data-cangling-tab-panel="environment" role="tabpanel" hidden>
@@ -3282,6 +3469,10 @@
       </div>`;
       $("#cangling-generate").onclick = generateCanglingYaml;
       $("#cangling-reset").onclick = resetCanglingConfig;
+      $("#cangling-jar-refresh").onclick = loadCanglingJars;
+      $("#cangling-jar-sync").onclick = syncCanglingJars;
+      $("#cangling-jar-select").onclick = () => $("#cangling-jar-file").click();
+      $("#cangling-jar-file").onchange = (event) => uploadCanglingJars(event.target.files);
       const primaryNodeSelect = $("#cangling-primary-node-select");
       if (primaryNodeSelect) primaryNodeSelect.onclick = openCanglingPrimaryNodePicker;
       const namespaceInput = $("#cangling-namespace");
@@ -5457,6 +5648,19 @@
     function showProgress(prefix, on) {
       const wrap = document.getElementById(prefix);
       if (wrap) wrap.hidden = !on;
+    }
+
+    function setCanglingJarProgressPhase(phase) {
+      const wrap = $("#cangling-jar-prog");
+      if (!wrap) return;
+      wrap.classList.remove("phase-check", "phase-upload", "phase-sync", "phase-error");
+      if (phase) wrap.classList.add("phase-" + phase);
+    }
+
+    async function showCanglingJarProgressError(message) {
+      setCanglingJarProgressPhase("error");
+      renderProgress("cangling-jar-prog", { done: true, message: message || "操作失败", percent: 100, current: 1, total: 1 });
+      await new Promise((resolve) => setTimeout(resolve, 900));
     }
 
     function renderProgress(prefix, job) {

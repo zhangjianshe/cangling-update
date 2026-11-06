@@ -19,7 +19,7 @@
     </g>
   </g>
 
-  <g font-family="Orbitron, Oxanium, 'Bank Gothic', 'Eurostile Extended', 'Arial Black', monospace" font-size="68" font-weight="700" letter-spacing="5">
+  <g transform="translate(0 15)" font-family="Orbitron, Oxanium, 'Bank Gothic', 'Eurostile Extended', 'Arial Black', monospace" font-size="68" font-weight="700" letter-spacing="5">
     <text x="184" y="113" fill="#17212B">IMAGE</text>
     <text x="433" y="113" fill="#168A5B">BOT</text>
   </g>

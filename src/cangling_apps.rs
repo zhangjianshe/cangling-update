@@ -25,7 +25,7 @@ const TEMPLATE_JAR_ROOT: &str = "/opt/cangling-np4/jars";
 const DEFAULT_SHARED_ROOT: &str = "/opt/cl/share";
 const DEFAULT_LOCAL_ROOT: &str = "/opt/cl/local";
 const DEFAULT_CORE_ROOT: &str = "/opt/cl/core";
-const DEFAULT_JAR_ROOT: &str = "/opt/cl/jars";
+const DEFAULT_JAR_ROOT: &str = "/opt/cangling/jars";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,7 +135,7 @@ fn default_config() -> CanglingConfig {
     let shared_root = namespaced_root(DEFAULT_SHARED_ROOT, namespace);
     let local_root = namespaced_root(DEFAULT_LOCAL_ROOT, namespace);
     let core_root = namespaced_root(DEFAULT_CORE_ROOT, namespace);
-    let jar_root = namespaced_root(DEFAULT_JAR_ROOT, namespace);
+    let jar_root = DEFAULT_JAR_ROOT.to_string();
     let mut applications = vec![
         app(
             "cis-postgis",
@@ -234,7 +234,7 @@ fn default_config() -> CanglingConfig {
         shared_storage: storage(StorageType::Nfs, format!("{DEFAULT_HOST_IP}:{shared_root}")),
         local_storage: storage(StorageType::Local, local_root),
         core_storage: storage(StorageType::Local, core_root),
-        jar_storage: storage(StorageType::Nfs, format!("{DEFAULT_HOST_IP}:{jar_root}")),
+        jar_storage: storage(StorageType::Local, jar_root),
         environment: default_environment(),
         secrets: default_secrets(),
         applications,
@@ -246,11 +246,16 @@ fn namespaced_root(root: &str, namespace: &str) -> String {
 }
 
 fn namespace_template_path(path: &str, namespace: &str) -> String {
+    if path == TEMPLATE_JAR_ROOT {
+        return DEFAULT_JAR_ROOT.to_string();
+    }
+    if let Some(suffix) = path.strip_prefix(&format!("{TEMPLATE_JAR_ROOT}/")) {
+        return format!("{DEFAULT_JAR_ROOT}/{suffix}");
+    }
     for (template_root, default_root) in [
         (TEMPLATE_SHARED_ROOT, DEFAULT_SHARED_ROOT),
         (TEMPLATE_LOCAL_ROOT, DEFAULT_LOCAL_ROOT),
         (TEMPLATE_CORE_ROOT, DEFAULT_CORE_ROOT),
-        (TEMPLATE_JAR_ROOT, DEFAULT_JAR_ROOT),
     ] {
         if path == template_root {
             return namespaced_root(default_root, namespace);
@@ -294,7 +299,7 @@ fn default_core_storage() -> StorageConfig {
 }
 
 fn default_jar_storage() -> StorageConfig {
-    storage(StorageType::Nfs, String::new())
+    storage(StorageType::Local, String::new())
 }
 
 fn app(
@@ -467,7 +472,10 @@ fn render_manifest(config: &CanglingConfig) -> Result<(String, Vec<String>), App
     {
         warnings.push("本地存储依赖所选节点磁盘，请确认备份与节点调度策略".into());
     }
-    warnings.push("JAR 会由 initContainer 复制到 emptyDir；更新发布源后需滚动重启 Pod".into());
+    warnings.push(
+        "JAR 由容器直接只读挂载各节点的 /opt/cangling/jars；同步新 JAR 后需滚动重启 Pod 以重新绑定文件"
+            .into(),
+    );
     if local_storage_mappings(config)
         .iter()
         .any(|(source, target)| source != target)
@@ -1089,113 +1097,6 @@ fn patch_application_document(
             );
         }
     }
-    stage_jar_runtime(pod_map, app, config)?;
-    Ok(())
-}
-
-fn stage_jar_runtime(
-    pod_map: &mut Mapping,
-    app: &ApplicationConfig,
-    config: &CanglingConfig,
-) -> Result<(), AppError> {
-    let Some(volumes) = pod_map
-        .get_mut(key("volumes"))
-        .and_then(Value::as_sequence_mut)
-    else {
-        return Ok(());
-    };
-    let Some(index) = volumes.iter().position(|volume| {
-        volume
-            .as_mapping()
-            .and_then(|volume| volume.get(key("name")))
-            .and_then(Value::as_str)
-            == Some("jar")
-    }) else {
-        return Ok(());
-    };
-    let source_path = volumes[index]
-        .as_mapping()
-        .and_then(|volume| volume.get(key("hostPath")))
-        .and_then(Value::as_mapping)
-        .and_then(|host_path| host_path.get(key("path")))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal(format!("应用 {} 的 JAR 发布源无效", app.id)))?;
-    let filename = source_path
-        .rsplit('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| AppError::internal(format!("应用 {} 的 JAR 文件名无效", app.id)))?
-        .to_string();
-
-    let mut source_host_path = Mapping::new();
-    set_mapping_string(&mut source_host_path, "path", &config.jar_root);
-    set_mapping_string(&mut source_host_path, "type", "Directory");
-    let mut source_volume = Mapping::new();
-    set_mapping_string(&mut source_volume, "name", "jar-source");
-    source_volume.insert(key("hostPath"), Value::Mapping(source_host_path));
-    volumes[index] = Value::Mapping(source_volume);
-
-    let mut runtime_volume = Mapping::new();
-    set_mapping_string(&mut runtime_volume, "name", "jar");
-    runtime_volume.insert(key("emptyDir"), Value::Mapping(Mapping::new()));
-    volumes.push(Value::Mapping(runtime_volume));
-
-    let containers = pod_map
-        .get_mut(key("containers"))
-        .and_then(Value::as_sequence_mut)
-        .ok_or_else(|| AppError::internal(format!("应用 {} 缺少 containers", app.id)))?;
-    let container = containers
-        .first_mut()
-        .and_then(Value::as_mapping_mut)
-        .ok_or_else(|| AppError::internal(format!("应用 {} 没有主容器", app.id)))?;
-    let mounts = container
-        .get_mut(key("volumeMounts"))
-        .and_then(Value::as_sequence_mut)
-        .ok_or_else(|| AppError::internal(format!("应用 {} 缺少 volumeMounts", app.id)))?;
-    let jar_mount = mounts
-        .iter_mut()
-        .filter_map(Value::as_mapping_mut)
-        .find(|mount| mount.get(key("name")).and_then(Value::as_str) == Some("jar"))
-        .ok_or_else(|| AppError::internal(format!("应用 {} 缺少 JAR 挂载", app.id)))?;
-    set_mapping_string(jar_mount, "subPath", "app.jar");
-
-    let mut source_mount = Mapping::new();
-    set_mapping_string(&mut source_mount, "name", "jar-source");
-    set_mapping_string(&mut source_mount, "mountPath", "/source");
-    source_mount.insert(key("readOnly"), Value::Bool(true));
-    let mut runtime_mount = Mapping::new();
-    set_mapping_string(&mut runtime_mount, "name", "jar");
-    set_mapping_string(&mut runtime_mount, "mountPath", "/runtime");
-    let mut init = Mapping::new();
-    set_mapping_string(&mut init, "name", "stage-jar");
-    set_mapping_string(&mut init, "image", &app.image);
-    set_mapping_string(&mut init, "imagePullPolicy", "IfNotPresent");
-    init.insert(
-        key("command"),
-        Value::Sequence(
-            [
-                "cp".to_string(),
-                format!("/source/{filename}"),
-                "/runtime/app.jar".to_string(),
-            ]
-            .into_iter()
-            .map(Value::String)
-            .collect(),
-        ),
-    );
-    init.insert(
-        key("volumeMounts"),
-        Value::Sequence(vec![
-            Value::Mapping(source_mount),
-            Value::Mapping(runtime_mount),
-        ]),
-    );
-    pod_map
-        .entry(key("initContainers"))
-        .or_insert_with(|| Value::Sequence(Vec::new()))
-        .as_sequence_mut()
-        .ok_or_else(|| AppError::internal(format!("应用 {} 的 initContainers 无效", app.id)))?
-        .push(Value::Mapping(init));
     Ok(())
 }
 
@@ -1423,11 +1324,11 @@ mod tests {
         assert_eq!(config.shared_root, "/opt/cl/share/cangling");
         assert_eq!(config.local_root, "/opt/cl/local/cangling");
         assert_eq!(config.core_root, "/opt/cl/core/cangling");
-        assert_eq!(config.jar_root, "/opt/cl/jars/cangling");
+        assert_eq!(config.jar_root, "/opt/cangling/jars");
         assert_eq!(config.shared_storage.storage_type, StorageType::Nfs);
         assert_eq!(config.local_storage.storage_type, StorageType::Local);
         assert_eq!(config.core_storage.storage_type, StorageType::Local);
-        assert_eq!(config.jar_storage.storage_type, StorageType::Nfs);
+        assert_eq!(config.jar_storage.storage_type, StorageType::Local);
         assert_eq!(config.applications.len(), 9);
         assert_eq!(
             config.environment.get("TILE_CACHE_URL").map(String::as_str),
@@ -1579,7 +1480,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_uses_nfs_sources_and_stages_jars_in_empty_dir() {
+    fn manifest_directly_mounts_the_node_local_jar_read_only() {
         let (yaml, _) = render_manifest(&default_config()).unwrap();
         let documents: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
             .map(|document| Value::deserialize(document).unwrap())
@@ -1604,38 +1505,19 @@ mod tests {
             .get(key("volumes"))
             .and_then(Value::as_sequence)
             .unwrap();
-        let jar_source = volumes
-            .iter()
-            .filter_map(Value::as_mapping)
-            .find(|volume| volume.get(key("name")).and_then(Value::as_str) == Some("jar-source"))
-            .unwrap();
-        assert_eq!(
-            jar_source
-                .get(key("nfs"))
-                .and_then(Value::as_mapping)
-                .and_then(|nfs| nfs.get(key("path")))
-                .and_then(Value::as_str),
-            Some("/opt/cl/jars/cangling")
-        );
-        let jar_runtime = volumes
+        let jar = volumes
             .iter()
             .filter_map(Value::as_mapping)
             .find(|volume| volume.get(key("name")).and_then(Value::as_str) == Some("jar"))
             .unwrap();
-        assert!(jar_runtime.get(key("emptyDir")).is_some());
-        let init = pod
-            .get(key("initContainers"))
-            .and_then(Value::as_sequence)
-            .and_then(|containers| containers.first())
-            .and_then(Value::as_mapping)
-            .unwrap();
         assert_eq!(
-            init.get(key("command"))
-                .and_then(Value::as_sequence)
-                .and_then(|command| command.get(1))
+            jar.get(key("hostPath"))
+                .and_then(Value::as_mapping)
+                .and_then(|host_path| host_path.get(key("path")))
                 .and_then(Value::as_str),
-            Some("/source/cis-server-1.0.0.jar")
+            Some("/opt/cangling/jars/cis-server-1.0.0.jar")
         );
+        assert!(pod.get(key("initContainers")).is_none());
         let container = pod
             .get(key("containers"))
             .and_then(Value::as_sequence)
@@ -1651,9 +1533,10 @@ mod tests {
             .find(|mount| mount.get(key("name")).and_then(Value::as_str) == Some("jar"))
             .unwrap();
         assert_eq!(
-            jar_mount.get(key("subPath")).and_then(Value::as_str),
-            Some("app.jar")
+            jar_mount.get(key("readOnly")).and_then(Value::as_bool),
+            Some(true)
         );
+        assert!(jar_mount.get(key("subPath")).is_none());
     }
 
     #[test]

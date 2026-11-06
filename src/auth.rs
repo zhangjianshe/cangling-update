@@ -29,6 +29,9 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     if method == Method::GET && is_certificate_help_path(path) {
         return true;
     }
+    if method == Method::GET && is_image_bot_path(path) {
+        return true;
+    }
     if matches!(
         path,
         "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout"
@@ -61,6 +64,14 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         return true;
     }
     method == Method::GET && path == "/api/portal"
+}
+
+fn is_image_bot_path(path: &str) -> bool {
+    path == "/image-bot.svg"
+        || path.strip_prefix('/').is_some_and(|rest| {
+            rest.split_once('/')
+                .is_some_and(|(prefix, suffix)| !prefix.is_empty() && suffix == "image-bot.svg")
+        })
 }
 
 fn is_certificate_help_path(path: &str) -> bool {
@@ -518,6 +529,9 @@ mod tests {
         assert!(is_public(&Method::GET, "/help-cert/"));
         assert!(is_public(&Method::GET, "/help-cert/cangling-root-ca.crt"));
         assert!(is_public(&Method::GET, "/update/help-cert/"));
+        assert!(is_public(&Method::GET, "/image-bot.svg"));
+        assert!(is_public(&Method::GET, "/update/image-bot.svg"));
+        assert!(!is_public(&Method::POST, "/image-bot.svg"));
         assert!(is_public(
             &Method::GET,
             "/update/help-cert/cangling-root-ca.crt"

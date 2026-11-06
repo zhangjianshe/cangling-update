@@ -774,7 +774,7 @@ const LOADBALANCE_WELCOME_HTML: &str = r#"<!doctype html>
     main{width:min(560px,calc(100% - 40px));text-align:center}h1{margin:0 0 12px;font-size:30px;font-weight:650}p{margin:0;color:#69727d}.actions{display:flex;justify-content:center;gap:28px;margin-top:24px}.actions a{color:#367bf5;text-decoration:none}.actions a:hover{text-decoration:underline}.image-bot{position:fixed;right:24px;bottom:20px;width:150px;height:auto;opacity:.82}@media(max-width:600px){.actions{gap:18px}.image-bot{right:12px;bottom:12px;width:110px}}
   </style>
 </head>
-<body><main><h1>请管理员初始化苍灵服务</h1><p>负载均衡已就绪，当前尚未关联后台应用。</p><nav class="actions" aria-label="服务入口"><a href="/update/">安装助手</a><a href="/update/help-cert/">证书安装帮助</a></nav></main><img class="image-bot" src="/image-bot.svg" alt="IMAGE BOT"></body>
+<body><main><h1>请管理员初始化苍灵服务</h1><p>负载均衡已就绪，当前尚未关联后台应用。</p><nav class="actions" aria-label="服务入口"><a href="/update">管理</a><a href="/update/help-cert/">证书安装帮助</a></nav></main><img class="image-bot" src="/image-bot.svg" alt="IMAGE BOT"></body>
 </html>
 "#;
 
@@ -1702,7 +1702,7 @@ mod tests {
     fn loadbalance_welcome_page_prompts_for_initialization() {
         assert!(LOADBALANCE_WELCOME_HTML.contains("请管理员初始化苍灵服务"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("尚未关联后台应用"));
-        assert!(LOADBALANCE_WELCOME_HTML.contains("href=\"/update/\">安装助手"));
+        assert!(LOADBALANCE_WELCOME_HTML.contains("href=\"/update\">管理"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("/update/help-cert/"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("/image-bot.svg"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("right:24px;bottom:20px;width:150px"));

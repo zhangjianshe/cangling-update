@@ -169,6 +169,8 @@ pub fn router(state: AppState) -> Router {
         .route("/vendor/xterm.js", get(vendor_xterm_js))
         .route("/vendor/xterm-addon-fit.js", get(vendor_xterm_fit))
         .route("/vendor/compose-canvas.js", get(vendor_compose_canvas))
+        .route("/vendor/sha256.js", get(vendor_sha256))
+        .route("/image-bot.svg", get(image_bot_svg))
         .route("/vendor/ace/{*name}", get(vendor_ace))
         .route(
             "/vendor/iosevka-term-regular.woff2",
@@ -196,6 +198,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::cangling_apps::routes())
         .merge(crate::hosts::routes())
         .merge(crate::images::console_routes())
+        .merge(crate::jar_store::routes())
         .merge(crate::jar_upgrade::routes())
         .merge(crate::nginx_stats::routes())
         .merge(crate::certificate_manager::routes())
@@ -5358,6 +5361,29 @@ async fn vendor_compose_canvas() -> impl IntoResponse {
     )
 }
 
+async fn vendor_sha256() -> impl IntoResponse {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "no-cache, must-revalidate"),
+        ],
+        include_str!("assets/vendor/sha256.js"),
+    )
+}
+
+async fn image_bot_svg() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("assets/image-bot.svg"),
+    )
+}
+
 fn vendor_font(bytes: &'static [u8]) -> impl IntoResponse {
     (
         [
@@ -5414,6 +5440,20 @@ mod tests {
         assert!(html.contains("appWebSocket("));
         assert!(html.contains("const action = init.mode === \"check\" ? \"检查并修复\""));
         assert!(html.contains("previous.running && !init.running"));
+        assert!(html.contains("data-cangling-tab=\"jars\""));
+        assert!(!html.contains("JAR 发布源"));
+        assert!(html.contains("JAR 包由“JAR 包”页统一同步到各节点"));
+        assert!(html.contains("/api/cangling/apps/jars/upload"));
+        assert!(html.contains("上传前分块计算 SHA-256"));
+        assert!(html.contains("vendor/sha256.js?v=1"));
+        assert!(html.contains("class=\"topbar-logo\""));
+        assert!(html.contains(&format!("版本 v{}", env!("CARGO_PKG_VERSION"))));
+        assert!(html.contains("showProgress(\"cangling-jar-prog\", false)"));
+        assert!(html.contains("setCanglingJarProgressPhase(\"check\")"));
+        assert!(html.contains("setCanglingJarProgressPhase(\"upload\")"));
+        assert!(html.contains("setCanglingJarProgressPhase(\"sync\")"));
+        assert!(html.contains("setCanglingJarProgressPhase(\"error\")"));
+        assert!(html.contains("const wrap = $(\"#cangling-jar-prog\")"));
         assert!(html.contains("src=\"vendor/compose-canvas.js"));
         assert!(!html.contains("src=\"/vendor/"));
         assert!(!html.contains("fetch(\"/api/"));

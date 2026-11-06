@@ -64,6 +64,10 @@ fn deploy_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(DEFAULT_DEPLOY_DIR))
 }
 
+pub(crate) fn incoming_dir() -> PathBuf {
+    deploy_dir().join("incoming")
+}
+
 fn checked_name(name: &str) -> Result<&'static str, AppError> {
     REQUIRED_JARS
         .iter()
@@ -507,7 +511,7 @@ async fn upload(mut multipart: Multipart) -> Result<Json<JarUpgradeStatus>, AppE
     if UPGRADING.load(Ordering::SeqCst) {
         return Err(AppError::conflict("JAR 升级正在执行，暂时不能覆盖上传目录"));
     }
-    let incoming = deploy_dir().join("incoming");
+    let incoming = incoming_dir();
     tokio::fs::create_dir_all(&incoming).await?;
     let mut received = Vec::new();
     while let Some(mut field) = multipart

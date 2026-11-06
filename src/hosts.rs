@@ -333,6 +333,51 @@ struct HostRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct SshSyncTarget {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub local: bool,
+}
+
+/// Returns every managed host once, including the local master. Remote file
+/// synchronization deliberately uses BatchMode so it only succeeds after the
+/// operator has established SSH trust.
+pub fn ssh_sync_targets(state: &AppState) -> Result<Vec<SshSyncTarget>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    sync_inventory(&conn, state)?;
+    let mut stmt = conn.prepare(
+        "SELECT name,host,ssh_port,username,kind FROM managed_hosts
+         WHERE host <> ''
+         ORDER BY CASE kind WHEN 'cluster' THEN 0 ELSE 1 END,name",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let port: i64 = row.get(2)?;
+        Ok(SshSyncTarget {
+            name: row.get(0)?,
+            host: row.get(1)?,
+            port: port.clamp(1, u16::MAX as i64) as u16,
+            username: row.get(3)?,
+            local: row.get::<_, String>(4)? == "local",
+        })
+    })?;
+    let mut seen = std::collections::HashSet::new();
+    let mut targets = Vec::new();
+    for row in rows {
+        let target = row?;
+        let key = (target.host.clone(), target.port, target.username.clone());
+        if target.local {
+            seen.insert(key);
+            targets.push(target);
+        } else if seen.insert(key) {
+            targets.push(target);
+        }
+    }
+    Ok(targets)
+}
+
+#[derive(Debug, Clone)]
 struct ClusterInfo {
     version: String,
     role: String,
