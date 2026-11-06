@@ -342,6 +342,12 @@ async fn main() -> anyhow::Result<()> {
     let paths = AppPaths::resolve(cli.data_dir)?;
     init_logging(&paths.log_file);
 
+    match service::repair_noninteractive_shell(cli.port) {
+        Ok(true) => tracing::info!("已修复 root .bashrc 中的主机信息命令，非交互 SSH 不再产生输出"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(error = %error, "自动修复 SSH 非交互 shell 输出失败"),
+    }
+
     let cluster_cfg = cluster::ClusterConfig {
         role: cluster::Role::parse(&cli.role).map_err(|e| anyhow::anyhow!("{e}"))?,
         token: cli.cluster_token.clone(),

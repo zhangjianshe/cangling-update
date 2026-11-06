@@ -59,7 +59,12 @@ WantedBy=multi-user.target
     std::fs::write(UNIT_PATH, unit)
         .with_context(|| format!("写入 systemd 单元文件 {UNIT_PATH} 失败"))?;
     systemctl(&["daemon-reload"])?;
-    systemctl(&["enable", "--now", SERVICE_NAME])?;
+    // `enable --now` starts a new unit, but it does not restart an already
+    // running service when ExecStart changes (for example standalone ->
+    // master). Always restart after installing the updated unit so the
+    // requested options take effect immediately.
+    systemctl(&["enable", SERVICE_NAME])?;
+    systemctl(&["restart", SERVICE_NAME])?;
 
     eprintln!("已安装并启动 systemd 服务：{SERVICE_NAME}");
     eprintln!("  程序    {}", exe.display());
@@ -529,8 +534,10 @@ fn root_home_from_passwd(passwd: &str) -> Option<PathBuf> {
 
 fn is_hostinfo_bashrc_line(line: &str) -> bool {
     let line = line.trim();
-    let Some(port) = line
-        .strip_prefix("curl -k http://localhost:")
+    let command = line.strip_prefix("[ -t 1 ] && ").unwrap_or(line);
+    let Some(port) = command
+        .strip_prefix("curl -ksS http://localhost:")
+        .or_else(|| command.strip_prefix("curl -k http://localhost:"))
         .and_then(|rest| rest.strip_suffix("/hostinfo"))
     else {
         return false;
@@ -559,11 +566,43 @@ fn install_hostinfo_bashrc(path: &Path, port: u16) -> std::io::Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(error),
     };
-    let mut updated = bashrc_without_hostinfo(&current);
+    std::fs::write(path, hostinfo_bashrc_content(&current, port))
+}
+
+fn hostinfo_bashrc_content(current: &str, port: u16) -> String {
+    let mut updated = bashrc_without_hostinfo(current);
     updated.push_str(HOSTINFO_BASHRC_MARKER);
     updated.push('\n');
-    updated.push_str(&format!("curl -k http://localhost:{port}/hostinfo\n"));
-    std::fs::write(path, updated)
+    // Do not print anything for non-interactive SSH commands. Protocols such
+    // as scp and sftp use the remote shell and are corrupted by stdout from
+    // .bashrc before their own protocol starts.
+    updated.push_str(&format!(
+        "[ -t 1 ] && curl -ksS http://localhost:{port}/hostinfo\n"
+    ));
+    updated
+}
+
+/// Upgrade the legacy unconditional hostinfo command without adding a new
+/// login hook on hosts where cangling-update never managed one.
+pub fn repair_noninteractive_shell(port: u16) -> Result<bool> {
+    let path = root_home_dir().join(".bashrc");
+    let current = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error).with_context(|| format!("读取 {} 失败", path.display())),
+    };
+    let managed = current
+        .lines()
+        .any(|line| line.trim() == HOSTINFO_BASHRC_MARKER || is_hostinfo_bashrc_line(line));
+    if !managed {
+        return Ok(false);
+    }
+    let updated = hostinfo_bashrc_content(&current, port);
+    if updated == current {
+        return Ok(false);
+    }
+    std::fs::write(&path, updated).with_context(|| format!("更新 {} 失败", path.display()))?;
+    Ok(true)
 }
 
 fn remove_hostinfo_bashrc(path: &Path) -> std::io::Result<()> {
@@ -770,8 +809,8 @@ mod tests {
 
         let content = std::fs::read_to_string(&bashrc).unwrap();
         assert_eq!(content.matches(HOSTINFO_BASHRC_MARKER).count(), 1);
-        assert_eq!(content.matches("curl -k http://localhost:").count(), 1);
-        assert!(content.ends_with("curl -k http://localhost:7600/hostinfo\n"));
+        assert_eq!(content.matches("curl -ksS http://localhost:").count(), 1);
+        assert!(content.ends_with("[ -t 1 ] && curl -ksS http://localhost:7600/hostinfo\n"));
         assert!(!content.contains("localhost:5400"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -793,6 +832,17 @@ mod tests {
             "export A=1\necho ready\n"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hostinfo_content_repairs_legacy_noninteractive_output() {
+        let current =
+            "export A=1\n# cangling-update hostinfo\ncurl -k http://localhost:5400/hostinfo\n";
+        let updated = hostinfo_bashrc_content(current, 5400);
+
+        assert!(updated.contains("export A=1\n"));
+        assert!(!updated.contains("\ncurl -k http://"));
+        assert!(updated.ends_with("[ -t 1 ] && curl -ksS http://localhost:5400/hostinfo\n"));
     }
 
     #[test]
