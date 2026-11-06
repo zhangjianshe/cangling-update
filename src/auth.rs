@@ -26,6 +26,9 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     if matches!(path, "/" | "/console") {
         return true;
     }
+    if method == Method::GET && is_certificate_help_path(path) {
+        return true;
+    }
     if matches!(
         path,
         "/api/auth/status" | "/api/auth/login" | "/api/auth/setup" | "/api/auth/logout"
@@ -58,6 +61,21 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         return true;
     }
     method == Method::GET && path == "/api/portal"
+}
+
+fn is_certificate_help_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/help-cert" | "/help-cert/" | "/help-cert/cangling-root-ca.crt"
+    ) || path.strip_prefix('/').is_some_and(|rest| {
+        rest.split_once('/').is_some_and(|(prefix, suffix)| {
+            !prefix.is_empty()
+                && matches!(
+                    suffix,
+                    "help-cert" | "help-cert/" | "help-cert/cangling-root-ca.crt"
+                )
+        })
+    })
 }
 
 fn is_tunnel_path(path: &str) -> bool {
@@ -496,6 +514,15 @@ mod tests {
     fn public_paths_allow_portal_read_but_not_write() {
         assert!(is_public(&Method::GET, "/"));
         assert!(is_public(&Method::GET, "/console"));
+        assert!(is_public(&Method::GET, "/help-cert"));
+        assert!(is_public(&Method::GET, "/help-cert/"));
+        assert!(is_public(&Method::GET, "/help-cert/cangling-root-ca.crt"));
+        assert!(is_public(&Method::GET, "/update/help-cert/"));
+        assert!(is_public(
+            &Method::GET,
+            "/update/help-cert/cangling-root-ca.crt"
+        ));
+        assert!(!is_public(&Method::POST, "/help-cert/"));
         assert!(is_public(&Method::GET, "/api/portal"));
         assert!(!is_public(&Method::PUT, "/api/portal"));
         assert!(!is_public(&Method::POST, "/api/portal/items"));

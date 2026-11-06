@@ -234,8 +234,50 @@ impl Docker {
     pub async fn compose_ps_raw(&self, dir: &Path) -> Result<String> {
         match self.compose_run(dir, &["ps", "--format", "json"]).await {
             Ok(s) => Ok(s),
-            Err(_) => self.compose_run(dir, &["ps"]).await,
+            Err(_) => self.compose_ps_legacy_json(dir).await,
         }
+    }
+
+    /// Compose v1 does not support `ps --format json`. Query service names and
+    /// inspect their containers so old Kylin installations still produce the
+    /// same JSON-line status consumed by the web UI.
+    async fn compose_ps_legacy_json(&self, dir: &Path) -> Result<String> {
+        let names = self.compose_run(dir, &["ps", "--services"]).await?;
+        let mut rows = Vec::new();
+        for service in names.lines().map(str::trim).filter(|name| !name.is_empty()) {
+            validate_service_name(service)?;
+            let ids = self.compose_run(dir, &["ps", "-q", service]).await?;
+            let Some(container_id) = ids.lines().map(str::trim).find(|id| !id.is_empty()) else {
+                continue;
+            };
+            let output = Command::new("docker")
+                .args([
+                    "inspect",
+                    "--format",
+                    "{{.Config.Image}}\t{{.State.Status}}",
+                    container_id,
+                ])
+                .output()
+                .await
+                .context("failed to inspect compose container")?;
+            if !output.status.success() {
+                continue;
+            }
+            let detail = String::from_utf8_lossy(&output.stdout);
+            let mut fields = detail.trim().splitn(2, '\t');
+            let image = fields.next().unwrap_or_default().to_string();
+            let state = fields.next().unwrap_or_default().to_string();
+            rows.push(
+                serde_json::to_string(&ComposeService {
+                    name: service.to_string(),
+                    image,
+                    state: state.clone(),
+                    status: state,
+                })
+                .context("failed to encode legacy compose status")?,
+            );
+        }
+        Ok(rows.join("\n"))
     }
 
     pub async fn compose_logs(
@@ -640,10 +682,10 @@ pub fn parse_compose_ps(raw: &str) -> Vec<ComposeService> {
                 .to_string()
         };
         services.push(ComposeService {
-            name: pick(&["Service", "Name", "Name"]),
-            image: pick(&["Image"]),
-            state: pick(&["State"]),
-            status: pick(&["Status"]),
+            name: pick(&["Service", "Name", "name"]),
+            image: pick(&["Image", "image"]),
+            state: pick(&["State", "state"]),
+            status: pick(&["Status", "status"]),
         });
     }
     services
@@ -722,6 +764,17 @@ impl IfEmpty for str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_compose_ps_accepts_generated_legacy_json() {
+        let raw =
+            r#"{"name":"loadbalance","image":"nginx:latest","state":"running","status":"running"}"#;
+        let services = parse_compose_ps(raw);
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].name, "loadbalance");
+        assert_eq!(services[0].image, "nginx:latest");
+        assert_eq!(services[0].state, "running");
+    }
 
     #[test]
     fn ready_error_distinguishes_missing_cli_and_daemon() {

@@ -4,7 +4,7 @@ use crate::hostinfo;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::http::header;
-use axum::response::IntoResponse;
+use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -21,14 +21,28 @@ const SERVER_KEY: &str = "/opt/cangling/loadbalance/certs/loadbalance.key.pem";
 const SERVER_CERT: &str = "/opt/cangling/loadbalance/certs/loadbalance.crt.pem";
 const SERVER_IP: &str = "/opt/cangling/loadbalance/certs/loadbalance.ip";
 const SERVER_DOMAINS: &str = "/opt/cangling/loadbalance/certs/loadbalance.domains";
+const HELP_DIR: &str = "/opt/cangling/loadbalance/help-cert";
+const HELP_PAGE: &str = "/opt/cangling/loadbalance/help-cert/index.html";
+const HELP_CA_CERT: &str = "/opt/cangling/loadbalance/help-cert/cangling-root-ca.crt";
 const EMBEDDED_CA_KEY: &[u8] = include_bytes!("assets/cangling-root-ca.key.pem");
 const EMBEDDED_CA_CERT: &[u8] = include_bytes!("assets/cangling-root-ca.crt.pem");
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/help-cert", get(help_page))
+        .route("/help-cert/", get(help_page))
+        .route("/help-cert/cangling-root-ca.crt", get(download_root))
         .route("/api/certificates", get(status))
         .route("/api/certificates/root", get(download_root).post(init_root))
         .route("/api/certificates/loadbalance", post(issue_loadbalance))
+}
+
+async fn help_page() -> Result<Html<String>, AppError> {
+    ensure_embedded_root()?;
+    ensure_help_page()?;
+    let page = std::fs::read_to_string(HELP_PAGE)
+        .map_err(|error| AppError::internal(format!("读取证书帮助页面失败：{error}")))?;
+    Ok(Html(page))
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +85,7 @@ struct ActionResult {
 
 async fn status() -> Result<Json<CertificateStatus>, AppError> {
     ensure_embedded_root()?;
+    ensure_help_page()?;
     let root_initialized = Path::new(CA_KEY).is_file() && Path::new(CA_CERT).is_file();
     let loadbalance_issued = Path::new(SERVER_KEY).is_file() && Path::new(SERVER_CERT).is_file();
     let suggested_ip = hostinfo::primary_ip();
@@ -201,6 +216,7 @@ async fn init_root(Json(body): Json<InitRootRequest>) -> Result<Json<ActionResul
     let _ = std::fs::remove_file(&temp_key);
     let _ = std::fs::remove_file(&temp_cert);
     result?;
+    ensure_help_page()?;
     Ok(Json(ActionResult {
         ok: true,
         message: "根证书已创建，私钥使用 AES-256 密码保护，有效期 10 年".to_string(),
@@ -327,6 +343,7 @@ async fn issue_loadbalance(
         let _ = std::fs::remove_file(path);
     }
     result?;
+    ensure_help_page()?;
     let loadbalance = ensure_loadbalance(&state)?;
     Ok(Json(ActionResult {
         ok: true,
@@ -377,11 +394,22 @@ fn certificate_fingerprint(path: &str) -> String {
     let Ok(output) = output else {
         return String::new();
     };
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .strip_prefix("sha256 Fingerprint=")
+    parse_certificate_fingerprint(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_certificate_fingerprint(output: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| {
+            let (label, value) = line.trim().split_once('=')?;
+            let normalized = label
+                .chars()
+                .filter(|character| !character.is_ascii_whitespace())
+                .flat_map(char::to_lowercase)
+                .collect::<String>();
+            (normalized == "sha256fingerprint").then(|| value.trim().to_string())
+        })
         .unwrap_or_default()
-        .to_string()
 }
 
 fn validate_password(password: &str) -> Result<(), AppError> {
@@ -465,7 +493,127 @@ pub(crate) fn ensure_embedded_root() -> Result<bool, AppError> {
     let _ = std::fs::remove_file(&temp_key);
     let _ = std::fs::remove_file(&temp_cert);
     result?;
+    ensure_help_page()?;
     Ok(true)
+}
+
+/// Generates the static certificate help site served by the load balancer.
+/// The CA certificate is public material; the encrypted private key is never
+/// copied into the web directory.
+pub(crate) fn ensure_help_page() -> Result<(), AppError> {
+    if !Path::new(CA_CERT).is_file() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(HELP_DIR)?;
+    set_mode(Path::new(HELP_DIR), 0o755)?;
+    std::fs::copy(CA_CERT, HELP_CA_CERT)?;
+    set_mode(Path::new(HELP_CA_CERT), 0o644)?;
+
+    let primary_ip = hostinfo::primary_ip();
+    let domains = std::fs::read_to_string(SERVER_DOMAINS)
+        .unwrap_or_default()
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let fingerprint = certificate_fingerprint(CA_CERT);
+    std::fs::write(
+        HELP_PAGE,
+        build_help_page(&primary_ip, &domains, &fingerprint),
+    )?;
+    set_mode(Path::new(HELP_PAGE), 0o644)
+}
+
+fn build_help_page(primary_ip: &str, domains: &[String], fingerprint: &str) -> String {
+    let preferred_host = domains.first().map(String::as_str).unwrap_or(primary_ip);
+    let title_host = html_escape(preferred_host);
+    let primary_ip = html_escape(primary_ip);
+    let local_domain = html_escape(domains.first().map(String::as_str).unwrap_or("4np.tjj"));
+    let domain_note = if domains.is_empty() {
+        format!(
+            "当前证书尚未包含域名。使用 <code>{local_domain}</code> 前，请先在证书管理中重新签发并加入该域名。"
+        )
+    } else {
+        format!("当前证书已包含域名 <code>{local_domain}</code>。")
+    };
+    let fingerprint = html_escape(fingerprint);
+    format!(
+        r##"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>苍灵根证书安装帮助</title>
+  <style>
+    :root {{ color-scheme:light; --accent:#3884ff; --line:#e6e9ed; --muted:#6b7480; --sidebar:#f7f8fa; }}
+    * {{ box-sizing:border-box; }} html {{ scroll-behavior:smooth; }} body {{ margin:0; color:#24292f; background:#fff; font:15px/1.75 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }}
+    aside {{ position:fixed; inset:0 auto 0 0; width:250px; padding:28px 24px; overflow:auto; border-right:1px solid var(--line); background:var(--sidebar); }}
+    aside strong {{ display:block; margin-bottom:18px; font-size:17px; }} nav a {{ display:block; padding:6px 0; color:#57606a; text-decoration:none; }} nav a:hover {{ color:var(--accent); }}
+    main {{ margin-left:250px; padding:52px 48px 80px; }} article {{ width:860px; max-width:100%; margin:0 auto; }}
+    h1 {{ margin:0 0 10px; font-size:34px; line-height:1.25; }} h2 {{ margin:42px 0 14px; padding-bottom:8px; border-bottom:1px solid var(--line); font-size:23px; }} h3 {{ margin:24px 0 8px; font-size:17px; }}
+    p {{ margin:8px 0; }} .muted {{ color:var(--muted); }} a {{ color:var(--accent); }} .download {{ display:inline-block; margin:16px 0; padding:8px 14px; border:1px solid var(--accent); border-radius:4px; text-decoration:none; font-weight:600; }}
+    ol,ul {{ padding-left:24px; }} code {{ padding:2px 5px; border-radius:3px; background:#f1f3f5; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere; }}
+    pre {{ overflow:auto; padding:13px 15px; border:1px solid var(--line); border-radius:4px; background:#f7f8fa; font-size:13px; }} .fingerprint {{ word-break:break-all; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }}
+    .note {{ padding:12px 14px; border-left:3px solid var(--accent); background:#f5f9ff; }} .warning {{ border-left-color:#d29922; background:#fff8e6; }}
+    @media(max-width:800px) {{ aside {{ position:static; width:auto; border-right:0; border-bottom:1px solid var(--line); }} nav {{ display:flex; gap:8px 18px; flex-wrap:wrap; }} main {{ width:auto; padding:28px 20px 60px; }} }}
+  </style>
+</head>
+<body>
+<aside><strong>证书使用指南</strong><nav>
+  <a href="#download">下载根证书</a><a href="#hosts">配置本地域名</a><a href="#windows">Windows</a><a href="#firefox">Firefox</a><a href="#macos">macOS</a><a href="#linux">Linux</a><a href="#security">安全提示</a>
+</nav></aside>
+<main><article>
+  <header id="download">
+    <h1>苍灵根证书安装帮助</h1>
+    <p class="muted">安装根证书后，浏览器才能信任负载均衡的内部 HTTPS 证书。</p>
+    <a class="download" href="cangling-root-ca.crt" download>下载苍灵根证书</a>
+    <p>HTTPS 入口：<a href="https://{title_host}:7443/">https://{title_host}:7443/</a></p>
+    <p>SHA-256 指纹：<span class="fingerprint">{fingerprint}</span></p>
+  </header>
+
+  <section id="hosts"><h2>配置本地域名</h2>
+    <p>如果局域网没有 DNS 服务，可通过本机 <code>hosts</code> 文件把域名指向 master。{domain_note}</p>
+    <h3>Windows</h3><p>使用管理员权限打开记事本，编辑：</p><pre>C:\Windows\System32\drivers\etc\hosts</pre>
+    <p>在文件末尾添加：</p><pre>{primary_ip}    {local_domain}</pre>
+    <p>保存后执行 <code>ipconfig /flushdns</code>，再访问 <a href="https://{local_domain}:7443/">https://{local_domain}:7443/</a>。</p>
+    <h3>Linux / macOS</h3><p>执行：</p><pre>echo "{primary_ip}    {local_domain}" | sudo tee -a /etc/hosts</pre>
+    <p>然后访问 <a href="https://{local_domain}:7443/">https://{local_domain}:7443/</a>。如已有同名记录，请修改原记录，不要重复添加。</p>
+  </section>
+
+  <section id="windows"><h2>Windows · Chrome / Edge</h2><ol>
+      <li>下载并双击 <code>cangling-root-ca.crt</code>。</li><li>选择“安装证书”，存储位置选择“本地计算机”。</li>
+      <li>选择“将所有证书放入下列存储”，指定“受信任的根证书颁发机构”。</li><li>完成导入后彻底退出并重新打开浏览器。</li>
+    </ol></section>
+    <section id="firefox"><h2>Firefox</h2><ol>
+      <li>打开“设置 → 隐私与安全 → 证书 → 查看证书”。</li><li>在“证书颁发机构”页点击“导入”。</li>
+      <li>选择根证书，并勾选“信任此 CA 以标识网站”。</li>
+    </ol></section>
+    <section id="macos"><h2>macOS · Safari / Chrome</h2><ol>
+      <li>用“钥匙串访问”打开下载的根证书，添加到“系统”钥匙串。</li><li>双击证书，展开“信任”，将“使用此证书时”设为“始终信任”。</li>
+      <li>输入管理员密码确认，然后重新打开浏览器。</li>
+    </ol></section>
+    <section id="linux"><h2>Linux</h2>
+      <h3>Kylin / RHEL / CentOS</h3><pre>sudo cp cangling-root-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust extract</pre>
+      <h3>Ubuntu / Debian</h3><pre>sudo cp cangling-root-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates</pre>
+      <h3>Chrome / Edge 仍不信任</h3><p>部分版本还需要导入当前用户的 NSS 数据库：</p><pre>certutil -A -d sql:$HOME/.pki/nssdb \
+  -n "Cangling Local Root CA" -t "CT,C,C" \
+  -i cangling-root-ca.crt</pre><p class="muted">缺少 certutil 时安装 <code>nss-tools</code> 或 <code>libnss3-tools</code>。完成后重新启动浏览器。</p>
+    </section>
+  <section id="security"><h2>安全提示</h2><p class="note warning">根证书会使本机信任由该 CA 签发的内部站点证书。请只在受管理设备上安装，并在导入前核对上方 SHA-256 指纹。不要下载或分发根证书私钥。</p></section>
+</article></main></body></html>"##
+    )
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 fn write_new(path: &Path, content: &[u8], mode: u32) -> Result<(), AppError> {
@@ -546,5 +694,30 @@ mod tests {
         );
         assert!(parse_domains("bad_name.local").is_err());
         assert!("192.168.3.121".parse::<IpAddr>().is_ok());
+    }
+
+    #[test]
+    fn help_page_contains_download_and_platform_instructions() {
+        let html = build_help_page("192.168.3.121", &["4np.tjj".to_string()], "AA:BB:CC");
+        assert!(html.contains("cangling-root-ca.crt"));
+        assert!(html.contains("https://4np.tjj:7443/"));
+        assert!(html.contains("Windows · Chrome / Edge"));
+        assert!(html.contains("Kylin / RHEL / CentOS"));
+        assert!(html.contains("C:\\Windows\\System32\\drivers\\etc\\hosts"));
+        assert!(html.contains("192.168.3.121    4np.tjj"));
+        assert!(html.contains("/etc/hosts"));
+        assert!(html.contains("AA:BB:CC"));
+    }
+
+    #[test]
+    fn parses_openssl_fingerprint_variants() {
+        assert_eq!(
+            parse_certificate_fingerprint("SHA256 Fingerprint=AA:BB:CC\n"),
+            "AA:BB:CC"
+        );
+        assert_eq!(
+            parse_certificate_fingerprint("sha256 Fingerprint=11:22:33\n"),
+            "11:22:33"
+        );
     }
 }

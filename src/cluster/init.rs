@@ -607,10 +607,19 @@ http {
       proxy_read_timeout 3600s;
       proxy_send_timeout 3600s;
     }
+    location = /image-bot.svg {
+      root /usr/share/nginx/html/cangling-welcome;
+      default_type image/svg+xml;
+    }
+    location / {
+      root /usr/share/nginx/html/cangling-welcome;
+      try_files $uri /index.html;
+    }
   }
 }
 "#;
     crate::certificate_manager::ensure_embedded_root()?;
+    crate::certificate_manager::ensure_help_page()?;
     let nginx = if Path::new("/opt/cangling/loadbalance/certs/loadbalance.crt.pem").is_file()
         && Path::new("/opt/cangling/loadbalance/certs/loadbalance.key.pem").is_file()
     {
@@ -622,24 +631,32 @@ http {
         NGINX.to_string()
     };
     let compose = format!(
-        "services:\n  loadbalance:\n    image: {LOADBALANCE_IMAGE}\n    container_name: cangling-loadbalance\n    network_mode: host\n    restart: unless-stopped\n    ulimits:\n      nofile:\n        soft: 65535\n        hard: 65535\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./logs:/var/log/nginx\n      - ./certs:/etc/nginx/certs:ro\n    command: [\"/usr/local/nginx/sbin/nginx\", \"-g\", \"daemon off;\"]\n"
+        "version: \"3.7\"\nservices:\n  loadbalance:\n    image: {LOADBALANCE_IMAGE}\n    container_name: cangling-loadbalance\n    network_mode: host\n    restart: unless-stopped\n    ulimits:\n      nofile:\n        soft: 65535\n        hard: 65535\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./logs:/var/log/nginx\n      - ./certs:/etc/nginx/certs:ro\n      - ./www:/usr/share/nginx/html/cangling-welcome:ro\n    command: [\"/usr/local/nginx/sbin/nginx\", \"-g\", \"daemon off;\"]\n"
     );
     std::fs::create_dir_all(format!("{DIR}/logs"))
         .map_err(|error| AppError::internal(format!("创建 Load Balancer 目录失败：{error}")))?;
     std::fs::create_dir_all(format!("{DIR}/certs"))
         .map_err(|error| AppError::internal(format!("创建证书目录失败：{error}")))?;
+    ensure_loadbalance_welcome_page(DIR)?;
     std::fs::write(format!("{DIR}/nginx.conf"), nginx)
         .map_err(|error| AppError::internal(format!("写入 Nginx 配置失败：{error}")))?;
     std::fs::write(format!("{DIR}/docker-compose.yaml"), compose)
         .map_err(|error| AppError::internal(format!("写入 Compose 配置失败：{error}")))?;
-    let output = Command::new("docker")
-        .args([
-            "compose",
-            "-f",
-            &format!("{DIR}/docker-compose.yaml"),
-            "up",
-            "-d",
-        ])
+    let compose_file = format!("{DIR}/docker-compose.yaml");
+    let plugin_available = Command::new("docker")
+        .args(["compose", "version"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let mut command = if plugin_available {
+        let mut command = Command::new("docker");
+        command.args(["compose", "-f", &compose_file, "up", "-d"]);
+        command
+    } else {
+        let mut command = Command::new("docker-compose");
+        command.args(["-f", &compose_file, "up", "-d"]);
+        command
+    };
+    let output = command
         .output()
         .map_err(|error| AppError::internal(format!("启动 Load Balancer 失败：{error}")))?;
     if !output.status.success() {
@@ -648,15 +665,106 @@ http {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
+    reload_loadbalance_nginx()?;
+    ensure_master_firewall_ports()?;
     ensure_loadbalance_log_rotation()?;
     let project_action = register_loadbalance_project(state, DIR)?;
     let traffic = crate::nginx_stats::configure_loadbalance_logs(state)?;
     Ok(format!(
-        "{image_action}；Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
+        "{image_action}；Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；证书帮助：http://{}:7800/update/help-cert/；防火墙已开放 5400/tcp、7800/tcp、7443/tcp；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
+        hostinfo::primary_ip(),
         hostinfo::primary_ip(),
         traffic,
         project_action
     ))
+}
+
+fn reload_loadbalance_nginx() -> Result<(), AppError> {
+    for args in [
+        vec![
+            "exec",
+            "cangling-loadbalance",
+            "/usr/local/nginx/sbin/nginx",
+            "-t",
+        ],
+        vec![
+            "exec",
+            "cangling-loadbalance",
+            "/usr/local/nginx/sbin/nginx",
+            "-s",
+            "reload",
+        ],
+    ] {
+        let output = Command::new("docker")
+            .args(&args)
+            .output()
+            .map_err(|error| AppError::internal(format!("重新加载负载均衡配置失败：{error}")))?;
+        if !output.status.success() {
+            return Err(AppError::internal(format!(
+                "重新加载负载均衡配置失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+    Ok(())
+}
+
+const LOADBALANCE_WELCOME_HTML: &str = r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>苍灵服务</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff;color:#20252b;font:16px/1.7 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+    main{width:min(560px,calc(100% - 40px));text-align:center}h1{margin:0 0 12px;font-size:30px;font-weight:650}p{margin:0;color:#69727d}a{display:inline-block;margin-top:24px;color:#367bf5;text-decoration:none}a:hover{text-decoration:underline}.image-bot{position:fixed;right:24px;bottom:20px;width:150px;height:auto;opacity:.82}@media(max-width:600px){.image-bot{right:12px;bottom:12px;width:110px}}
+  </style>
+</head>
+<body><main><h1>请管理员初始化苍灵服务</h1><p>负载均衡已就绪，当前尚未关联后台应用。</p><a href="/update/help-cert/">证书安装帮助</a></main><img class="image-bot" src="/image-bot.svg" alt="IMAGE BOT"></body>
+</html>
+"#;
+
+fn ensure_loadbalance_welcome_page(dir: &str) -> Result<(), AppError> {
+    let www = Path::new(dir).join("www");
+    std::fs::create_dir_all(&www)
+        .map_err(|error| AppError::internal(format!("创建负载均衡首页目录失败：{error}")))?;
+    std::fs::write(www.join("index.html"), LOADBALANCE_WELCOME_HTML)
+        .map_err(|error| AppError::internal(format!("写入负载均衡首页失败：{error}")))?;
+    std::fs::write(
+        www.join("image-bot.svg"),
+        include_bytes!("../assets/image-bot.svg"),
+    )
+    .map_err(|error| AppError::internal(format!("写入 IMAGE BOT 图标失败：{error}")))
+}
+
+fn ensure_master_firewall_ports() -> Result<(), AppError> {
+    let active = Command::new("firewall-cmd")
+        .arg("--state")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !active {
+        return Ok(());
+    }
+    for port in ["5400/tcp", "7800/tcp", "7443/tcp"] {
+        for args in [
+            vec!["--permanent", "--add-port", port],
+            vec!["--add-port", port],
+        ] {
+            let output = Command::new("firewall-cmd")
+                .args(&args)
+                .output()
+                .map_err(|error| {
+                    AppError::internal(format!("配置防火墙端口 {port} 失败：{error}"))
+                })?;
+            if !output.status.success() {
+                return Err(AppError::internal(format!(
+                    "配置防火墙端口 {port} 失败：{}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ensure_loadbalance_image(state: &AppState) -> Result<String, AppError> {
@@ -889,59 +997,10 @@ async fn init_worker(
 ) {
     let token = state.cluster.token.clone().unwrap_or_default();
     let url = format!("http://{waddr}/api/cluster/init/run");
-    update_step(
-        state,
-        wname,
-        "worker",
-        HOSTNAME_STEP,
-        "running",
-        String::new(),
-        0,
-    );
-    let hostname_started = Instant::now();
-    let hostname_request = WorkerInitRequest {
-        cluster_name: name.to_string(),
-        k3s_url: k3s_url.to_string(),
-        k3s_token: k3s_token.to_string(),
-        k3s_data_dir: k3s_data_dir.to_string(),
-        hostname: wname.to_string(),
-        software: Vec::new(),
-    };
-    let hostname_body = serde_json::to_value(&hostname_request).unwrap_or_default();
-    let hostname_result = crate::cluster::http::post_json(&url, &token, &hostname_body).await;
-    let (hostname_ok, hostname_output) = match hostname_result {
-        Ok((status, value)) if status.is_success() => {
-            match serde_json::from_value::<WorkerInitResult>(value) {
-                Ok(mut response) => {
-                    let output = response
-                        .packages
-                        .pop()
-                        .map(|result| combined_output(&result))
-                        .unwrap_or_else(|| "工作节点未返回主机名修改结果".to_string());
-                    (response.ok, output)
-                }
-                Err(error) => (false, format!("解析工作节点返回失败：{error:#}")),
-            }
-        }
-        Ok((status, value)) => (
-            false,
-            format!("工作节点请求失败 {status}: {}", json_error(&value)),
-        ),
-        Err(error) => (false, format!("{error:#}")),
-    };
-    update_step(
-        state,
-        wname,
-        "worker",
-        HOSTNAME_STEP,
-        if hostname_ok { "ok" } else { "failed" },
-        hostname_output,
-        hostname_started.elapsed().as_millis() as u64,
-    );
-    if !hostname_ok {
-        mark_worker_remaining_failed(state, wname, 0, "设置主机名失败，已停止该节点初始化".into());
-        return;
-    }
+    // bootstrap_workers already sets the hostname over SSH before installing
+    // and starting cangling-update. Do not repeat the same operation over HTTP
+    // here: K3s/CNI setup can briefly interrupt the host route and turn this
+    // redundant call into a false initialization failure.
     for (index, package) in WORKER_SOFTWARE.iter().enumerate() {
         update_step(state, wname, "worker", package, "running", String::new(), 0);
         let req = WorkerInitRequest {
@@ -953,7 +1012,7 @@ async fn init_worker(
             software: vec![package.to_string()],
         };
         let body = serde_json::to_value(&req).unwrap_or(serde_json::Value::Null);
-        let result = crate::cluster::http::post_json(&url, &token, &body).await;
+        let result = post_worker_json_with_retry(&url, &token, &body).await;
         let package_result = match result {
             Ok((status, value)) if status.is_success() => {
                 match serde_json::from_value::<WorkerInitResult>(value) {
@@ -999,6 +1058,27 @@ async fn init_worker(
             result.elapsed_ms,
         );
     }
+}
+
+async fn post_worker_json_with_retry(
+    url: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> anyhow::Result<(hyper::StatusCode, serde_json::Value)> {
+    const ATTEMPTS: usize = 15;
+    let mut last_error = None;
+    for attempt in 1..=ATTEMPTS {
+        match crate::cluster::http::post_json(url, token, body).await {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt < ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("请求 worker 失败")))
 }
 
 fn mark_worker_remaining_failed(state: &AppState, wname: &str, from: usize, msg: String) {
@@ -1249,7 +1329,7 @@ fn bootstrap_worker_blocking(
         )));
     }
     let script = format!(
-        "set -eu; test \"$(id -u)\" = 0; hostnamectl set-hostname {}; mkdir -p /opt/cangling-update; systemctl stop cangling-update 2>/dev/null || true; install -m 0755 {} /opt/cangling-update/cangling-update; /opt/cangling-update/cangling-update --bind 0.0.0.0 --port 5400 --role worker --master {} --cluster-token {} install-service; systemctl is-active --quiet cangling-update; systemctl show -p ExecStart --value cangling-update | grep -q -- '--role worker'; /opt/cangling-update/cangling-update version",
+        "set -eu; test \"$(id -u)\" = 0; hostnamectl set-hostname {}; mkdir -p /opt/cangling-update; systemctl stop cangling-update 2>/dev/null || true; install -m 0755 {} /opt/cangling-update/cangling-update; /opt/cangling-update/cangling-update --bind 0.0.0.0 --port 5400 --role worker --master {} --cluster-token {} install-service; if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then firewall-cmd --permanent --add-port=5400/tcp >/dev/null; firewall-cmd --permanent --add-port=5401/udp >/dev/null; firewall-cmd --add-port=5400/tcp >/dev/null; firewall-cmd --add-port=5401/udp >/dev/null; fi; systemctl is-active --quiet cangling-update; systemctl show -p ExecStart --value cangling-update | grep -q -- '--role worker'; /opt/cangling-update/cangling-update version",
         shell_quote(&host.name),
         shell_quote(remote_temp),
         shell_quote(master),
@@ -1450,6 +1530,15 @@ mod tests {
     fn kubeconfig_is_a_post_k3s_step() {
         assert!(!MASTER_SOFTWARE.contains(&KUBECONFIG_STEP));
         assert_eq!(KUBECONFIG_STEP, "~/.kube/config");
+    }
+
+    #[test]
+    fn loadbalance_welcome_page_prompts_for_initialization() {
+        assert!(LOADBALANCE_WELCOME_HTML.contains("请管理员初始化苍灵服务"));
+        assert!(LOADBALANCE_WELCOME_HTML.contains("尚未关联后台应用"));
+        assert!(LOADBALANCE_WELCOME_HTML.contains("/update/help-cert/"));
+        assert!(LOADBALANCE_WELCOME_HTML.contains("/image-bot.svg"));
+        assert!(LOADBALANCE_WELCOME_HTML.contains("right:24px;bottom:20px;width:150px"));
     }
 
     #[test]

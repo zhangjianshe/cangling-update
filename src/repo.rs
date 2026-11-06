@@ -312,9 +312,32 @@ pub async fn install_package(
             pct_encode(tab),
             pct_encode(package)
         );
-        let (status, data) = crate::cluster::http::get_bytes(&url, &token)
-            .await
-            .map_err(|e| AppError::bad(format!("从主节点下载失败：{e:#}")))?;
+        // Installing Docker/K3s can briefly rebuild host routes and firewall
+        // rules. Retry transport failures so a short CNI transition does not
+        // abort every remaining worker package.
+        let mut response = None;
+        let mut last_error = None;
+        const MASTER_DOWNLOAD_ATTEMPTS: usize = 60;
+        for attempt in 1..=MASTER_DOWNLOAD_ATTEMPTS {
+            match crate::cluster::http::get_bytes(&url, &token).await {
+                Ok(value) => {
+                    response = Some(value);
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    if attempt < MASTER_DOWNLOAD_ATTEMPTS {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+        let (status, data) = response.ok_or_else(|| {
+            AppError::bad(format!(
+                "从主节点下载失败：{:#}",
+                last_error.unwrap_or_else(|| anyhow::anyhow!("未收到主节点响应"))
+            ))
+        })?;
         if !status.is_success() {
             return Err(AppError::bad(format!(
                 "从主节点下载失败 {status}: {}",

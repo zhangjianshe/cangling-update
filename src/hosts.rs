@@ -85,7 +85,10 @@ async fn create_trust(
             jobs.set(&job_id, "host-trust", message, current, total);
         });
         match result {
-            Ok(count) => jobs.finish_ok(&job_id, &format!("已完成 {count} 台主机的双向互信")),
+            Ok(count) => jobs.finish_ok(
+                &job_id,
+                &format!("已完成 {count} 台主机的 SSH 与集群网络双向互信"),
+            ),
             Err(error) => jobs.finish_err(&job_id, &error.to_string()),
         }
     });
@@ -101,6 +104,12 @@ fn establish_trust<F>(
 where
     F: FnMut(&str, u64),
 {
+    let trusted_sources = hosts
+        .iter()
+        .filter_map(|host| IpAddr::from_str(host.host.trim()).ok())
+        .filter(|address| !address.is_loopback() && !address.is_unspecified())
+        .map(|address| address.to_string())
+        .collect::<Vec<_>>();
     let mut keys = Vec::with_capacity(hosts.len());
     for (index, host) in hosts.iter().enumerate() {
         progress(
@@ -167,6 +176,19 @@ head -n 1 "$HOME/.ssh/id_ed25519.pub"
                 peer.port,
                 shell_quote(&peer.host),
             ));
+        }
+        if !trusted_sources.is_empty() {
+            script.push_str(
+                "if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then\n",
+            );
+            for source in &trusted_sources {
+                script.push_str(&format!(
+                    "  firewall-cmd --permanent --zone=trusted --add-source={} >/dev/null 2>&1 || true\n  firewall-cmd --zone=trusted --add-source={} >/dev/null 2>&1 || true\n",
+                    shell_quote(source),
+                    shell_quote(source),
+                ));
+            }
+            script.push_str("fi\n");
         }
         script.push_str("sort -u \"$HOME/.ssh/known_hosts\" -o \"$HOME/.ssh/known_hosts\"\n");
         run_host_script(host, known_hosts, config_dir, &script)?;
@@ -574,12 +596,42 @@ fn sync_inventory(conn: &Connection, state: &AppState) -> Result<(), AppError> {
             continue;
         }
         let id = format!("cluster:{node_id}");
+        let manual = conn
+            .query_row(
+                "SELECT username,password_enc,created_at FROM managed_hosts
+                 WHERE kind='manual' AND host=?1 AND ssh_port=22
+                 ORDER BY CASE WHEN password_enc='' THEN 1 ELSE 0 END,updated_at DESC LIMIT 1",
+                params![host],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let (username, password_enc, created_at) =
+            manual.unwrap_or_else(|| ("root".to_string(), String::new(), now.clone()));
         conn.execute(
             "INSERT INTO managed_hosts
              (id,name,host,ssh_port,username,password_enc,kind,cluster_node_id,created_at,updated_at)
-             VALUES (?1,?2,?3,22,'root','','cluster',?4,?5,?5)
-             ON CONFLICT(id) DO NOTHING",
-            params![id, name, host, node_id, now],
+             VALUES (?1,?2,?3,22,?4,?5,'cluster',?6,?7,?8)
+             ON CONFLICT(id) DO UPDATE SET
+               name=excluded.name,
+               host=excluded.host,
+               username=CASE WHEN managed_hosts.username='' THEN excluded.username ELSE managed_hosts.username END,
+               password_enc=CASE WHEN managed_hosts.password_enc='' THEN excluded.password_enc ELSE managed_hosts.password_enc END,
+               cluster_node_id=excluded.cluster_node_id,
+               updated_at=excluded.updated_at",
+            params![id, name, host, username, password_enc, node_id, created_at, now],
+        )?;
+        // A host may have been entered manually before it joined the cluster.
+        // Once discovery has produced the authoritative cluster row, merge its
+        // SSH credentials above and remove only the exact address/port duplicate.
+        conn.execute(
+            "DELETE FROM managed_hosts WHERE kind='manual' AND host=?1 AND ssh_port=22",
+            params![host],
         )?;
     }
     Ok(())

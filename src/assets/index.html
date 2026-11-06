@@ -553,6 +553,21 @@
     .cluster-init-row #cluster-name { width: 190px; }
     .cluster-init-row #cluster-k3s-data-dir { flex: 1 1 320px; min-width: 240px; }
     @media (max-width: 1050px) { .cluster-init-row { flex-wrap: wrap; } }
+    .cluster-overview-grid { display:grid; grid-template-columns:repeat(4,minmax(120px,1fr)); gap:10px; margin-bottom:14px; }
+    .cluster-overview-metric { padding:12px 14px; border:1px solid var(--line); background:var(--bg-3); }
+    .cluster-overview-metric strong { display:block; margin-top:4px; color:var(--text); font-size:22px; line-height:1.15; }
+    .cluster-overview-detail { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 18px; color:var(--muted); }
+    .cluster-overview-detail > div { min-width:0; padding:8px 0; border-bottom:1px solid var(--line); }
+    .cluster-overview-detail strong { margin-left:8px; color:var(--text); font-weight:600; }
+    .cluster-overview-header { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:18px; }
+    .cluster-access-links { display:flex; justify-content:center; align-items:center; gap:10px; min-width:0; flex-wrap:wrap; }
+    .cluster-access-link { display:inline-flex; align-items:center; gap:7px; min-height:36px; padding:7px 13px; border:1px solid #86c79b; border-radius:6px; background:#eef9f1; color:#126b32; font-weight:700; text-decoration:none; box-shadow:0 1px 2px rgba(18,107,50,.08); }
+    .cluster-access-link.https { border-color:#80afe8; background:#eef6ff; color:#145da8; }
+    .cluster-access-link:hover { filter:brightness(.97); text-decoration:none; }
+    .cluster-access-link code { color:inherit; font-weight:700; white-space:nowrap; }
+    @media (max-width:900px) { .cluster-overview-grid,.cluster-overview-detail { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+    @media (max-width:760px) { .cluster-overview-header { grid-template-columns:1fr auto; } .cluster-access-links { grid-column:1 / -1; grid-row:2; justify-content:flex-start; } }
+    @media (max-width:560px) { .cluster-overview-grid,.cluster-overview-detail { grid-template-columns:1fr; } }
     label { display: block; color: var(--muted); margin: 0 0 6px; }
     input[type=text], input[type=password], input[type=number], textarea {
       width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
@@ -2210,10 +2225,9 @@
               <label for="cluster-k3s-data-dir">K3s 数据目录</label>
               <input id="cluster-k3s-data-dir" type="text" placeholder="留空自动选择最大本地磁盘" value="${esc(st.k3s_data_dir || "")}" />
               <button class="btn" id="btn-pick-k3s-data-dir" type="button">选择</button>
-              <button class="btn primary" id="btn-init-cluster">初始化集群</button>
-              <button class="btn" id="btn-check-cluster">检查并修复</button>
+              <button class="btn primary" id="btn-cluster-action">初始化 / 检查修复</button>
             </div>
-            <p class="hint">K3s 数据目录可指定绝对路径；留空时由各节点选择可用空间最大的本地持久化磁盘。初始化：全新安装各节点基线软件。检查并修复：对每个节点检查缺失软件并补装（含新加入节点），已安装的会自动跳过。软件来自程序目录下的 <code>cangling-repo/&lt;当前平台&gt;/</code>。</p>
+            <p class="hint">K3s 数据目录可指定绝对路径；留空时由各节点选择可用空间最大的本地持久化磁盘。未检测到 K3s 时执行首次初始化；已有集群时自动检查各节点并修复缺失项。软件来自程序目录下的 <code>cangling-repo/&lt;当前平台&gt;/</code>。</p>
             <div id="cluster-init-body"></div>
           </div>`
         : "";
@@ -2226,7 +2240,7 @@
         <div class="card" id="cluster-overview-card">
           ${clusterOverviewHeader()}
           <div id="cluster-overview-body" ${state.clusterOverviewOpen ? "" : "hidden"}>
-            <p class="hint" id="cluster-overview"></p>
+            <div id="cluster-overview"></div>
             <p class="hint" id="cluster-binaries-hint" hidden></p>
             ${hostinfoNoteSection()}
           </div>
@@ -2234,10 +2248,8 @@
         <div class="card"><h3>节点列表</h3><div id="nodes-body"></div></div>
         ${initCard}
         ${workerNote}`;
-      const initBtn = $("#btn-init-cluster");
-      if (initBtn) initBtn.onclick = startClusterInit;
-      const checkBtn = $("#btn-check-cluster");
-      if (checkBtn) checkBtn.onclick = startClusterCheck;
+      const clusterActionBtn = $("#btn-cluster-action");
+      if (clusterActionBtn) clusterActionBtn.onclick = startClusterAction;
       const clusterName = $("#cluster-name");
       if (clusterName) clusterName.ondblclick = () => { clusterName.value = "cangling-k3s"; clusterName.select(); };
       const pickK3sDataDir = $("#btn-pick-k3s-data-dir");
@@ -2276,8 +2288,17 @@
     }
 
     function clusterOverviewHeader() {
-      return `<div class="title-row" style="margin-bottom:${state.clusterOverviewOpen ? "12px" : "0"}">
+      const hosts = state.managedHosts || [];
+      const master = hosts.find(host => host.role === "master") || hosts.find(host => host.kind === "local");
+      const rawHost = master && master.host ? String(master.host) : "";
+      const urlHost = rawHost.includes(":") ? `[${rawHost}]` : rawHost;
+      const links = urlHost ? `<div class="cluster-access-links" aria-label="集群访问入口">
+        <a class="cluster-access-link" href="http://${esc(urlHost)}:7800" target="_blank" rel="noopener" title="打开 HTTP 负载均衡入口">访问 <code>http://${esc(urlHost)}:7800</code></a>
+        <a class="cluster-access-link https" href="https://${esc(urlHost)}:7443" target="_blank" rel="noopener" title="打开 HTTPS 负载均衡入口">访问 <code>https://${esc(urlHost)}:7443</code></a>
+      </div>` : `<div></div>`;
+      return `<div class="title-row cluster-overview-header" style="margin-bottom:${state.clusterOverviewOpen ? "12px" : "0"}">
         <h3 style="margin:0">概览</h3>
+        ${links}
         <button type="button" class="btn" id="btn-cluster-overview" aria-expanded="${state.clusterOverviewOpen}">${state.clusterOverviewOpen ? "收起" : "展开"}</button>
       </div>`;
     }
@@ -2357,16 +2378,42 @@
     function updateClusterOverview(st) {
       const el = $("#cluster-overview");
       if (!el) return;
-      let text = `节点 ${st.node_count} 个 · 在线 ${st.online} 个 · 离线 ${st.node_count - st.online} 个`;
-      if (st.version) text += ` · 主程序 v${st.version}`;
+      const hosts = state.managedHosts || [];
+      const joined = hosts.filter(host => host.cluster_status === "local" || host.cluster_status === "online" || host.cluster_status === "offline").length;
+      const online = hosts.filter(host => host.cluster_status === "local" || host.cluster_status === "online").length;
+      const pending = Math.max(0, hosts.length - joined);
+      const master = hosts.find(host => host.role === "master") || hosts.find(host => host.kind === "local") || null;
+      const software = master && master.host_info && Array.isArray(master.host_info.software) ? master.host_info.software : [];
+      const softwareState = name => {
+        const item = software.find(entry => entry.name === name);
+        return item && item.version && item.version !== "未安装" ? "已安装" : "未安装";
+      };
+      updateClusterActionButton(softwareState("k3s") === "已安装");
+      const init = state.initStatus || {};
+      const appState = init.running ? "正在初始化"
+        : softwareState("k3s") === "已安装" ? "已初始化"
+        : init.started_at && init.error ? "初始化失败" : "尚未初始化";
+      const clusterName = st.name || init.cluster_name || "cangling-k3s";
       const bins = st.binaries || [];
-      if (bins.length) {
-        const parts = bins.map(b => b.available
-          ? `${b.label} 已就绪`
-          : `${b.label} 缺失`);
-        text += ` · 升级包 ${parts.join(" / ")}`;
-      }
-      el.textContent = text;
+      const binaryText = bins.length ? bins.map(b => `${b.label} ${b.available ? "已就绪" : "缺失"}`).join(" / ") : "未检测";
+      const masterText = master
+        ? `${master.name || "Master"} · ${master.host || "—"}${master.version ? ` · v${master.version}` : ""}`
+        : "未找到";
+      el.innerHTML = `
+        <div class="cluster-overview-grid">
+          <div class="cluster-overview-metric"><span class="hint">已定义主机</span><strong>${hosts.length}</strong></div>
+          <div class="cluster-overview-metric"><span class="hint">已加入集群</span><strong>${joined}</strong></div>
+          <div class="cluster-overview-metric"><span class="hint">待部署</span><strong>${pending}</strong></div>
+          <div class="cluster-overview-metric"><span class="hint">在线</span><strong>${online}</strong></div>
+        </div>
+        <div class="cluster-overview-detail">
+          <div>控制主节点<strong>${esc(masterText)}</strong></div>
+          <div>应用集群<strong>${esc(appState)}</strong></div>
+          <div>集群名称<strong>${esc(clusterName)}</strong></div>
+          <div>K3s<strong>${softwareState("k3s")}</strong></div>
+          <div>Docker<strong>${softwareState("docker")}</strong></div>
+          <div>更新程序<strong>${esc(binaryText)}</strong></div>
+        </div>`;
       const hint = $("#cluster-binaries-hint");
       if (hint) {
         const missing = bins.filter(b => !b.available);
@@ -2388,6 +2435,7 @@
         const init = await api("/api/cluster/init/status");
         state.initStatus = init;
         renderInitStatus(init);
+        if (state.clusterStatus) updateClusterOverview(state.clusterStatus);
       } catch (e) {
         body.innerHTML = `<p class="hint">${esc(e.message)}</p>`;
       } finally {
@@ -2412,7 +2460,7 @@
       if (initStatusSelectionActive(body)) return;
       if (!init.running && !init.started_at) {
         stopInitPoll();
-        body.innerHTML = `<p class="hint">尚未初始化。填写集群名称后点击「初始化集群」。</p>`;
+        body.innerHTML = `<p class="hint">尚未初始化。确认集群名称和数据目录后点击「初始化 / 检查修复」。</p>`;
         return;
       }
       if (!init.running) stopInitPoll();
@@ -2454,12 +2502,36 @@
       }
     });
 
+    function clusterHasK3s() {
+      const hosts = state.managedHosts || [];
+      const master = hosts.find(host => host.role === "master") || hosts.find(host => host.kind === "local");
+      const software = master && master.host_info && Array.isArray(master.host_info.software)
+        ? master.host_info.software : [];
+      const k3s = software.find(item => item.name === "k3s");
+      return !!(k3s && k3s.version && k3s.version !== "未安装");
+    }
+
+    function updateClusterActionButton(initialized = clusterHasK3s()) {
+      const button = $("#btn-cluster-action");
+      if (!button) return;
+      button.textContent = initialized ? "检查并修复" : "初始化集群";
+      button.title = initialized
+        ? "已检测到 K3s，将检查各节点并修复缺失项"
+        : "未检测到 K3s，将执行首次集群初始化";
+    }
+
+    async function startClusterAction() {
+      if (clusterHasK3s()) return startClusterCheck();
+      return startClusterInit();
+    }
+
     async function startClusterInit() {
       const nameEl = $("#cluster-name");
       const name = (nameEl && nameEl.value || "").trim();
       const k3sDataDir = (($("#cluster-k3s-data-dir") || {}).value || "").trim();
       if (!name) { flash("err", "请填写集群名称"); return; }
-      const btn = $("#btn-init-cluster");
+      if (!(await confirmDialog(`未检测到 K3s，将初始化集群「${name}」并安装各节点基线软件。确定继续？`))) return;
+      const btn = $("#btn-cluster-action");
       if (btn) btn.disabled = true;
       try {
         await api("/api/cluster/init", {
@@ -2478,7 +2550,8 @@
     }
 
     async function startClusterCheck() {
-      const btn = $("#btn-check-cluster");
+      if (!(await confirmDialog("已检测到 K3s，将检查所有节点并自动修复缺失项。确定继续？"))) return;
+      const btn = $("#btn-cluster-action");
       if (btn) btn.disabled = true;
       try {
         await api("/api/cluster/check", { method: "POST" });
@@ -3818,7 +3891,10 @@
                   <div class="field"><label>到期时间</label><div class="path">${esc(fmtDateTime(s.root_expires))}</div></div>
                 </div>
                 <div class="field"><label>SHA-256 指纹</label><div class="path">${esc(s.root_fingerprint || "—")}</div></div>
-                <div class="row" style="margin:12px 0"><button class="btn primary" id="ca-download" type="button">下载根证书</button></div>
+                <div class="row" style="margin:12px 0">
+                  <button class="btn primary" id="ca-download" type="button">下载根证书</button>
+                  <a class="btn" href="${esc(appPath("/help-cert/"))}" target="_blank" rel="noopener">证书帮助</a>
+                </div>
                 <details class="traffic-guide">
                   <summary>如何让浏览器信任此根证书</summary>
                   <p class="hint">只应在受管理且确认属于本系统的设备上安装。安装前请核对上方 SHA-256 指纹。</p>
@@ -4879,6 +4955,7 @@
             <h2>主机升级</h2>
             <div class="path">绑定 Docker Compose 目录，导入镜像包或 JAR，并保留可回滚版本。</div>
           </div>
+          <a class="btn" href="${esc(appPath("/help-cert/"))}" target="_blank" rel="noopener">证书帮助</a>
         </div>
         <div class="card">
           <h3>使用说明</h3>
