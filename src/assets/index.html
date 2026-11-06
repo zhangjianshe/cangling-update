@@ -2206,7 +2206,7 @@
             <h3>初始化 / 检查修复</h3>
             <div class="row cluster-init-row" style="margin-bottom:8px">
               <label for="cluster-name">集群名称</label>
-              <input id="cluster-name" type="text" title="cangling-k3s（双击自动填入）" placeholder="cangling-k3s" value="${esc(st.name || "")}" />
+              <input id="cluster-name" type="text" title="cangling-k3s（双击自动填入）" placeholder="cangling-k3s" value="${esc(st.name || "cangling-k3s")}" />
               <label for="cluster-k3s-data-dir">K3s 数据目录</label>
               <input id="cluster-k3s-data-dir" type="text" placeholder="留空自动选择最大本地磁盘" value="${esc(st.k3s_data_dir || "")}" />
               <button class="btn" id="btn-pick-k3s-data-dir" type="button">选择</button>
@@ -2522,6 +2522,7 @@
           <td>${(info.projects || []).length || "—"}</td>
           <td>${fmtDateTime(host.last_seen)}</td>
           <td><div class="host-actions">
+            ${host.kind === "local" ? `<button type="button" class="btn" data-host-rename="${esc(host.id)}">修改主机名</button>` : ""}
             ${host.editable ? `<button type="button" class="btn" data-host-edit="${esc(host.id)}">编辑</button>` : ""}
             ${host.deletable ? `<button type="button" class="btn danger" data-host-delete="${esc(host.id)}">删除</button>` : ""}
           </div></td>
@@ -2536,6 +2537,11 @@
         event.stopPropagation();
         openHostForm((state.managedHosts || []).find(host => host.id === button.dataset.hostEdit));
       });
+      el.querySelectorAll("[data-host-rename]").forEach(button => button.onclick = event => {
+        event.stopPropagation();
+        const host = (state.managedHosts || []).find(item => item.id === button.dataset.hostRename);
+        if (host) openLocalHostnameForm(host);
+      });
       el.querySelectorAll("[data-host-delete]").forEach(button => button.onclick = async event => {
         event.stopPropagation();
         const host = (state.managedHosts || []).find(item => item.id === button.dataset.hostDelete);
@@ -2546,6 +2552,42 @@
           await loadCluster();
         } catch (error) { flash("err", error.message); }
       });
+    }
+
+    function openLocalHostnameForm(host) {
+      closeDialog();
+      $("#dialog-title").textContent = "修改 master 主机名";
+      setDialogAction("保存", saveLocalHostname);
+      $("#dialog-body").innerHTML = `<div class="password-form">
+        <div class="field"><label>Master 主机名</label><input id="local-hostname" type="text" value="${esc(host.name || "")}" placeholder="例如：master-01" /></div>
+        <p class="hint hint-soft">保存后将通过 hostnamectl 立即修改操作系统主机名，不会修改 IP 地址。</p>
+        <div id="host-form-flash" hidden></div>
+      </div>`;
+      $("#dialog").hidden = false;
+      $("#local-hostname").focus();
+      $("#local-hostname").select();
+    }
+
+    async function saveLocalHostname() {
+      const button = $("#dialog-extra");
+      const box = $("#host-form-flash");
+      const name = $("#local-hostname").value.trim();
+      button.disabled = true;
+      try {
+        await api("/api/hosts/local/hostname", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        closeDialog();
+        flash("ok", `Master 主机名已修改为“${name}”`);
+        await loadCluster();
+      } catch (error) {
+        box.className = "flash err";
+        box.textContent = error.message;
+        box.hidden = false;
+        button.disabled = false;
+      }
     }
 
     function openHostForm(host = null) {

@@ -28,6 +28,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/hosts", get(list).post(create))
         .route("/api/hosts/trust", post(create_trust))
+        .route("/api/hosts/local/hostname", put(update_local_hostname))
         .route("/api/hosts/{id}", put(update).delete(remove))
         .route("/api/hosts/{id}/terminal", get(terminal))
 }
@@ -351,6 +352,11 @@ pub struct SaveHost {
     clear_password: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct SaveHostname {
+    name: String,
+}
+
 async fn list(State(state): State<AppState>) -> Result<Json<Vec<ManagedHost>>, AppError> {
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     sync_inventory(&conn, &state)?;
@@ -416,6 +422,40 @@ async fn update(
     }
     get_view(&conn, &id)?
         .ok_or_else(|| AppError::internal("更新主机后无法读取"))
+        .map(Json)
+}
+
+async fn update_local_hostname(
+    State(state): State<AppState>,
+    Json(body): Json<SaveHostname>,
+) -> Result<Json<ManagedHost>, AppError> {
+    let name = validate_hostname(&body.name)?;
+    let current = std::fs::read_to_string("/etc/hostname")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if current != name {
+        let output = Command::new("hostnamectl")
+            .args(["set-hostname", &name])
+            .output()
+            .map_err(|error| AppError::internal(format!("执行 hostnamectl 失败：{error}")))?;
+        if !output.status.success() {
+            return Err(AppError::internal(format!(
+                "修改 master 主机名失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let local_node_id = cluster::load_or_create_node_id(&state.paths);
+    conn.execute(
+        "UPDATE cluster_nodes SET name=?2 WHERE id=?1",
+        params![local_node_id, name],
+    )?;
+    sync_inventory(&conn, &state)?;
+    get_view(&conn, LOCAL_HOST_ID)?
+        .ok_or_else(|| AppError::internal("修改主机名后无法读取本机信息"))
         .map(Json)
 }
 
@@ -708,6 +748,27 @@ fn validate_input(mut body: SaveHost) -> Result<SaveHost, AppError> {
     Ok(body)
 }
 
+fn validate_hostname(value: &str) -> Result<String, AppError> {
+    let name = value.trim();
+    let valid = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !valid {
+        return Err(AppError::bad(
+            "主机名仅允许字母、数字、短横线和点，且每段不能以短横线开头或结尾",
+        ));
+    }
+    Ok(name.to_string())
+}
+
 fn encrypt_password(state: &AppState, password: &str) -> Result<String, AppError> {
     encrypt_password_in(&state.paths.config_dir, password)
 }
@@ -843,6 +904,14 @@ mod tests {
             clear_password: false,
         })
         .is_err());
+    }
+
+    #[test]
+    fn validates_local_hostname() {
+        assert_eq!(validate_hostname("master-01").unwrap(), "master-01");
+        assert_eq!(validate_hostname("node.example").unwrap(), "node.example");
+        assert!(validate_hostname("bad name").is_err());
+        assert!(validate_hostname("-master").is_err());
     }
 
     #[test]
