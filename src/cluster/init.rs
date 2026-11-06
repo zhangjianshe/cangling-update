@@ -1,7 +1,7 @@
 //! 集群初始化：master 一键安装本机与各 worker 的基线软件（全部来自程序目录下的 `cangling-repo/`）。
 //!
-//! master 角色：git、samba、CIFS/NFS、docker、k3s-server（含 Traefik 端口 8020/8443）、k9s。
-//! worker 角色：git、samba、CIFS/NFS、docker、k3s-agent（携带 K3S_URL/K3S_TOKEN 加入集群）。
+//! master 角色：禁用 Swap，安装 git、samba、CIFS/NFS、docker、k3s-server（含 Traefik 端口 8020/8443）、k9s。
+//! worker 角色：禁用 Swap，安装 git、samba、CIFS/NFS、docker、k3s-agent（携带 K3S_URL/K3S_TOKEN 加入集群）。
 
 use crate::cluster::Role;
 use crate::db;
@@ -16,7 +16,8 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 pub const MASTER_SOFTWARE: &[&str] = &[
+    "禁用 Swap",
     "git",
     "samba",
     "cifs-utils",
@@ -35,6 +37,7 @@ pub const MASTER_SOFTWARE: &[&str] = &[
     "k9s",
 ];
 pub const WORKER_SOFTWARE: &[&str] = &[
+    "禁用 Swap",
     "git",
     "samba",
     "cifs-utils",
@@ -48,6 +51,7 @@ pub const K3S_DATA_DIR_KEY: &str = "k3s_data_dir";
 const TRAEFIK_STEP: &str = "traefik-8020/8443";
 const KUBECONFIG_STEP: &str = "~/.kube/config";
 const HOSTNAME_STEP: &str = "设置主机名";
+const SWAP_STEP: &str = "禁用 Swap";
 const WORKER_BOOTSTRAP_STEP: &str = "安装 cangling-update Worker";
 const LOADBALANCE_STEP: &str = "Load Balancer :7800/update";
 const LOADBALANCE_IMAGE: &str = "hub.cangling.cn/cangling/nginx-rtmp:v4.2.35";
@@ -236,6 +240,29 @@ pub async fn run_worker_init(
         }
     }
     for pkg in &body.software {
+        if pkg == SWAP_STEP {
+            let started = Instant::now();
+            match disable_swap() {
+                Ok(output) => packages.push(system_step_result(
+                    SWAP_STEP,
+                    "swapoff + /etc/fstab",
+                    output,
+                    true,
+                    started.elapsed().as_millis() as u64,
+                )),
+                Err(error) => {
+                    ok = false;
+                    packages.push(system_step_result(
+                        SWAP_STEP,
+                        "swapoff + /etc/fstab",
+                        format!("{error:#}"),
+                        false,
+                        started.elapsed().as_millis() as u64,
+                    ));
+                }
+            }
+            continue;
+        }
         let envs = vec![
             (
                 "CANGLING_CLUSTER_NAME".to_string(),
@@ -428,6 +455,33 @@ async fn run_init_inner(state: &AppState, name: &str, k3s_data_dir: &str) -> Res
     // 最终状态会根据 failed 步骤提示“部分步骤失败”。
     for pkg in MASTER_SOFTWARE {
         update_step(state, &me, "master", pkg, "running", String::new(), 0);
+        if *pkg == SWAP_STEP {
+            let started = Instant::now();
+            match disable_swap() {
+                Ok(output) => update_step(
+                    state,
+                    &me,
+                    "master",
+                    pkg,
+                    "ok",
+                    output,
+                    started.elapsed().as_millis() as u64,
+                ),
+                Err(error) => {
+                    update_step(
+                        state,
+                        &me,
+                        "master",
+                        pkg,
+                        "failed",
+                        format!("{error:#}"),
+                        started.elapsed().as_millis() as u64,
+                    );
+                    return Err(error);
+                }
+            }
+            continue;
+        }
         let envs = vec![
             ("CANGLING_CLUSTER_NAME".to_string(), name.to_string()),
             ("K3S_DATA_DIR".to_string(), k3s_data_dir.to_string()),
@@ -717,10 +771,10 @@ const LOADBALANCE_WELCOME_HTML: &str = r#"<!doctype html>
   <title>苍灵服务</title>
   <style>
     *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#fff;color:#20252b;font:16px/1.7 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
-    main{width:min(560px,calc(100% - 40px));text-align:center}h1{margin:0 0 12px;font-size:30px;font-weight:650}p{margin:0;color:#69727d}a{display:inline-block;margin-top:24px;color:#367bf5;text-decoration:none}a:hover{text-decoration:underline}.image-bot{position:fixed;right:24px;bottom:20px;width:150px;height:auto;opacity:.82}@media(max-width:600px){.image-bot{right:12px;bottom:12px;width:110px}}
+    main{width:min(560px,calc(100% - 40px));text-align:center}h1{margin:0 0 12px;font-size:30px;font-weight:650}p{margin:0;color:#69727d}.actions{display:flex;justify-content:center;gap:28px;margin-top:24px}.actions a{color:#367bf5;text-decoration:none}.actions a:hover{text-decoration:underline}.image-bot{position:fixed;right:24px;bottom:20px;width:150px;height:auto;opacity:.82}@media(max-width:600px){.actions{gap:18px}.image-bot{right:12px;bottom:12px;width:110px}}
   </style>
 </head>
-<body><main><h1>请管理员初始化苍灵服务</h1><p>负载均衡已就绪，当前尚未关联后台应用。</p><a href="/update/help-cert/">证书安装帮助</a></main><img class="image-bot" src="/image-bot.svg" alt="IMAGE BOT"></body>
+<body><main><h1>请管理员初始化苍灵服务</h1><p>负载均衡已就绪，当前尚未关联后台应用。</p><nav class="actions" aria-label="服务入口"><a href="/update/">安装助手</a><a href="/update/help-cert/">证书安装帮助</a></nav></main><img class="image-bot" src="/image-bot.svg" alt="IMAGE BOT"></body>
 </html>
 "#;
 
@@ -1057,6 +1111,15 @@ async fn init_worker(
             output,
             result.elapsed_ms,
         );
+        if package == &SWAP_STEP && !good {
+            mark_worker_remaining_failed(
+                state,
+                wname,
+                index + 1,
+                "禁用 Swap 失败，已停止该节点后续安装以保护 K3s 配置".into(),
+            );
+            return;
+        }
     }
 }
 
@@ -1432,6 +1495,99 @@ fn validate_hostname(name: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+fn active_swap_count() -> Result<usize, AppError> {
+    let swaps = std::fs::read_to_string("/proc/swaps")
+        .map_err(|error| AppError::internal(format!("读取 /proc/swaps 失败：{error}")))?;
+    Ok(swaps
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .count())
+}
+
+fn disable_swap_entries(content: &str) -> (String, usize) {
+    let mut changed = 0;
+    let mut output = String::with_capacity(content.len() + 64);
+    for line in content.split_inclusive('\n') {
+        let (body, newline) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |body| (body, "\n"));
+        let trimmed = body.trim_start();
+        let is_swap = !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && trimmed
+                .split_whitespace()
+                .nth(2)
+                .is_some_and(|field| field.eq_ignore_ascii_case("swap"));
+        if is_swap {
+            output.push_str("# cangling-update disabled swap: ");
+            output.push_str(body);
+            output.push_str(newline);
+            changed += 1;
+        } else {
+            output.push_str(line);
+        }
+    }
+    (output, changed)
+}
+
+fn disable_swap() -> Result<String, AppError> {
+    let active_before = active_swap_count()?;
+    if active_before > 0 {
+        let output = Command::new("swapoff")
+            .arg("-a")
+            .output()
+            .map_err(|error| AppError::internal(format!("执行 swapoff -a 失败：{error}")))?;
+        if !output.status.success() {
+            return Err(AppError::internal(format!(
+                "禁用 Swap 失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+    }
+
+    let fstab = Path::new("/etc/fstab");
+    let mut fstab_changed = 0;
+    if fstab.is_file() {
+        let original = std::fs::read_to_string(fstab)
+            .map_err(|error| AppError::internal(format!("读取 /etc/fstab 失败：{error}")))?;
+        let (updated, changed) = disable_swap_entries(&original);
+        fstab_changed = changed;
+        if changed > 0 {
+            let backup = Path::new("/etc/fstab.cangling-update.bak");
+            if !backup.exists() {
+                std::fs::copy(fstab, backup).map_err(|error| {
+                    AppError::internal(format!("备份 /etc/fstab 失败：{error}"))
+                })?;
+            }
+            let temporary = Path::new("/etc/.fstab.cangling-update.tmp");
+            let mode = std::fs::metadata(fstab)
+                .map(|metadata| metadata.permissions().mode())
+                .unwrap_or(0o644);
+            let mut file = File::create(temporary).map_err(|error| {
+                AppError::internal(format!("创建 /etc/fstab 临时文件失败：{error}"))
+            })?;
+            file.write_all(updated.as_bytes())
+                .and_then(|_| file.sync_all())
+                .map_err(|error| AppError::internal(format!("写入 /etc/fstab 失败：{error}")))?;
+            std::fs::set_permissions(temporary, std::fs::Permissions::from_mode(mode))
+                .map_err(|error| AppError::internal(format!("设置 fstab 权限失败：{error}")))?;
+            std::fs::rename(temporary, fstab)
+                .map_err(|error| AppError::internal(format!("替换 /etc/fstab 失败：{error}")))?;
+        }
+    }
+
+    let active_after = active_swap_count()?;
+    if active_after > 0 {
+        return Err(AppError::internal(format!(
+            "Swap 仍有 {active_after} 个活动项，请检查 zram 或自定义 Swap 服务"
+        )));
+    }
+    Ok(format!(
+        "Swap 已禁用：关闭 {active_before} 个活动项，注释 /etc/fstab 中 {fstab_changed} 个 Swap 项；备份文件为 /etc/fstab.cangling-update.bak"
+    ))
+}
+
 fn set_system_hostname(name: &str) -> Result<String, AppError> {
     validate_hostname(name)?;
     let current = node_label();
@@ -1452,6 +1608,16 @@ fn set_system_hostname(name: &str) -> Result<String, AppError> {
 }
 
 fn step_result(package: &str, output: String, ok: bool) -> repo::InstallResult {
+    system_step_result(package, "hostnamectl", output, ok, 0)
+}
+
+fn system_step_result(
+    package: &str,
+    installer: &str,
+    output: String,
+    ok: bool,
+    elapsed_ms: u64,
+) -> repo::InstallResult {
     let (stdout, stderr) = if ok {
         (output, String::new())
     } else {
@@ -1459,12 +1625,12 @@ fn step_result(package: &str, output: String, ok: bool) -> repo::InstallResult {
     };
     repo::InstallResult {
         package: package.to_string(),
-        installer: "hostnamectl".to_string(),
+        installer: installer.to_string(),
         stdout,
         stderr,
         exit_code: Some(if ok { 0 } else { 1 }),
         timed_out: false,
-        elapsed_ms: 0,
+        elapsed_ms,
     }
 }
 
@@ -1536,6 +1702,7 @@ mod tests {
     fn loadbalance_welcome_page_prompts_for_initialization() {
         assert!(LOADBALANCE_WELCOME_HTML.contains("请管理员初始化苍灵服务"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("尚未关联后台应用"));
+        assert!(LOADBALANCE_WELCOME_HTML.contains("href=\"/update/\">安装助手"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("/update/help-cert/"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("/image-bot.svg"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("right:24px;bottom:20px;width:150px"));
@@ -1547,6 +1714,37 @@ mod tests {
         assert!(!WORKER_SOFTWARE.contains(&"nfs-server"));
         assert!(MASTER_SOFTWARE.contains(&"nfs-common"));
         assert!(WORKER_SOFTWARE.contains(&"nfs-common"));
+    }
+
+    #[test]
+    fn swap_is_disabled_before_k3s_on_every_node() {
+        assert_eq!(MASTER_SOFTWARE.first(), Some(&SWAP_STEP));
+        assert_eq!(WORKER_SOFTWARE.first(), Some(&SWAP_STEP));
+        assert!(
+            MASTER_SOFTWARE.iter().position(|item| *item == SWAP_STEP)
+                < MASTER_SOFTWARE
+                    .iter()
+                    .position(|item| *item == "k3s-server")
+        );
+        assert!(
+            WORKER_SOFTWARE.iter().position(|item| *item == SWAP_STEP)
+                < WORKER_SOFTWARE.iter().position(|item| *item == "k3s-agent")
+        );
+    }
+
+    #[test]
+    fn fstab_swap_entries_are_commented_idempotently() {
+        let input = "UUID=root / ext4 defaults 0 1\n/dev/sda2 none swap sw 0 0\n# /swapfile none swap sw 0 0\n/swapfile swap swap defaults 0 0\n";
+        let (updated, changed) = disable_swap_entries(input);
+        assert_eq!(changed, 2);
+        assert!(updated.contains("# cangling-update disabled swap: /dev/sda2 none swap sw 0 0"));
+        assert!(
+            updated.contains("# cangling-update disabled swap: /swapfile swap swap defaults 0 0")
+        );
+        assert!(updated.contains("# /swapfile none swap sw 0 0"));
+        let (second, second_changed) = disable_swap_entries(&updated);
+        assert_eq!(second_changed, 0);
+        assert_eq!(second, updated);
     }
 
     #[test]

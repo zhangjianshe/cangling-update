@@ -5412,6 +5412,8 @@ mod tests {
         assert!(html.contains("const APP_BASE_PATH = detectAppBase()"));
         assert!(html.contains("fetch(appPath(path)"));
         assert!(html.contains("appWebSocket("));
+        assert!(html.contains("const action = init.mode === \"check\" ? \"检查并修复\""));
+        assert!(html.contains("previous.running && !init.running"));
         assert!(html.contains("src=\"vendor/compose-canvas.js"));
         assert!(!html.contains("src=\"/vendor/"));
         assert!(!html.contains("fetch(\"/api/"));

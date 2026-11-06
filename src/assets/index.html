@@ -2433,9 +2433,21 @@
       initPoll.inflight = true;
       try {
         const init = await api("/api/cluster/init/status");
+        const previous = state.initStatus;
         state.initStatus = init;
         renderInitStatus(init);
         if (state.clusterStatus) updateClusterOverview(state.clusterStatus);
+        if (previous && previous.running && !init.running) {
+          const failed = (init.steps || []).filter(step => step.state === "failed");
+          const action = init.mode === "check" ? "检查并修复" : "集群初始化";
+          if (init.error || failed.length) {
+            flash("err", `${action}完成，${failed.length} 个步骤失败：${init.error || "请查看下方执行记录"}`);
+          } else {
+            const succeeded = (init.steps || []).filter(step => step.state === "ok").length;
+            flash("ok", `${action}完成，${succeeded} 个步骤全部成功`);
+          }
+          setTimeout(() => { loadCluster(); }, 0);
+        }
       } catch (e) {
         body.innerHTML = `<p class="hint">${esc(e.message)}</p>`;
       } finally {
@@ -2539,6 +2551,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name, k3s_data_dir: k3sDataDir }),
         });
+        state.initStatus = { ...(state.initStatus || {}), running: true, mode: "init" };
         flash("ok", "已开始初始化集群，请稍候…");
         await loadInitStatus();
         initPoll.timer = setInterval(() => { loadInitStatus(); }, 3000);
@@ -2555,6 +2568,7 @@
       if (btn) btn.disabled = true;
       try {
         await api("/api/cluster/check", { method: "POST" });
+        state.initStatus = { ...(state.initStatus || {}), running: true, mode: "check" };
         flash("ok", "已开始检查并修复各节点…");
         await loadInitStatus();
         initPoll.timer = setInterval(() => { loadInitStatus(); }, 3000);
