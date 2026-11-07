@@ -152,8 +152,11 @@
     .mark-lg { width: 40px; height: 40px; }
     .topbar-logo {
       display: block; width: 140px; height: 40px;
-      object-fit: contain;
+      color: #24292f;
     }
+    :root[data-theme="dark"] .topbar-logo { color: #f0f6fc; }
+    .topbar-logo .logo-accent { fill: #1a7f37; }
+    :root[data-theme="dark"] .topbar-logo .logo-accent { fill: #3fb950; }
     .gate-brand { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; }
     .gate-brand h3 { margin: 0; }
     .brand h1 { margin: 0; font-size: 18px; letter-spacing: 0.02em; font-weight: 650; }
@@ -300,6 +303,8 @@
       vertical-align: top;
     }
     .cluster-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    :is(.cluster-table, .cangling-storage-table, .cangling-app-table, .cangling-kv-table) tr > :first-child { padding-left: 0; }
+    :is(.cluster-table, .cangling-storage-table, .cangling-app-table, .cangling-kv-table) tr > :last-child { padding-right: 0; }
     .k3s-summary { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-left: auto; }
     .k3s-stat {
       display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px;
@@ -315,10 +320,10 @@
     .k3s-toolbar .field:nth-child(3) { flex: 1; min-width: 220px; }
     .k3s-toolbar input, .k3s-toolbar select { width: 100%; height: 34px; }
     .k3s-toolbar select { padding-top: 0; padding-bottom: 0; line-height: 32px; }
-    .k3s-resource-list { min-width: 0; min-height: 420px; overflow: auto; border: 1px solid var(--line); background: var(--bg-2); }
+    .k3s-resource-list { min-width: 0; min-height: 420px; overflow: auto; border: 0; background: transparent; }
     .k3s-resource-list table { min-width: 760px; }
     .k3s-resource-list tbody tr { cursor: pointer; }
-    .k3s-resource-list tbody tr:hover { background: var(--bg-active); }
+    .k3s-resource-list tbody tr:hover td { background: var(--bg-3); }
     .k3s-resource-name { color: var(--accent); font-weight: 600; }
     .k3s-node-label { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--text); font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
     .k3s-node-label.pool { min-height: 24px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-3); font-family: inherit; font-size: 12px; }
@@ -390,12 +395,11 @@
     .cangling-app-table input:focus {
       border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); outline: none;
     }
-    .cangling-storage-config { margin-top: 18px; overflow-x: auto; border: 1px solid var(--line); }
+    .cangling-storage-config { margin-top: 18px; overflow-x: auto; border: 0; }
     .cangling-storage-table { width: 100%; min-width: 1040px; border-collapse: collapse; }
-    .cangling-storage-table th, .cangling-storage-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-    .cangling-storage-table tr:last-child td { border-bottom: 0; }
+    .cangling-storage-table th, .cangling-storage-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
     .cangling-storage-table tbody tr:hover td { background: var(--bg-3); }
-    .cangling-storage-table th { color: var(--muted); background: var(--bg-3); font-size: 12px; white-space: nowrap; }
+    .cangling-storage-table th { color: var(--muted); background: transparent; font-size: inherit; font-weight: 600; white-space: nowrap; }
     .cangling-storage-table input, .cangling-storage-table select {
       width: 100%; height: 34px; padding: 0 9px; box-sizing: border-box;
       border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg-input);
@@ -416,13 +420,12 @@
     }
     .cangling-section-head h3 { margin: 0; }
     .cangling-section-head .hint { margin: 0; text-align: right; }
-    .cangling-table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 7px; }
+    .cangling-table-wrap { overflow: auto; border: 0; border-radius: 0; }
     .cangling-app-table { width: 100%; min-width: 1060px; border-collapse: collapse; }
     .cangling-app-table th,
-    .cangling-app-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-    .cangling-app-table tr:last-child td { border-bottom: 0; }
+    .cangling-app-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
     .cangling-app-table tbody tr:hover td { background: var(--bg-3); }
-    .cangling-app-table th { color: var(--muted); background: var(--bg-3); font-size: 12px; white-space: nowrap; }
+    .cangling-app-table th { color: var(--muted); background: transparent; font-size: inherit; font-weight: 600; white-space: nowrap; }
     .cangling-app-name { min-width: 142px; }
     .cangling-app-name strong { display: block; color: var(--text); font-size: 13px; }
     .cangling-app-name span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
@@ -447,9 +450,8 @@
       padding: 8px 10px; border-bottom: 1px solid var(--line);
       text-align: left; vertical-align: middle; white-space: nowrap;
     }
-    .cangling-kv-table tr:last-child td { border-bottom: 0; }
     .cangling-kv-table tbody tr:hover td { background: var(--bg-3); }
-    .cangling-kv-table th { color: var(--muted); background: var(--bg-3); font-size: 12px; }
+    .cangling-kv-table th { color: var(--muted); background: transparent; font-size: inherit; font-weight: 600; }
     .cangling-kv-table thead th { position: sticky; top: 0; z-index: 1; }
     .cangling-kv-table input {
       width: 100%; height: 32px; padding: 0 8px; box-sizing: border-box;
@@ -631,15 +633,14 @@
     @keyframes prog-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(320%); } }
     @media (max-width: 900px) { .upgrade-upload-grid, .jar-upgrade-grid { grid-template-columns: 1fr; } }
     table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    .card > table th, .card > table td { vertical-align: middle; }
-    .card > table tbody tr:hover { background: var(--bg-active); }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tbody tr:hover td { background: var(--bg-3); }
     .image-matrix-wrap { overflow-x: auto; }
     .image-matrix { min-width: 100%; width: max-content; }
     .image-matrix th:first-child, .image-matrix td:first-child { position: sticky; left: 0; z-index: 2; background: var(--bg-2); min-width: 320px; }
     .image-matrix td:not(:first-child), .image-matrix th:not(:first-child) { min-width: 140px; text-align: center; }
     .image-installed { color: var(--success); font-weight: 700; font-size: 18px; }
-    th { color: var(--muted); font-weight: 700; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
     th:last-child, td:last-child:not(.empty) { text-align: right; }
     td:last-child .row { justify-content: flex-end; }
     .card > table th, .db-data th { position: sticky; top: 0; z-index: 1; background: var(--bg-2); }
@@ -999,7 +1000,21 @@
     .gate {
       min-height: 100%; display: grid; place-items: center; padding: 24px;
     }
-    .gate .card { width: min(420px, 100%); }
+    .gate .card { width: min(360px, 100%); padding: 28px; }
+    .gate-logo {
+      position: fixed; right: 24px; bottom: 20px;
+      display: block; width: 220px; height: auto;
+      object-fit: contain; opacity: .78;
+    }
+    .gate-title { margin: 0 0 22px; text-align: center; font-size: 20px; }
+    .gate-actions .btn { width: 100%; justify-content: center; }
+    .gate-footer {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line);
+      color: var(--muted); font-size: 12px;
+    }
+    .gate-footer a { text-decoration: none; }
+    .gate-footer a:hover { text-decoration: underline; }
     .gate[hidden], .app[hidden] { display: none !important; }
     #who { color: var(--text); }
     .overlay {
@@ -1162,6 +1177,13 @@
     .storage-form .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin-bottom: 16px; }
     .storage-form .form-grid .field { margin-bottom: 0; }
     .storage-form .form-grid:last-child { margin-bottom: 0; }
+    .certificate-sections { display: grid; gap: 16px; }
+    .certificate-section { margin: 0; }
+    .certificate-section .certificate-section-title {
+      margin: 0 0 6px; color: var(--text); font-size: 18px; font-weight: 650; line-height: 1.35;
+    }
+    .certificate-section > .hint { margin: 0 0 18px; }
+    .certificate-section .field > label { font-size: 13px; font-weight: 600; }
     .host-check-list {
       border: 1px solid var(--line); border-radius: 6px;
       max-height: 240px; overflow: auto; padding: 6px;
@@ -1270,6 +1292,7 @@
       .shell { grid-template-columns: minmax(160px, 34vw) minmax(0, 1fr); }
       .top-nav { margin-left: 4px; }
       .topbar-logo { width: 116px; height: 34px; }
+      .gate-logo { right: 10px; bottom: 10px; width: 145px; }
       .modal { height: 100%; }
       .compose-edit {
         grid-template-columns: 1fr;
@@ -1285,35 +1308,42 @@
 <body>
   <div class="gate" id="gate">
     <div class="card">
-      <div class="gate-brand">
-        <span class="mark mark-lg" aria-hidden="true">
-          <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-            <rect width="32" height="32" rx="6" fill="currentColor"/>
-            <path fill="#fff" d="M16 6.4 23.2 14h-4.3v5.2h-5.8V14H8.8z"/>
-            <rect x="8" y="21.4" width="16" height="2.5" rx="1.2" fill="#fff"/>
-            <rect x="10.4" y="24.8" width="11.2" height="2.2" rx="1.1" fill="#fff" opacity=".72"/>
-          </svg>
-        </span>
-        <h3 id="gate-title">登录 <span class="app-ver">v__APP_VERSION__</span></h3>
-      </div>
-      <p class="hint" id="gate-hint">2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。</p>
+      <img class="gate-logo" src="login-illustration.svg?v=__APP_VERSION__" alt="卫星环绕地球的 IMAGE BOT 插画" />
+      <h3 class="gate-title" id="gate-title">系统更新登录</h3>
       <div id="gate-flash" hidden></div>
       <div class="field"><label>用户名</label><input id="gate-user" type="text" autocomplete="off" data-1p-ignore data-lpignore="true" /></div>
       <div class="field"><label>密码</label><input id="gate-pass" type="password" autocomplete="off" data-1p-ignore data-lpignore="true" /></div>
       <div class="field" id="gate-pass2-wrap" hidden>
         <label>确认密码</label><input id="gate-pass2" type="password" autocomplete="new-password" />
       </div>
-      <div class="row">
+      <div class="row gate-actions">
         <button class="btn primary" id="gate-submit" type="button">登录</button>
-        <button type="button" class="btn" id="gate-theme">浅色</button>
       </div>
+      <div class="gate-footer"><a href="help-cert/">证书帮助</a><span>v__APP_VERSION__</span></div>
     </div>
   </div>
   <div class="app" id="app" hidden>
     <header>
       <div class="header-left">
         <a class="brand" href="./" title="返回首页">
-        <img class="topbar-logo" src="image-bot.svg?v=__APP_VERSION__" alt="IMAGE BOT" />
+        <svg class="topbar-logo" viewBox="0 0 640 180" role="img" aria-label="IMAGE BOT">
+          <g transform="translate(12 8)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M15 119C42 35 123 16 158 72" stroke="#A7B3BF" stroke-width="3"/>
+            <circle cx="80" cy="99" r="51" fill="#3B91E8" stroke="#246FB7" stroke-width="4"/>
+            <g stroke="#DDF2FF" stroke-width="2.5" opacity="0.9">
+              <path d="M29 99h102"/><path d="M36 76c25 11 63 11 88 0M36 122c25-11 63-11 88 0"/>
+              <ellipse cx="80" cy="99" rx="20" ry="51"/><ellipse cx="80" cy="99" rx="39" ry="51"/>
+            </g>
+            <g transform="translate(123 29) rotate(18 24 14)">
+              <rect x="17" y="6" width="22" height="16" rx="3" fill="#263746" stroke="none"/>
+              <path d="M17 9H1v10h16M39 9h16v10H39" fill="#337FD0" stroke="#245E9C" stroke-width="2"/>
+            </g>
+          </g>
+          <g transform="translate(0 15)" font-family="Orbitron, Oxanium, 'Bank Gothic', 'Eurostile Extended', 'Arial Black', monospace" font-size="68" font-weight="700" letter-spacing="5">
+            <text x="184" y="113" fill="currentColor">IMAGE</text>
+            <text class="logo-accent" x="433" y="113">BOT</text>
+          </g>
+        </svg>
         <div>
           <h1>系统更新</h1>
           <small class="brand-version">版本 v__APP_VERSION__</small>
@@ -1601,11 +1631,7 @@
 
     function renderGate() {
       const setup = state.needsSetup;
-      $("#gate-title").innerHTML = (setup ? "初始化管理员" : "登录") +
-        ' <span class="app-ver">v__APP_VERSION__</span>';
-      $("#gate-hint").innerHTML = setup
-        ? "首次使用请设置管理员账号。之后 2 小时无操作将自动退出。"
-        : "2 小时无操作将自动退出。忘记密码请在主机执行 <code>cangling-update reset-password</code>。";
+      $("#gate-title").textContent = setup ? "初始化管理员" : "系统更新登录";
       $("#gate-pass2-wrap").hidden = !setup;
       $("#gate-submit").textContent = setup ? "创建并进入" : "登录";
       $("#gate-pass").autocomplete = "off";
@@ -3423,7 +3449,7 @@
             <div class="cangling-section-head"><div><h3>JAR 包</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
             <div class="progress-wrap" id="cangling-jar-prog" hidden><div class="progress-meta"><span id="cangling-jar-prog-msg">准备中</span><span id="cangling-jar-prog-pct">0%</span></div><div class="progress" id="cangling-jar-prog-bar"><span></span></div><div class="progress-sub" id="cangling-jar-prog-sub"></div></div>
             <p class="hint hint-soft">上传前分块计算 SHA-256，与服务器一致的文件会跳过上传；同步采用临时文件传输、校验和原子替换。正在运行的容器不会被中断，仍使用原来的只读挂载；重启或重新部署 Pod 后才会加载新 JAR。</p>
-            <div class="cangling-table-wrap"><table><thead><tr><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="3" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
+            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="3" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-cluster" data-cangling-tab-panel="cluster" role="tabpanel">
@@ -3815,7 +3841,7 @@
       const header = isNodes
         ? "<tr><th>状态</th><th>名称</th><th>node-id</th><th>pool</th><th>版本</th><th>Pod CIDR</th><th>创建时间</th><th>操作</th></tr>"
         : "<tr><th>状态</th><th>命名空间</th><th>名称</th><th>就绪/信息</th><th>详情</th><th>创建时间</th></tr>";
-      box.innerHTML = `<table>
+      box.innerHTML = `<table class="cluster-table">
         <thead>${header}</thead>
         <tbody>${rows || `<tr><td colspan="${isNodes ? 8 : 6}" class="empty">没有匹配的资源</td></tr>`}</tbody>
       </table>`;
@@ -4082,9 +4108,9 @@
       try {
         const s = await api("/api/certificates");
         content.innerHTML = `
-          <div class="card storage-form">
-            <div class="form-section">
-              <div class="form-section-title">根证书</div>
+          <div class="certificate-sections">
+            <section class="card storage-form certificate-section" aria-labelledby="root-certificate-title">
+              <h3 class="certificate-section-title" id="root-certificate-title">根证书</h3>
               <p class="hint">根证书私钥使用 AES-256 加密，密码不会写入磁盘，也不会由系统保存。请妥善保管密码；遗失后无法继续签发证书。</p>
               <div class="form-grid">
                 <div class="field"><label>状态</label><div class="path">${s.root_initialized ? '<span class="ok">已初始化</span>' : '<span class="bad">尚未初始化</span>'}</div></div>
@@ -4136,9 +4162,9 @@
                   <div class="field"><label for="ca-password-confirm">确认密码</label><input id="ca-password-confirm" type="password" autocomplete="new-password" /></div>
                   <div class="field"><label>&nbsp;</label><button class="btn primary" id="ca-init" type="button">初始化根证书</button></div>
                 </div>`}
-            </div>
-            <div class="form-section">
-              <div class="form-section-title">负载均衡 IP 证书</div>
+            </section>
+            <section class="card storage-form certificate-section" aria-labelledby="loadbalance-certificate-title">
+              <h3 class="certificate-section-title" id="loadbalance-certificate-title">负载均衡证书</h3>
               <p class="hint">签发后自动更新 Load Balancer，并在保留 HTTP 7800 的同时启用 HTTPS 7443。</p>
               <div class="form-grid">
                 <div class="field"><label>状态</label><div class="path">${s.loadbalance_issued ? '<span class="ok">已签发</span>' : '<span class="bad">尚未签发</span>'}</div></div>
@@ -4170,7 +4196,7 @@
                 <button class="btn primary" id="lb-cert-issue" type="button" ${s.root_initialized ? "" : "disabled"}>${s.loadbalance_issued ? "重新签发并应用" : "签发并应用"}</button>
                 <div class="flash err" id="lb-cert-error" style="margin:0;flex:1 1 320px" hidden></div>
               </div>
-            </div>
+            </section>
           </div>`;
         const init = $("#ca-init");
         if (init) init.onclick = initRootCertificate;
@@ -8855,9 +8881,7 @@ access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
     function renderTheme() {
       const label = currentTheme() === "dark" ? "浅色" : "深色";
       const a = $("#theme-toggle");
-      const b = $("#gate-theme");
       if (a) a.textContent = label;
-      if (b) b.textContent = label;
     }
     function toggleTheme() {
       const next = currentTheme() === "dark" ? "light" : "dark";
@@ -8868,7 +8892,6 @@ access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;`;
       if (currentProjectTab() === "edit" && composeCanvas.yaml) renderComposeCanvas();
     }
     $("#theme-toggle").onclick = () => { toggleTheme(); setUserMenuOpen(false); };
-    $("#gate-theme").onclick = toggleTheme;
     renderTheme();
 
     async function requestCloseDialog() {

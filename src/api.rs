@@ -38,7 +38,7 @@ const HARBOR_TEMPLATE_REL: &str = "images/base-images/latest/linux/all/cangling-
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(crate::portal::page))
+        .route("/", get(index))
         .route("/console", get(index))
         .route("/hostinfo", get(hostinfo_term))
         .route("/hostinfo.md", get(hostinfo_markdown))
@@ -46,7 +46,6 @@ pub fn router(state: AppState) -> Router {
             "/api/hostinfo/note",
             get(hostinfo_note).put(save_hostinfo_note),
         )
-        .merge(crate::portal::routes())
         .route("/api/auth/status", get(auth::status))
         .route("/api/auth/setup", post(auth::setup))
         .route("/api/auth/login", post(auth::login))
@@ -171,6 +170,7 @@ pub fn router(state: AppState) -> Router {
         .route("/vendor/compose-canvas.js", get(vendor_compose_canvas))
         .route("/vendor/sha256.js", get(vendor_sha256))
         .route("/image-bot.svg", get(image_bot_svg))
+        .route("/login-illustration.svg", get(login_illustration_svg))
         .route("/vendor/ace/{*name}", get(vendor_ace))
         .route(
             "/vendor/iosevka-term-regular.woff2",
@@ -5384,6 +5384,16 @@ async fn image_bot_svg() -> impl IntoResponse {
     )
 }
 
+async fn login_illustration_svg() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_str!("assets/login-illustration.svg"),
+    )
+}
+
 fn vendor_font(bytes: &'static [u8]) -> impl IntoResponse {
     (
         [
@@ -5447,13 +5457,31 @@ mod tests {
         assert!(html.contains("上传前分块计算 SHA-256"));
         assert!(html.contains("vendor/sha256.js?v=1"));
         assert!(html.contains("class=\"topbar-logo\""));
+        assert!(html.contains("fill=\"currentColor\">IMAGE"));
+        assert!(html.contains(":root[data-theme=\"dark\"] .topbar-logo { color: #f0f6fc; }"));
+        assert!(html
+            .contains(":root[data-theme=\"dark\"] .topbar-logo .logo-accent { fill: #3fb950; }"));
         assert!(html.contains(&format!("版本 v{}", env!("CARGO_PKG_VERSION"))));
+        assert!(html.contains("class=\"gate-footer\""));
+        assert!(html.contains("class=\"gate-logo\""));
+        assert!(html.contains("login-illustration.svg?v="));
+        assert!(html.contains("<table class=\"cluster-table\"><thead><tr><th>文件名"));
+        assert!(html.contains("box.innerHTML = `<table class=\"cluster-table\">"));
+        assert!(html.contains(".cangling-kv-table) tr > :first-child { padding-left: 0; }"));
+        assert!(html.contains("系统更新登录"));
+        assert!(html.contains("href=\"help-cert/\">证书帮助"));
+        assert!(!html.contains("id=\"gate-hint\""));
+        assert!(!html.contains("id=\"gate-theme\""));
         assert!(html.contains("showProgress(\"cangling-jar-prog\", false)"));
         assert!(html.contains("setCanglingJarProgressPhase(\"check\")"));
         assert!(html.contains("setCanglingJarProgressPhase(\"upload\")"));
         assert!(html.contains("setCanglingJarProgressPhase(\"sync\")"));
         assert!(html.contains("setCanglingJarProgressPhase(\"error\")"));
         assert!(html.contains("const wrap = $(\"#cangling-jar-prog\")"));
+        assert!(html.contains("class=\"certificate-sections\""));
+        assert!(html.contains("id=\"root-certificate-title\">根证书"));
+        assert!(html.contains("id=\"loadbalance-certificate-title\">负载均衡证书"));
+        assert!(html.contains("font-size: 18px; font-weight: 650"));
         assert!(html.contains("src=\"vendor/compose-canvas.js"));
         assert!(!html.contains("src=\"/vendor/"));
         assert!(!html.contains("fetch(\"/api/"));

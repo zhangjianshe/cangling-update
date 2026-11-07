@@ -23,7 +23,6 @@ mod nginx_stats;
 mod password_policy;
 mod paths;
 mod port_forward;
-mod portal;
 mod progress;
 mod repo;
 mod self_upgrade;

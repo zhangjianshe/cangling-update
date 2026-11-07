@@ -20,7 +20,7 @@ pub const IDLE_TIMEOUT_SECS: u64 = 2 * 60 * 60;
 const COOKIE_NAME: &str = "cangling_session";
 
 pub fn is_public(method: &Method, path: &str) -> bool {
-    if path.starts_with("/vendor/") || path.starts_with("/media/portal/") {
+    if path.starts_with("/vendor/") {
         return true;
     }
     if matches!(path, "/" | "/console") {
@@ -63,14 +63,15 @@ pub fn is_public(method: &Method, path: &str) -> bool {
     {
         return true;
     }
-    method == Method::GET && path == "/api/portal"
+    false
 }
 
 fn is_image_bot_path(path: &str) -> bool {
-    path == "/image-bot.svg"
+    matches!(path, "/image-bot.svg" | "/login-illustration.svg")
         || path.strip_prefix('/').is_some_and(|rest| {
-            rest.split_once('/')
-                .is_some_and(|(prefix, suffix)| !prefix.is_empty() && suffix == "image-bot.svg")
+            rest.split_once('/').is_some_and(|(prefix, suffix)| {
+                !prefix.is_empty() && matches!(suffix, "image-bot.svg" | "login-illustration.svg")
+            })
         })
 }
 
@@ -522,7 +523,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn public_paths_allow_portal_read_but_not_write() {
+    fn public_paths_allow_login_and_static_resources() {
         assert!(is_public(&Method::GET, "/"));
         assert!(is_public(&Method::GET, "/console"));
         assert!(is_public(&Method::GET, "/help-cert"));
@@ -531,18 +532,17 @@ mod tests {
         assert!(is_public(&Method::GET, "/update/help-cert/"));
         assert!(is_public(&Method::GET, "/image-bot.svg"));
         assert!(is_public(&Method::GET, "/update/image-bot.svg"));
+        assert!(is_public(&Method::GET, "/login-illustration.svg"));
+        assert!(is_public(&Method::GET, "/update/login-illustration.svg"));
         assert!(!is_public(&Method::POST, "/image-bot.svg"));
         assert!(is_public(
             &Method::GET,
             "/update/help-cert/cangling-root-ca.crt"
         ));
         assert!(!is_public(&Method::POST, "/help-cert/"));
-        assert!(is_public(&Method::GET, "/api/portal"));
-        assert!(!is_public(&Method::PUT, "/api/portal"));
-        assert!(!is_public(&Method::POST, "/api/portal/items"));
         assert!(is_public(&Method::GET, "/vendor/portal.jpg"));
-        assert!(is_public(&Method::GET, "/media/portal/background"));
-        assert!(is_public(&Method::GET, "/media/portal/icon/abc"));
+        assert!(!is_public(&Method::GET, "/media/portal/background"));
+        assert!(!is_public(&Method::GET, "/api/portal"));
         assert!(is_public(&Method::GET, "/api/auth/status"));
         assert!(is_public(&Method::GET, "/api/tunnel/ws"));
         assert!(is_public(&Method::GET, "/update/api/tunnel/ws"));

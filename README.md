@@ -470,7 +470,6 @@ config/
     images/                     # 当时上传的镜像包
     jars/                       # 当时上传的 JAR
   uploads/                      # 上传临时目录
-  portal/                       # 首页背景与入口图标
 ```
 
 备份是全量的：会包含项目目录里的数据库数据文件。跳过 `.git`、`lost+found`，不跟随符号链接。正在运行的数据库可能锁住文件，备份会失败；请先停止 Compose。Docker 命名卷（`/var/lib/docker`）不在项目目录里，不会被备份。

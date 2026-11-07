@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 ///   backups/<project>/<version>/
 ///   db-backups/<project>/<backup>/
 ///   uploads/               # in-flight multipart
-///   portal/                # homepage background and item icons
 /// ```
 #[derive(Clone, Debug)]
 pub struct AppPaths {
@@ -21,7 +20,6 @@ pub struct AppPaths {
     pub backups_dir: PathBuf,
     pub db_backups_dir: PathBuf,
     pub uploads_dir: PathBuf,
-    pub portal_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub log_file: PathBuf,
 }
@@ -48,17 +46,12 @@ impl AppPaths {
         let backups_dir = config_dir.join("backups");
         let db_backups_dir = config_dir.join("db-backups");
         let uploads_dir = config_dir.join("uploads");
-        let portal_dir = config_dir.join("portal");
         std::fs::create_dir_all(&backups_dir)
             .with_context(|| format!("create backups dir {}", backups_dir.display()))?;
         std::fs::create_dir_all(&db_backups_dir)
             .with_context(|| format!("create database backups dir {}", db_backups_dir.display()))?;
         std::fs::create_dir_all(&uploads_dir)
             .with_context(|| format!("create uploads dir {}", uploads_dir.display()))?;
-        std::fs::create_dir_all(&portal_dir)
-            .with_context(|| format!("create portal dir {}", portal_dir.display()))?;
-        std::fs::create_dir_all(portal_dir.join("icons"))
-            .with_context(|| format!("create portal icons dir {}", portal_dir.display()))?;
 
         let logs_dir = exe_dir.join("logs");
         std::fs::create_dir_all(&logs_dir)
@@ -72,14 +65,9 @@ impl AppPaths {
             backups_dir,
             db_backups_dir,
             uploads_dir,
-            portal_dir,
             logs_dir,
             log_file,
         })
-    }
-
-    pub fn portal_icons_dir(&self) -> PathBuf {
-        self.portal_dir.join("icons")
     }
 
     pub fn version_dir(&self, project_id: &str, version_id: &str) -> PathBuf {
