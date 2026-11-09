@@ -35,6 +35,7 @@ pub fn routes() -> Router<AppState> {
         .route("/help-cert/cangling-root-ca.crt", get(download_root))
         .route("/api/certificates", get(status))
         .route("/api/certificates/root", get(download_root).post(init_root))
+        .route("/api/certificates/root/reset", post(reset_root))
         .route(
             "/api/certificates/loadbalance/access-qr.svg",
             get(loadbalance_access_qr),
@@ -93,7 +94,9 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
     ensure_embedded_root()?;
     ensure_help_page()?;
     let root_initialized = Path::new(CA_KEY).is_file() && Path::new(CA_CERT).is_file();
-    let loadbalance_issued = Path::new(SERVER_KEY).is_file() && Path::new(SERVER_CERT).is_file();
+    let loadbalance_issued = Path::new(SERVER_KEY).is_file()
+        && Path::new(SERVER_CERT).is_file()
+        && certificate_verifies(SERVER_CERT, CA_CERT);
     let suggested_ip = hostinfo::primary_ip();
     let loadbalance_ip = std::fs::read_to_string(SERVER_IP)
         .unwrap_or_default()
@@ -154,6 +157,34 @@ async fn download_root() -> Result<impl IntoResponse, AppError> {
         ],
         certificate,
     ))
+}
+
+async fn reset_root() -> Result<Json<ActionResult>, AppError> {
+    prepare_cert_dir()?;
+    let nonce = Uuid::new_v4();
+    let temp_key = PathBuf::from(CERT_DIR).join(format!(".reset-ca-{nonce}.key"));
+    let temp_cert = PathBuf::from(CERT_DIR).join(format!(".reset-ca-{nonce}.crt"));
+    let result = (|| -> Result<(), AppError> {
+        write_new(&temp_key, EMBEDDED_CA_KEY, 0o600)?;
+        write_new(&temp_cert, EMBEDDED_CA_CERT, 0o644)?;
+        std::fs::rename(&temp_key, CA_KEY)?;
+        std::fs::rename(&temp_cert, CA_CERT)?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&temp_key);
+    let _ = std::fs::remove_file(&temp_cert);
+    result?;
+    ensure_help_page()?;
+    let needs_reissue =
+        Path::new(SERVER_CERT).is_file() && !certificate_verifies(SERVER_CERT, CA_CERT);
+    Ok(Json(ActionResult {
+        ok: true,
+        message: if needs_reissue {
+            "已用程序内嵌证书重置根证书；现有负载均衡证书与新根证书不匹配，请重新签发".to_string()
+        } else {
+            "已用程序内嵌证书重置根证书".to_string()
+        },
+    }))
 }
 
 async fn loadbalance_access_qr() -> Result<impl IntoResponse, AppError> {
@@ -437,6 +468,14 @@ fn certificate_fingerprint(path: &str) -> String {
         return String::new();
     };
     parse_certificate_fingerprint(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn certificate_verifies(certificate: &str, ca_certificate: &str) -> bool {
+    Command::new("openssl")
+        .args(["verify", "-CAfile", ca_certificate, certificate])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 fn parse_certificate_fingerprint(output: &str) -> String {

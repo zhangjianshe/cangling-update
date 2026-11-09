@@ -5506,6 +5506,9 @@ mod tests {
         assert!(html.contains("/api/certificates/loadbalance/access-qr.svg"));
         assert!(html.contains("`https://${s.loadbalance_ip || s.suggested_ip}:7443/update/`"));
         assert!(html.contains("id=\"ca-download\" type=\"button\">下载根证书"));
+        assert!(html.contains("id=\"ca-reset\" type=\"button\">重置根证书"));
+        assert!(html.contains("/api/certificates/root/reset"));
+        assert!(html.contains("confirmText: \"确认重置\""));
         assert!(!html.contains("class=\"root-certificate-help-link\""));
         assert!(html.contains("class=\"loadbalance-certificate-layout\""));
         assert!(html.contains("class=\"loadbalance-certificate-card\""));
