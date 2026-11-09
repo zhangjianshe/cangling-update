@@ -7,6 +7,7 @@ use axum::http::header;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use qrcode::{render::svg, QrCode};
 use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::net::IpAddr;
@@ -34,6 +35,10 @@ pub fn routes() -> Router<AppState> {
         .route("/help-cert/cangling-root-ca.crt", get(download_root))
         .route("/api/certificates", get(status))
         .route("/api/certificates/root", get(download_root).post(init_root))
+        .route(
+            "/api/certificates/loadbalance/access-qr.svg",
+            get(loadbalance_access_qr),
+        )
         .route("/api/certificates/loadbalance", post(issue_loadbalance))
 }
 
@@ -56,6 +61,7 @@ struct CertificateStatus {
     loadbalance_domains: Vec<String>,
     loadbalance_subject: String,
     loadbalance_expires: String,
+    loadbalance_fingerprint: String,
     suggested_ip: String,
     root_certificate_path: &'static str,
     loadbalance_certificate_path: &'static str,
@@ -103,6 +109,7 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
     let (root_subject, root_expires) = certificate_summary(CA_CERT);
     let root_fingerprint = certificate_fingerprint(CA_CERT);
     let (loadbalance_subject, loadbalance_expires) = certificate_summary(SERVER_CERT);
+    let loadbalance_fingerprint = certificate_fingerprint(SERVER_CERT);
     let https_url = loadbalance_issued.then(|| {
         format!(
             "https://{}:7443/update/",
@@ -125,6 +132,7 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
         loadbalance_domains,
         loadbalance_subject,
         loadbalance_expires,
+        loadbalance_fingerprint,
         suggested_ip,
         root_certificate_path: CA_CERT,
         loadbalance_certificate_path: SERVER_CERT,
@@ -146,6 +154,40 @@ async fn download_root() -> Result<impl IntoResponse, AppError> {
         ],
         certificate,
     ))
+}
+
+async fn loadbalance_access_qr() -> Result<impl IntoResponse, AppError> {
+    ensure_embedded_root()?;
+    let suggested_ip = hostinfo::primary_ip();
+    let loadbalance_ip = std::fs::read_to_string(SERVER_IP)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let host = if loadbalance_ip.is_empty() {
+        &suggested_ip
+    } else {
+        &loadbalance_ip
+    };
+    let access_url = format!("https://{host}:7443/update/");
+    let image = access_qr_svg(&access_url)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache, must-revalidate"),
+        ],
+        image,
+    ))
+}
+
+fn access_qr_svg(access_url: &str) -> Result<String, AppError> {
+    let code = QrCode::new(access_url)
+        .map_err(|error| AppError::internal(format!("生成访问地址二维码失败：{error}")))?;
+    Ok(code
+        .render::<svg::Color>()
+        .min_dimensions(160, 160)
+        .dark_color(svg::Color("#263746"))
+        .light_color(svg::Color("#fff8d5"))
+        .build())
 }
 
 async fn init_root(Json(body): Json<InitRootRequest>) -> Result<Json<ActionResult>, AppError> {
@@ -719,5 +761,14 @@ mod tests {
             parse_certificate_fingerprint("sha256 Fingerprint=11:22:33\n"),
             "11:22:33"
         );
+    }
+
+    #[test]
+    fn access_qr_is_self_contained_svg() {
+        let svg = access_qr_svg("https://4np.tjj:7443/update/").unwrap();
+        assert!(svg.starts_with("<?xml"));
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("#263746"));
+        assert!(svg.contains("#fff8d5"));
     }
 }

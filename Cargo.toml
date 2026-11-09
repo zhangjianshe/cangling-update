@@ -17,6 +17,7 @@ fancy-regex = "0.14"
 base64 = "0.22"
 futures-util = "0.3"
 rand = "0.8"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tar = "0.4"
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy"] }

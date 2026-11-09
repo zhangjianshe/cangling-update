@@ -67,12 +67,18 @@ pub fn is_public(method: &Method, path: &str) -> bool {
 }
 
 fn is_image_bot_path(path: &str) -> bool {
-    matches!(path, "/image-bot.svg" | "/login-illustration.svg")
-        || path.strip_prefix('/').is_some_and(|rest| {
-            rest.split_once('/').is_some_and(|(prefix, suffix)| {
-                !prefix.is_empty() && matches!(suffix, "image-bot.svg" | "login-illustration.svg")
-            })
+    matches!(
+        path,
+        "/image-bot.svg" | "/login-illustration.svg" | "/cert.png"
+    ) || path.strip_prefix('/').is_some_and(|rest| {
+        rest.split_once('/').is_some_and(|(prefix, suffix)| {
+            !prefix.is_empty()
+                && matches!(
+                    suffix,
+                    "image-bot.svg" | "login-illustration.svg" | "cert.png"
+                )
         })
+    })
 }
 
 fn is_certificate_help_path(path: &str) -> bool {
@@ -534,6 +540,8 @@ mod tests {
         assert!(is_public(&Method::GET, "/update/image-bot.svg"));
         assert!(is_public(&Method::GET, "/login-illustration.svg"));
         assert!(is_public(&Method::GET, "/update/login-illustration.svg"));
+        assert!(is_public(&Method::GET, "/cert.png"));
+        assert!(is_public(&Method::GET, "/update/cert.png"));
         assert!(!is_public(&Method::POST, "/image-bot.svg"));
         assert!(is_public(
             &Method::GET,

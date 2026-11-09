@@ -1184,6 +1184,94 @@
     }
     .certificate-section > .hint { margin: 0 0 18px; }
     .certificate-section .field > label { font-size: 13px; font-weight: 600; }
+    .root-certificate-layout {
+      display: grid; grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+      gap: clamp(22px, 3vw, 42px); align-items: start;
+    }
+    .root-certificate-side { min-width: 0; padding-top: 4px; }
+    .root-certificate-side .field { margin-bottom: 22px; }
+    .root-certificate-side .path { overflow-wrap: anywhere; }
+    .root-certificate-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    .root-certificate-actions .btn { min-width: 132px; justify-content: center; }
+    .root-certificate-access { color: var(--accent); text-decoration: none; }
+    .root-certificate-access:hover { text-decoration: underline; }
+    .root-certificate-card {
+      position: relative; width: min(800px, 100%); aspect-ratio: 800 / 487; margin: 4px 0 18px;
+      overflow: hidden; border-radius: 14px; background: #f8dd7b url("cert.png?v=__APP_VERSION__") center / 100% 100% no-repeat;
+      color: #263746; box-shadow: 0 8px 24px rgba(27, 31, 36, .16); container-type: inline-size;
+    }
+    .root-certificate-card-content {
+      position: absolute; inset: calc(22% + 10px) 11% 15%; display: flex; min-width: 0;
+      flex-direction: column; align-items: center; text-align: center;
+    }
+    .root-certificate-name {
+      max-width: 100%; overflow: hidden; color: #1f2d3a; font-size: clamp(17px, 3vw, 28px);
+      font-weight: 750; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .root-certificate-organization {
+      margin-top: clamp(8px, 1.8vw, 16px); font-size: clamp(11px, 1.8vw, 15px); font-weight: 600;
+    }
+    .root-certificate-validity {
+      margin-top: clamp(8px, 1.8vw, 16px); font-size: clamp(11px, 1.8vw, 15px);
+    }
+    .root-certificate-verification {
+      display: flex; width: 100%; min-height: 0; margin-top: auto; flex-direction: column; align-items: center;
+    }
+    .root-certificate-qr {
+      display: block; width: clamp(42px, 12cqw, 88px); height: clamp(42px, 12cqw, 88px);
+      padding: 3px; border: 1px solid rgba(38, 55, 70, .28); border-radius: 3px; background: #fff8d5;
+    }
+    .root-certificate-fingerprint {
+      width: 100%; margin-top: clamp(4px, 1cqw, 8px);
+      font: 600 clamp(5px, 1.25cqw, 10px)/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: -.01em; white-space: nowrap;
+    }
+    @media (max-width: 560px) {
+      .root-certificate-card { border-radius: 8px; }
+      .root-certificate-card-content { inset: calc(20% + 10px) 10% 15%; }
+      .root-certificate-fingerprint { line-height: 1.3; }
+    }
+    @media (max-width: 760px) {
+      .root-certificate-layout { grid-template-columns: 1fr; }
+      .root-certificate-side { padding-top: 0; }
+    }
+    .loadbalance-certificate-layout {
+      display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+      gap: clamp(22px, 3vw, 42px); align-items: start;
+    }
+    .loadbalance-certificate-card {
+      position: relative; width: min(800px, 100%); aspect-ratio: 800 / 487; overflow: hidden;
+      border-radius: 14px; color: #173525; box-shadow: 0 8px 24px rgba(27, 31, 36, .16); container-type: inline-size;
+    }
+    .loadbalance-certificate-card::before {
+      position: absolute; inset: 0; background: #a9d7ad url("cert.png?v=__APP_VERSION__") center / 100% 100% no-repeat;
+      filter: hue-rotate(58deg) saturate(.72) brightness(.98); content: "";
+    }
+    .loadbalance-certificate-card-content {
+      position: absolute; z-index: 1; inset: 24% 11% 14%; display: flex;
+      flex-direction: column; align-items: center; text-align: center;
+    }
+    .loadbalance-certificate-name {
+      max-width: 100%; overflow: hidden; font-size: clamp(17px, 3vw, 28px); font-weight: 750;
+      line-height: 1.25; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .loadbalance-certificate-subject { margin-top: clamp(10px, 2vw, 18px); font-size: clamp(11px, 1.8vw, 15px); font-weight: 600; }
+    .loadbalance-certificate-validity { margin-top: clamp(8px, 1.8vw, 16px); font-size: clamp(11px, 1.8vw, 15px); }
+    .loadbalance-certificate-fingerprint {
+      width: 100%; margin-top: auto;
+      font: 600 clamp(5px, 1.25cqw, 10px)/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: -.01em; white-space: nowrap;
+    }
+    .loadbalance-certificate-empty { justify-content: center; }
+    .loadbalance-certificate-empty strong { font-size: clamp(18px, 3vw, 28px); }
+    .loadbalance-certificate-empty span { margin-top: 12px; font-size: clamp(11px, 1.8vw, 15px); }
+    .loadbalance-certificate-side { min-width: 0; padding-top: 4px; }
+    .loadbalance-certificate-side .field { margin-bottom: 18px; }
+    .loadbalance-certificate-side .path { overflow-wrap: anywhere; }
+    @media (max-width: 760px) {
+      .loadbalance-certificate-layout { grid-template-columns: 1fr; }
+      .loadbalance-certificate-side { padding-top: 0; }
+    }
     .host-check-list {
       border: 1px solid var(--line); border-radius: 6px;
       max-height: 240px; overflow: auto; padding: 6px;
@@ -2219,6 +2307,11 @@
       if (isNaN(d)) return s;
       const p = (x) => String(x).padStart(2, "0");
       return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    function certificateSubjectValue(subject, key) {
+      const match = String(subject || "").match(new RegExp(`(?:^|[,/])\\s*${key}\\s*=\\s*([^,/]+)`, "i"));
+      return match ? match[1].trim() : "";
     }
 
     function renderClusterLayout(st) {
@@ -4107,53 +4200,47 @@
       if (!content) return;
       try {
         const s = await api("/api/certificates");
+        const rootName = certificateSubjectValue(s.root_subject, "CN") || "Cangling Local Root CA";
+        const rootOrganization = certificateSubjectValue(s.root_subject, "O") || "未设置";
+        const rootOrganizationUnit = certificateSubjectValue(s.root_subject, "OU") || "未设置";
+        const rootAccessUrl = `https://${s.loadbalance_ip || s.suggested_ip}:7443/update/`;
+        const loadbalanceName = certificateSubjectValue(s.loadbalance_subject, "CN") || "Load Balancer";
         content.innerHTML = `
           <div class="certificate-sections">
             <section class="card storage-form certificate-section" aria-labelledby="root-certificate-title">
               <h3 class="certificate-section-title" id="root-certificate-title">根证书</h3>
               <p class="hint">根证书私钥使用 AES-256 加密，密码不会写入磁盘，也不会由系统保存。请妥善保管密码；遗失后无法继续签发证书。</p>
-              <div class="form-grid">
-                <div class="field"><label>状态</label><div class="path">${s.root_initialized ? '<span class="ok">已初始化</span>' : '<span class="bad">尚未初始化</span>'}</div></div>
-                <div class="field"><label>根证书路径</label><div class="path">${esc(s.root_certificate_path)}</div></div>
-              </div>
               ${s.root_initialized ? `
+                <div class="root-certificate-layout">
+                  <div class="root-certificate-card" role="group" aria-label="根证书 ${esc(rootName)}">
+                    <div class="root-certificate-card-content">
+                      <div class="root-certificate-name">${esc(rootName)}</div>
+                      <div class="root-certificate-organization">组织：${esc(rootOrganization)}　·　组织单元：${esc(rootOrganizationUnit)}</div>
+                      <div class="root-certificate-validity">有效期至：${esc(fmtDateTime(s.root_expires))}</div>
+                      <div class="root-certificate-verification">
+                        <img class="root-certificate-qr" src="${esc(appPath("/api/certificates/loadbalance/access-qr.svg"))}" alt="负载均衡访问地址二维码" title="扫码访问 ${esc(rootAccessUrl)}" />
+                        <div class="root-certificate-fingerprint" title="${esc(s.root_fingerprint || "—")}">${esc(s.root_fingerprint || "—")}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="root-certificate-side" role="complementary" aria-label="根证书信息与操作">
+                    <div class="field"><label>状态</label><div class="path"><span class="ok">已初始化</span></div></div>
+                    <div class="field"><label>根证书路径</label><div class="path">${esc(s.root_certificate_path)}</div></div>
+                    <div class="field"><label>访问地址</label><a class="root-certificate-access path" href="${esc(rootAccessUrl)}" target="_blank" rel="noopener">${esc(rootAccessUrl)}</a></div>
+                    <div class="field">
+                      <label>证书操作</label>
+                      <div class="root-certificate-actions">
+                        <button class="btn primary" id="ca-download" type="button">下载根证书</button>
+                        <a class="btn" href="${esc(appPath("/help-cert/"))}" target="_blank" rel="noopener">证书帮助</a>
+                      </div>
+                    </div>
+                    <p class="hint">证书中的二维码用于在手机或其他设备上直接打开上述 HTTPS 访问地址。</p>
+                  </div>
+                </div>` : `
                 <div class="form-grid">
-                  <div class="field"><label>主题</label><div class="path">${esc(s.root_subject || "—")}</div></div>
-                  <div class="field"><label>到期时间</label><div class="path">${esc(fmtDateTime(s.root_expires))}</div></div>
+                  <div class="field"><label>状态</label><div class="path"><span class="bad">尚未初始化</span></div></div>
+                  <div class="field"><label>根证书路径</label><div class="path">${esc(s.root_certificate_path)}</div></div>
                 </div>
-                <div class="field"><label>SHA-256 指纹</label><div class="path">${esc(s.root_fingerprint || "—")}</div></div>
-                <div class="row" style="margin:12px 0">
-                  <button class="btn primary" id="ca-download" type="button">下载根证书</button>
-                  <a class="btn" href="${esc(appPath("/help-cert/"))}" target="_blank" rel="noopener">证书帮助</a>
-                </div>
-                <details class="traffic-guide">
-                  <summary>如何让浏览器信任此根证书</summary>
-                  <p class="hint">只应在受管理且确认属于本系统的设备上安装。安装前请核对上方 SHA-256 指纹。</p>
-                  <h4>Windows · Chrome / Edge</h4>
-                  <ol>
-                    <li>点击“下载根证书”，双击下载的 <code>cangling-root-ca.crt</code>。</li>
-                    <li>选择“安装证书”，按使用范围选择“当前用户”或“本地计算机”。</li>
-                    <li>选择“将所有证书放入下列存储”，存储位置选择“受信任的根证书颁发机构”。</li>
-                    <li>完成导入并重新启动 Chrome 或 Edge。</li>
-                  </ol>
-                  <h4>Firefox</h4>
-                  <ol>
-                    <li>打开“设置 → 隐私与安全 → 证书 → 查看证书”。</li>
-                    <li>在“证书颁发机构”中选择“导入”，选择下载的根证书。</li>
-                    <li>勾选“信任此 CA 来标识网站”，确认后重新打开目标页面。</li>
-                  </ol>
-                  <h4>macOS · Safari / Chrome</h4>
-                  <ol>
-                    <li>用“钥匙串访问”打开下载的根证书，并加入“系统”钥匙串。</li>
-                    <li>双击证书，展开“信任”，将“使用此证书时”设置为“始终信任”。</li>
-                    <li>输入管理员密码确认，然后重新启动浏览器。</li>
-                  </ol>
-                  <h4>Linux · Chrome / Edge</h4>
-                  <p>Debian/Ubuntu：将文件复制到 <code>/usr/local/share/ca-certificates/cangling-root-ca.crt</code>，执行 <code>sudo update-ca-certificates</code>。</p>
-                  <p>Chrome/Edge 仍不信任时，需要同时导入当前用户的 NSS 库：<code>certutil -A -d sql:$HOME/.pki/nssdb -n "Cangling Local Root CA" -t "CT,C,C" -i /usr/local/share/ca-certificates/cangling-root-ca.crt</code>。若没有 certutil，请先安装 <code>libnss3-tools</code>。</p>
-                  <p>RHEL/Kylin：将文件复制到 <code>/etc/pki/ca-trust/source/anchors/</code>，执行 <code>sudo update-ca-trust</code>；必要时再按上面的方法导入 NSS 库。</p>
-                  <p>最后完全退出浏览器，确认所有 Chrome/Edge 后台进程均已结束，再重新打开。</p>
-                </details>` : `
                 <div class="form-grid">
                   <div class="field"><label for="ca-common-name">根证书名称</label><input id="ca-common-name" type="text" value="Cangling Local Root CA" maxlength="100" /></div>
                   <div class="field"><label for="ca-password">保护密码（至少 12 位）</label><input id="ca-password" type="password" autocomplete="new-password" /></div>
@@ -4166,35 +4253,32 @@
             <section class="card storage-form certificate-section" aria-labelledby="loadbalance-certificate-title">
               <h3 class="certificate-section-title" id="loadbalance-certificate-title">负载均衡证书</h3>
               <p class="hint">签发后自动更新 Load Balancer，并在保留 HTTP 7800 的同时启用 HTTPS 7443。</p>
-              <div class="form-grid">
-                <div class="field"><label>状态</label><div class="path">${s.loadbalance_issued ? '<span class="ok">已签发</span>' : '<span class="bad">尚未签发</span>'}</div></div>
-                <div class="field"><label>证书路径</label><div class="path">${esc(s.loadbalance_certificate_path)}</div></div>
-              </div>
-              ${s.loadbalance_issued ? `
-                <div class="form-grid">
-                  <div class="field"><label>证书 IP</label><div class="path">${esc(s.loadbalance_ip || "—")}</div></div>
-                  <div class="field"><label>证书域名</label><div class="path">${esc((s.loadbalance_domains || []).join(", ") || "—")}</div></div>
+              <div class="loadbalance-certificate-layout">
+                <div class="loadbalance-certificate-card" role="group" aria-label="负载均衡证书">
+                  ${s.loadbalance_issued ? `
+                    <div class="loadbalance-certificate-card-content">
+                      <div class="loadbalance-certificate-name">${esc(loadbalanceName)}</div>
+                      <div class="loadbalance-certificate-subject">IP：${esc(s.loadbalance_ip || "—")}　·　域名：${esc((s.loadbalance_domains || []).join(", ") || "—")}</div>
+                      <div class="loadbalance-certificate-validity">有效期至：${esc(fmtDateTime(s.loadbalance_expires))}</div>
+                      <div class="loadbalance-certificate-fingerprint" title="${esc(s.loadbalance_fingerprint || "—")}">${esc(s.loadbalance_fingerprint || "—")}</div>
+                    </div>` : `
+                    <div class="loadbalance-certificate-card-content loadbalance-certificate-empty">
+                      <strong>尚未签发负载均衡证书</strong>
+                      <span>请填写右侧信息，然后点击“签发并应用”</span>
+                    </div>`}
                 </div>
-                <div class="form-grid">
-                  <div class="field"><label>到期时间</label><div class="path">${esc(fmtDateTime(s.loadbalance_expires))}</div></div>
+                <div class="loadbalance-certificate-side" role="complementary" aria-label="负载均衡证书信息与操作">
+                  <div class="field"><label>状态</label><div class="path">${s.loadbalance_issued ? '<span class="ok">已签发</span>' : '<span class="bad">尚未签发</span>'}</div></div>
+                  <div class="field"><label>证书路径</label><div class="path">${esc(s.loadbalance_certificate_path)}</div></div>
+                  <div class="field"><label for="lb-cert-ip">负载均衡 IP</label><input id="lb-cert-ip" type="text" value="${esc(s.loadbalance_ip || s.suggested_ip || "")}" /></div>
+                  <div class="field"><label for="lb-cert-domains">域名（可选，多个用逗号分隔）</label><input id="lb-cert-domains" type="text" value="${esc((s.loadbalance_domains || []).join(", ") || "4np.tjj")}" placeholder="例如：4np.tjj" /></div>
+                  <div class="field"><label for="lb-ca-password">根证书密码</label><input id="lb-ca-password" type="password" autocomplete="current-password" /></div>
+                  <div class="row" style="align-items:center;flex-wrap:wrap">
+                    <button class="btn primary" id="lb-cert-issue" type="button" ${s.root_initialized ? "" : "disabled"}>${s.loadbalance_issued ? "重新签发并应用" : "签发并应用"}</button>
+                    <div class="flash err" id="lb-cert-error" style="margin:0;flex:1 1 260px" hidden></div>
+                  </div>
+                  <p class="hint">域名未配置 DNS 时，可在客户端 hosts 文件中添加 <code>${esc(s.loadbalance_ip || s.suggested_ip)} 4np.tjj</code>。</p>
                 </div>
-                <p class="hint">HTTPS 地址：<code>${esc(s.https_url || "—")}</code></p>` : ""}
-              <div class="form-grid">
-                <div class="field"><label for="lb-cert-ip">负载均衡 IP</label><input id="lb-cert-ip" type="text" value="${esc(s.loadbalance_ip || s.suggested_ip || "")}" /></div>
-                <div class="field"><label for="lb-cert-domains">域名（可选，多个用逗号分隔）</label><input id="lb-cert-domains" type="text" value="${esc((s.loadbalance_domains || []).join(", ") || "4np.tjj")}" placeholder="例如：4np.tjj" /></div>
-              </div>
-              <div class="hint hint-soft" style="margin-bottom:16px">
-                <strong>域名解析配置：</strong><br>
-                Linux：编辑 <code>/etc/hosts</code>，添加 <code>192.168.3.121 4np.tjj</code>。例如执行 <code>echo '192.168.3.121 4np.tjj' | sudo tee -a /etc/hosts</code>。<br>
-                Windows：以管理员身份打开记事本，编辑 <code>C:\\Windows\\System32\\drivers\\etc\\hosts</code>，添加 <code>192.168.3.121 4np.tjj</code>，保存后可执行 <code>ipconfig /flushdns</code>。<br>
-                配置后请使用 <code>https://4np.tjj:7443/update/</code> 访问；每台需要访问的客户端都要配置该域名。
-              </div>
-              <div class="form-grid">
-                <div class="field"><label for="lb-ca-password">根证书密码</label><input id="lb-ca-password" type="password" autocomplete="current-password" /></div>
-              </div>
-              <div class="row" style="align-items:center;flex-wrap:wrap">
-                <button class="btn primary" id="lb-cert-issue" type="button" ${s.root_initialized ? "" : "disabled"}>${s.loadbalance_issued ? "重新签发并应用" : "签发并应用"}</button>
-                <div class="flash err" id="lb-cert-error" style="margin:0;flex:1 1 320px" hidden></div>
               </div>
             </section>
           </div>`;

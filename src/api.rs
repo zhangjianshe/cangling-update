@@ -171,6 +171,7 @@ pub fn router(state: AppState) -> Router {
         .route("/vendor/sha256.js", get(vendor_sha256))
         .route("/image-bot.svg", get(image_bot_svg))
         .route("/login-illustration.svg", get(login_illustration_svg))
+        .route("/cert.png", get(certificate_background_png))
         .route("/vendor/ace/{*name}", get(vendor_ace))
         .route(
             "/vendor/iosevka-term-regular.woff2",
@@ -5394,6 +5395,16 @@ async fn login_illustration_svg() -> impl IntoResponse {
     )
 }
 
+async fn certificate_background_png() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("assets/cert.png"),
+    )
+}
+
 fn vendor_font(bytes: &'static [u8]) -> impl IntoResponse {
     (
         [
@@ -5482,6 +5493,27 @@ mod tests {
         assert!(html.contains("id=\"root-certificate-title\">根证书"));
         assert!(html.contains("id=\"loadbalance-certificate-title\">负载均衡证书"));
         assert!(html.contains("font-size: 18px; font-weight: 650"));
+        assert!(html.contains("class=\"root-certificate-card\""));
+        assert!(html.contains("aspect-ratio: 800 / 487; margin: 4px 0 18px"));
+        assert!(html.contains("cert.png?v="));
+        assert!(html.contains("certificateSubjectValue(s.root_subject, \"OU\")"));
+        assert!(html.contains("white-space: nowrap"));
+        assert!(!html.contains("<strong>SHA-256 指纹</strong>"));
+        assert!(html.contains("class=\"root-certificate-qr\""));
+        assert!(html.contains("class=\"root-certificate-layout\""));
+        assert!(html.contains("class=\"root-certificate-side\""));
+        assert!(!html.contains("<aside class=\"root-certificate-side\""));
+        assert!(html.contains("/api/certificates/loadbalance/access-qr.svg"));
+        assert!(html.contains("`https://${s.loadbalance_ip || s.suggested_ip}:7443/update/`"));
+        assert!(html.contains("id=\"ca-download\" type=\"button\">下载根证书"));
+        assert!(!html.contains("class=\"root-certificate-help-link\""));
+        assert!(html.contains("class=\"loadbalance-certificate-layout\""));
+        assert!(html.contains("class=\"loadbalance-certificate-card\""));
+        assert!(html.contains("class=\"loadbalance-certificate-side\""));
+        assert!(html.contains("class=\"loadbalance-certificate-fingerprint\""));
+        assert!(html.contains("s.loadbalance_fingerprint"));
+        assert!(html.contains("尚未签发负载均衡证书"));
+        assert!(html.contains("hue-rotate(58deg)"));
         assert!(html.contains("src=\"vendor/compose-canvas.js"));
         assert!(!html.contains("src=\"/vendor/"));
         assert!(!html.contains("fetch(\"/api/"));
