@@ -1691,6 +1691,7 @@
     const clusterPoll = { timer: null, inflight: false };
     const k3sPoll = { timer: null, inflight: false };
     const canglingRuntimePoll = { timer: null, inflight: false };
+    const canglingDataInitPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
     const jarUpgradePoll = { timer: null, jobId: null };
     const KIND = { baseline: "基线", "baseline-compose": "Compose 基线", update: "升级", "pre-replace": "JAR 替换前备份", "pre-rollback": "回滚前快照" };
@@ -3911,7 +3912,7 @@
     }
 
     async function loadCanglingRuntime(quiet = false) {
-      if (canglingRuntimePoll.inflight || state.canglingTab !== "run") return;
+      if (canglingRuntimePoll.inflight || state.canglingTab !== "run" || state.canglingRunTab === "data-init") return;
       canglingRuntimePoll.inflight = true;
       const activeRunTab = state.canglingRunTab;
       const root = $("#cangling-" + activeRunTab + "-root");
@@ -4181,6 +4182,10 @@
       if (selected === "jars") loadCanglingJars();
       if (selected === "secrets") mountCanglingNginxEditor();
       stopCanglingRuntimePoll();
+      if (selected !== "run" && canglingDataInitPoll.timer) {
+        clearInterval(canglingDataInitPoll.timer);
+        canglingDataInitPoll.timer = null;
+      }
       if (selected === "run") {
         selectCanglingRunTab(state.canglingRunTab);
         canglingRuntimePoll.timer = setInterval(() => loadCanglingRuntime(true), 5000);
@@ -4189,8 +4194,12 @@
     }
 
     function selectCanglingRunTab(tab) {
-      const tabs = ["runtime", "diagnosis", "containers", "services", "configs"];
+      const tabs = ["runtime", "diagnosis", "containers", "services", "configs", "data-init"];
       state.canglingRunTab = tabs.includes(tab) ? tab : "runtime";
+      if (state.canglingRunTab !== "data-init" && canglingDataInitPoll.timer) {
+        clearInterval(canglingDataInitPoll.timer);
+        canglingDataInitPoll.timer = null;
+      }
       document.querySelectorAll("[data-cangling-run-tab]").forEach((button) => {
         const active = button.dataset.canglingRunTab === state.canglingRunTab;
         button.classList.toggle("primary", active);
@@ -4199,7 +4208,61 @@
       document.querySelectorAll("[data-cangling-run-panel]").forEach((panel) => {
         panel.hidden = panel.dataset.canglingRunPanel !== state.canglingRunTab;
       });
-      if (state.canglingTab === "run") loadCanglingRuntime(false);
+      if (state.canglingTab === "run") {
+        if (state.canglingRunTab === "data-init") loadCanglingDataInit();
+        else loadCanglingRuntime(false);
+      }
+    }
+
+    async function loadCanglingDataInit() {
+      if (canglingDataInitPoll.inflight || state.canglingTab !== "run" || state.canglingRunTab !== "data-init") return;
+      canglingDataInitPoll.inflight = true;
+      try {
+        const data = await api("/api/cangling/apps/data-init");
+        const job = data.job;
+        const button = $("#cangling-data-init-start");
+        const status = $("#cangling-data-init-status");
+        const progress = $("#cangling-data-init-progress");
+        const percent = $("#cangling-data-init-percent");
+        const output = $("#cangling-data-init-output");
+        if (!button || !status || !progress || !percent || !output) return;
+        button.disabled = !data.available || Boolean(job && !job.done);
+        status.className = job && job.error ? "flash err" : job && job.done ? "flash ok" : "hint";
+        status.textContent = job ? job.message : data.available
+          ? "基础数据包已就绪，点击按钮导入 ai:china 行政区划图层组。"
+          : "未找到基础数据包：" + data.packagePath;
+        progress.hidden = !job || job.done;
+        percent.hidden = !job || job.done;
+        if (job && !job.done) {
+          progress.value = job.percent || 0;
+          percent.textContent = `${job.percent || 0}%`;
+        }
+        output.textContent = (data.output || []).join("\n");
+        output.hidden = !data.output || !data.output.length;
+        if (job && !job.done && !canglingDataInitPoll.timer) {
+          canglingDataInitPoll.timer = setInterval(loadCanglingDataInit, 1200);
+        } else if ((!job || job.done) && canglingDataInitPoll.timer) {
+          clearInterval(canglingDataInitPoll.timer);
+          canglingDataInitPoll.timer = null;
+        }
+      } catch (error) {
+        const status = $("#cangling-data-init-status");
+        if (status) { status.className = "flash err"; status.textContent = "读取初始化状态失败：" + error.message; }
+      } finally {
+        canglingDataInitPoll.inflight = false;
+      }
+    }
+
+    async function startCanglingDataInit() {
+      const button = $("#cangling-data-init-start");
+      button.disabled = true;
+      try {
+        await api("/api/cangling/apps/data-init", { method: "POST" });
+        await loadCanglingDataInit();
+      } catch (error) {
+        flash("err", "导入基础数据失败：" + error.message);
+        await loadCanglingDataInit();
+      }
     }
 
     function bindCanglingTabs() {
@@ -4409,6 +4472,7 @@
             <button type="button" class="btn" data-cangling-run-tab="containers" aria-controls="cangling-panel-containers">容器</button>
             <button type="button" class="btn" data-cangling-run-tab="services" aria-controls="cangling-panel-services">Service</button>
             <button type="button" class="btn" data-cangling-run-tab="configs" aria-controls="cangling-panel-configs">配置</button>
+            <button type="button" class="btn" data-cangling-run-tab="data-init" aria-controls="cangling-panel-data-init">数据初始化</button>
           </div>
         <section class="cangling-tab-panel" id="cangling-panel-runtime" data-cangling-run-panel="runtime" hidden>
           <div class="card">
@@ -4433,6 +4497,14 @@
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-configs" data-cangling-run-panel="configs" hidden>
           <div class="card"><div class="cangling-section-head"><div><h3>配置</h3><p class="hint">cangling 命名空间中的 ConfigMap 和 Secret；Secret 仅显示键名</p></div><button type="button" class="btn" id="cangling-configs-refresh">刷新</button></div><div id="cangling-configs-root"></div></div>
+        </section>
+        <section class="cangling-tab-panel" id="cangling-panel-data-init" data-cangling-run-panel="data-init" hidden>
+          <div class="card">
+            <div class="cangling-section-head"><div><h3>基础数据初始化</h3><p class="hint">从安装资源导入 ai:china 行政区划数据、样式和图层组；重复执行会更新同名配置</p></div><button type="button" class="btn primary" id="cangling-data-init-start">导入基础数据图层组</button></div>
+            <div id="cangling-data-init-status" class="hint">正在读取初始化状态…</div>
+            <div class="row" style="margin-top:12px;align-items:center"><progress id="cangling-data-init-progress" max="100" value="0" style="width:min(520px,80vw);height:14px" hidden></progress><strong id="cangling-data-init-percent"></strong></div>
+            <pre id="cangling-data-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>
+          </div>
         </section>
         </section>
       </div>`;
@@ -4459,6 +4531,7 @@
       $("#cangling-containers-refresh").onclick = () => loadCanglingRuntime(false);
       $("#cangling-services-refresh").onclick = () => loadCanglingRuntime(false);
       $("#cangling-configs-refresh").onclick = () => loadCanglingRuntime(false);
+      $("#cangling-data-init-start").onclick = startCanglingDataInit;
       const primaryNodeSelect = $("#cangling-primary-node-select");
       if (primaryNodeSelect) primaryNodeSelect.onclick = openCanglingPrimaryNodePicker;
       const namespaceInput = $("#cangling-namespace");

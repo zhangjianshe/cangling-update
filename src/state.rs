@@ -21,6 +21,7 @@ pub struct AppState {
     pub image_import_lock: Arc<AsyncMutex<()>>,
     pub nginx_stats_lock: Arc<AsyncMutex<()>>,
     pub active_image_job: Arc<Mutex<Option<String>>>,
+    pub data_init: Arc<Mutex<crate::cangling_data_init::DataInitState>>,
     pub login_guard: LoginGuard,
     pub cluster: ClusterConfig,
     /// worker 侧当前发现的 master 地址（无则 None），供仓库代理等复用。
@@ -49,6 +50,9 @@ impl AppState {
             image_import_lock: Arc::new(AsyncMutex::new(())),
             nginx_stats_lock: Arc::new(AsyncMutex::new(())),
             active_image_job: Arc::new(Mutex::new(None)),
+            data_init: Arc::new(Mutex::new(
+                crate::cangling_data_init::DataInitState::default(),
+            )),
             login_guard: LoginGuard::new(),
             master_url: Arc::new(Mutex::new(cluster.master_url.clone())),
             init: Arc::new(Mutex::new(crate::cluster::init::InitStatus::default())),

@@ -261,7 +261,9 @@ impl ClusterStorageSettings {
     }
 }
 
-fn load_saved_config(state: &crate::state::AppState) -> Result<CanglingConfig, AppError> {
+pub(crate) fn load_saved_config(
+    state: &crate::state::AppState,
+) -> Result<CanglingConfig, AppError> {
     let path = saved_config_path(state);
     if path.is_file() {
         let bytes = fs::read(&path)
@@ -401,7 +403,10 @@ async fn runtime_status(Query(query): Query<RuntimeQuery>) -> Result<Json<JsonVa
     })))
 }
 
-async fn kubectl_resource_json(namespace: &str, resource: &str) -> Result<JsonValue, AppError> {
+pub(crate) async fn kubectl_resource_json(
+    namespace: &str,
+    resource: &str,
+) -> Result<JsonValue, AppError> {
     let (program, is_k3s) = find_kubectl()
         .ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl，无法读取运行状态"))?;
     let mut command = Command::new(program);

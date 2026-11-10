@@ -197,6 +197,7 @@ pub fn router(state: AppState) -> Router {
         )
         .merge(crate::k3s_resources::routes())
         .merge(crate::cangling_apps::routes())
+        .merge(crate::cangling_data_init::routes())
         .merge(crate::hosts::routes())
         .merge(crate::images::console_routes())
         .merge(crate::jar_store::routes())

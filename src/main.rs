@@ -3,6 +3,7 @@ mod auth;
 mod backup;
 mod binaries;
 mod cangling_apps;
+mod cangling_data_init;
 mod cert;
 mod certificate_manager;
 mod cluster;
