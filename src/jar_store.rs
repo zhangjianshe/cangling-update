@@ -76,12 +76,50 @@ struct JarSyncRequest {
     files: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct JarDeleteRequest {
+    files: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JarDeleteResult {
+    deleted: Vec<String>,
+    missing: Vec<String>,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/cangling/apps/jars", get(list))
         .route("/api/cangling/apps/jars/preflight", post(preflight))
         .route("/api/cangling/apps/jars/upload", post(upload))
+        .route("/api/cangling/apps/jars/delete", post(delete_files))
         .route("/api/cangling/apps/jars/sync", post(sync_all))
+}
+
+async fn delete_files(
+    Json(body): Json<JarDeleteRequest>,
+) -> Result<Json<JarDeleteResult>, AppError> {
+    if body.files.is_empty() || body.files.len() > 100 {
+        return Err(AppError::bad("一次应删除 1 到 100 个 JAR 包"));
+    }
+    let incoming = crate::jar_upgrade::incoming_dir();
+    tokio::fs::create_dir_all(&incoming).await?;
+    let mut seen = std::collections::HashSet::new();
+    let mut deleted = Vec::new();
+    let mut missing = Vec::new();
+    for raw_name in body.files {
+        let name = checked_jar_name(&raw_name)?;
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        match tokio::fs::remove_file(incoming.join(&name)).await {
+            Ok(()) => deleted.push(name),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => missing.push(name),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(Json(JarDeleteResult { deleted, missing }))
 }
 
 async fn preflight(

@@ -56,6 +56,71 @@ const WORKER_BOOTSTRAP_STEP: &str = "安装 cangling-update Worker";
 const LOADBALANCE_STEP: &str = "Load Balancer :7800/update";
 const LOADBALANCE_IMAGE: &str = "hub.cangling.cn/cangling/nginx-rtmp:v4.2.35";
 
+const LOADBALANCE_NGINX: &str = r#"worker_processes auto;
+worker_rlimit_nofile 65535;
+events {
+  worker_connections 16384;
+  multi_accept on;
+  use epoll;
+}
+http {
+  map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+  keepalive_timeout 65s;
+  keepalive_requests 10000;
+  client_max_body_size 0;
+  access_log /var/log/nginx/access.log;
+  error_log /var/log/nginx/error.log warn;
+  server {
+    listen 7800;
+    server_name _;
+    location = /update { return 308 /update/; }
+    location /update/ {
+      proxy_pass http://127.0.0.1:5400/;
+      proxy_http_version 1.1;
+      proxy_cache off;
+      proxy_request_buffering off;
+      proxy_buffering off;
+      proxy_max_temp_file_size 0;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Forwarded-Prefix /update;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_read_timeout 3600s;
+      proxy_send_timeout 3600s;
+    }
+    location = /image-bot.svg {
+      root /usr/share/nginx/html/cangling-welcome;
+      default_type image/svg+xml;
+    }
+    location / {
+      proxy_pass http://__CANGLING_NGINX_UPSTREAM__;
+      proxy_http_version 1.1;
+      proxy_cache off;
+      proxy_request_buffering off;
+      proxy_buffering off;
+      proxy_max_temp_file_size 0;
+      proxy_intercept_errors on;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_read_timeout 3600s;
+      proxy_send_timeout 3600s;
+      error_page 502 503 504 = @welcome;
+    }
+    location @welcome {
+      root /usr/share/nginx/html/cangling-welcome;
+      try_files /index.html =503;
+    }
+  }
+}
+"#;
+
 #[derive(Debug, Clone)]
 struct BootstrapHost {
     name: String,
@@ -626,63 +691,19 @@ async fn run_init_inner(state: &AppState, name: &str, k3s_data_dir: &str) -> Res
 pub(crate) fn ensure_loadbalance(state: &AppState) -> Result<String, AppError> {
     const DIR: &str = "/opt/cangling/loadbalance";
     let image_action = ensure_loadbalance_image(state)?;
-    const NGINX: &str = r#"worker_processes auto;
-worker_rlimit_nofile 65535;
-events {
-  worker_connections 16384;
-  multi_accept on;
-  use epoll;
-}
-http {
-  map $http_upgrade $connection_upgrade { default upgrade; '' close; }
-  keepalive_timeout 65s;
-  keepalive_requests 10000;
-  client_max_body_size 0;
-  access_log /var/log/nginx/access.log;
-  error_log /var/log/nginx/error.log warn;
-  server {
-    listen 7800;
-    server_name _;
-    location = /update { return 308 /update/; }
-    location /update/ {
-      proxy_pass http://127.0.0.1:5400/;
-      proxy_http_version 1.1;
-      proxy_cache off;
-      proxy_request_buffering off;
-      proxy_buffering off;
-      proxy_max_temp_file_size 0;
-      proxy_set_header Host $host;
-      proxy_set_header X-Real-IP $remote_addr;
-      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
-      proxy_set_header X-Forwarded-Prefix /update;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection $connection_upgrade;
-      proxy_read_timeout 3600s;
-      proxy_send_timeout 3600s;
-    }
-    location = /image-bot.svg {
-      root /usr/share/nginx/html/cangling-welcome;
-      default_type image/svg+xml;
-    }
-    location / {
-      root /usr/share/nginx/html/cangling-welcome;
-      try_files $uri /index.html;
-    }
-  }
-}
-"#;
     crate::certificate_manager::ensure_embedded_root()?;
     crate::certificate_manager::ensure_help_page()?;
+    let upstream = cangling_nginx_service_upstream().unwrap_or_else(|| "127.0.0.1:7600".into());
+    let template = LOADBALANCE_NGINX.replace("__CANGLING_NGINX_UPSTREAM__", &upstream);
     let nginx = if Path::new("/opt/cangling/loadbalance/certs/loadbalance.crt.pem").is_file()
         && Path::new("/opt/cangling/loadbalance/certs/loadbalance.key.pem").is_file()
     {
-        NGINX.replace(
+        template.replace(
             "    listen 7800;\n",
             "    listen 7800;\n    listen 7443 ssl;\n    ssl_certificate /etc/nginx/certs/loadbalance.crt.pem;\n    ssl_certificate_key /etc/nginx/certs/loadbalance.key.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_session_cache shared:TLS:20m;\n    ssl_session_timeout 1d;\n",
         )
     } else {
-        NGINX.to_string()
+        template
     };
     let compose = format!(
         "version: \"3.7\"\nservices:\n  loadbalance:\n    image: {LOADBALANCE_IMAGE}\n    container_name: cangling-loadbalance\n    network_mode: host\n    restart: unless-stopped\n    ulimits:\n      nofile:\n        soft: 65535\n        hard: 65535\n    volumes:\n      - ./nginx.conf:/etc/nginx/nginx.conf:ro\n      - ./logs:/var/log/nginx\n      - ./certs:/etc/nginx/certs:ro\n      - ./www:/usr/share/nginx/html/cangling-welcome:ro\n    command: [\"/usr/local/nginx/sbin/nginx\", \"-g\", \"daemon off;\"]\n"
@@ -725,12 +746,48 @@ http {
     let project_action = register_loadbalance_project(state, DIR)?;
     let traffic = crate::nginx_stats::configure_loadbalance_logs(state)?;
     Ok(format!(
-        "{image_action}；Load Balancer 已启动：http://{}:7800/update/ → http://127.0.0.1:5400/；证书帮助：http://{}:7800/update/help-cert/；防火墙已开放 5400/tcp、7800/tcp、7443/tcp；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
+        "{image_action}；Load Balancer 已启动：http://{}:7800/ → http://{upstream}/，/update/ → http://127.0.0.1:5400/；证书帮助：http://{}:7800/update/help-cert/；防火墙已开放 5400/tcp、7800/tcp、7443/tcp；日志每 5 分钟检查并按 500 MB 轮转；{}；项目面板{}“负载均衡”项目",
         hostinfo::primary_ip(),
         hostinfo::primary_ip(),
         traffic,
         project_action
     ))
+}
+
+fn cangling_nginx_service_upstream() -> Option<String> {
+    let candidates = [
+        ("k3s", vec!["kubectl"]),
+        ("/usr/local/bin/k3s", vec!["kubectl"]),
+        ("kubectl", Vec::new()),
+        ("/usr/local/bin/kubectl", Vec::new()),
+    ];
+    for (program, prefix) in candidates {
+        let mut command = Command::new(program);
+        command.args(prefix).args([
+            "get",
+            "service",
+            "cangling-nginx",
+            "--namespace",
+            "cangling",
+            "-o",
+            "jsonpath={.spec.clusterIP}:{.spec.ports[0].port}",
+        ]);
+        let Ok(output) = command.output() else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let Some((ip, port)) = value.rsplit_once(':') else {
+            continue;
+        };
+        if ip.parse::<std::net::IpAddr>().is_ok() && port.parse::<u16>().is_ok_and(|port| port > 0)
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn reload_loadbalance_nginx() -> Result<(), AppError> {
@@ -1011,7 +1068,8 @@ fn register_loadbalance_project(
     directory: &str,
 ) -> Result<&'static str, AppError> {
     const NAME: &str = "负载均衡";
-    const DESCRIPTION: &str = "集群负载均衡入口：7800 端口的 /update/ 转发到主节点 cangling-update";
+    const DESCRIPTION: &str =
+        "集群负载均衡入口：根路径转发到苍灵 Nginx，/update/ 转发到主节点 cangling-update";
 
     let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let now = db::now_rfc3339();
@@ -1706,6 +1764,17 @@ mod tests {
         assert!(LOADBALANCE_WELCOME_HTML.contains("/update/help-cert/"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("/image-bot.svg"));
         assert!(LOADBALANCE_WELCOME_HTML.contains("right:24px;bottom:20px;width:150px"));
+    }
+
+    #[test]
+    fn loadbalance_root_proxies_cangling_nginx_without_cache_and_with_websocket() {
+        assert!(LOADBALANCE_NGINX.contains("proxy_pass http://__CANGLING_NGINX_UPSTREAM__;"));
+        assert!(LOADBALANCE_NGINX.contains("proxy_cache off;"));
+        assert!(LOADBALANCE_NGINX.contains("proxy_set_header Upgrade $http_upgrade;"));
+        assert!(LOADBALANCE_NGINX.contains("proxy_set_header Connection $connection_upgrade;"));
+        assert!(LOADBALANCE_NGINX.contains("error_page 502 503 504 = @welcome;"));
+        assert!(LOADBALANCE_NGINX.contains("proxy_intercept_errors on;"));
+        assert!(LOADBALANCE_NGINX.contains("location @welcome"));
     }
 
     #[test]

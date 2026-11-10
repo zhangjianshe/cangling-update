@@ -5428,6 +5428,8 @@ async fn vendor_ace(Path(name): Path<String>) -> Result<impl IntoResponse, AppEr
     let bytes: &'static [u8] = match file {
         "ace.js" => include_bytes!("assets/vendor/ace/ace.js"),
         "mode-yaml.js" => include_bytes!("assets/vendor/ace/mode-yaml.js"),
+        "mode-json.js" => include_bytes!("assets/vendor/ace/mode-json.js"),
+        "mode-nginx.js" => include_bytes!("assets/vendor/ace/mode-nginx.js"),
         "mode-ini.js" => include_bytes!("assets/vendor/ace/mode-ini.js"),
         "mode-sql.js" => include_bytes!("assets/vendor/ace/mode-sql.js"),
         "theme-github.js" => include_bytes!("assets/vendor/ace/theme-github.js"),
@@ -5476,7 +5478,34 @@ mod tests {
         assert!(html.contains("class=\"gate-footer\""));
         assert!(html.contains("class=\"gate-logo\""));
         assert!(html.contains("login-illustration.svg?v="));
-        assert!(html.contains("<table class=\"cluster-table\"><thead><tr><th>文件名"));
+        assert!(html.contains("id=\"cangling-jar-select-all\""));
+        assert!(html.contains("<th>文件名</th><th>大小</th><th>修改时间</th>"));
+        assert!(html.contains("/api/cangling/apps/jars/delete"));
+        assert!(html.contains("data-cangling-tab=\"run\""));
+        assert!(html.contains("data-cangling-run-tab=\"runtime\""));
+        assert!(html.contains("data-cangling-run-tab=\"diagnosis\""));
+        assert!(html.contains("data-cangling-run-tab=\"containers\""));
+        assert!(html.contains("id=\"cangling-nginx-ace\""));
+        assert!(html.contains("<th>Service</th><th>镜像名称与版本</th>"));
+        assert!(html.contains("<strong>ClusterIP</strong>"));
+        assert!(html.contains("${esc(app.id)}:${Number((app.ports || [])[0]) || \"—\"}"));
+        assert!(html.contains("data-cangling-container-enter"));
+        assert!(html.contains("data-cangling-container-logs"));
+        assert!(html.contains("data-cangling-container-restart"));
+        assert!(html.contains("/exec\" + qs"));
+        assert!(html.contains("/api/cangling/apps/runtime?namespace="));
+        assert!(html.contains("class=\"cluster-table cangling-runtime-table\""));
+        assert!(html.contains("<th class=\"runtime-time\">最近事件</th>"));
+        assert!(html.contains("canglingEventTime(latestEvent)"));
+        assert!(!html.contains("setDialogAction(\"关闭\", closeDialog)"));
+        assert!(html.contains("id=\"cangling-shared-storage-select\""));
+        assert!(html.contains("选择外部共享存储"));
+        assert!(html.contains("部署时自动准备的目录"));
+        assert!(html.contains("id=\"cangling-storage-plan-rows\""));
+        assert!(html.contains("/api/cangling/apps/config"));
+        assert!(!html.contains("id=\"cangling-config-save\""));
+        assert!(html.contains("id=\"cangling-import-images\""));
+        assert!(html.contains("/api/cangling/apps/images/import"));
         assert!(html.contains("box.innerHTML = `<table class=\"cluster-table\">"));
         assert!(html.contains(".cangling-kv-table) tr > :first-child { padding-left: 0; }"));
         assert!(html.contains("系统更新登录"));

@@ -325,6 +325,25 @@
     .k3s-resource-list tbody tr { cursor: pointer; }
     .k3s-resource-list tbody tr:hover td { background: var(--bg-3); }
     .k3s-resource-name { color: var(--accent); font-weight: 600; }
+    .cangling-runtime-table { table-layout: fixed; min-width: 980px; }
+    .cangling-runtime-table th, .cangling-runtime-table td { vertical-align: middle; }
+    .cangling-runtime-table tbody tr:hover td { background: var(--bg-3); }
+    .cangling-runtime-table .runtime-status { width: 92px; white-space: nowrap; }
+    .cangling-runtime-table .runtime-name { width: 220px; overflow-wrap: anywhere; }
+    .cangling-runtime-table .runtime-node { width: 150px; overflow-wrap: anywhere; }
+    .cangling-runtime-table .runtime-count { width: 64px; white-space: nowrap; }
+    .cangling-runtime-table .runtime-time { width: 166px; white-space: nowrap; }
+    .cangling-runtime-table .runtime-reason { min-width: 260px; }
+    .cangling-runtime-table .runtime-reason .hint { margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
+    .cangling-runtime-table .runtime-actions { width: 104px; text-align: right; white-space: nowrap; }
+    .cangling-runtime-table .runtime-actions .btn { min-width: 88px; padding: 5px 10px; white-space: nowrap; }
+    .cangling-container-table { min-width: 1380px; }
+    .cangling-container-table .container-actions { width: 250px; text-align: right; white-space: nowrap; }
+    .cangling-container-table .container-actions .btn { margin-left: 5px; padding: 5px 10px; white-space: nowrap; }
+    .cangling-container-image { max-width: 420px; overflow-wrap: anywhere; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .cangling-container-service, .cangling-container-config { min-width: 180px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .cangling-container-service strong, .cangling-container-config strong { display: block; color: var(--text); font-weight: 600; }
+    .cangling-container-service span, .cangling-container-config span { display: block; overflow-wrap: anywhere; }
     .k3s-node-label { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--text); font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
     .k3s-node-label.pool { min-height: 24px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-3); font-family: inherit; font-size: 12px; }
     .k3s-node-label.placeholder { padding: 0; border: 0; color: var(--muted); background: transparent; font-family: inherit; font-size: 12px; }
@@ -357,6 +376,7 @@
       display: flex; gap: 2px; margin: 14px 0 16px; padding: 0 4px;
       overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line); background: var(--bg-2);
     }
+    .cangling-run-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
     .cangling-tab {
       position: relative; flex: 0 0 auto; padding: 11px 16px; border: 0;
       color: var(--muted); background: transparent; font: inherit; font-weight: 600; cursor: pointer;
@@ -385,7 +405,7 @@
       border: 1px solid var(--line); border-radius: 6px; color: var(--text); background: var(--bg-input);
     }
     .cangling-global-select { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
-    .cangling-global-select input[readonly] { color: var(--text); cursor: default; }
+    .cangling-global-select input[readonly] { cursor: default; }
     .cangling-global-select .btn { height: 36px; padding: 0 12px; white-space: nowrap; }
     .cangling-host-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
     .cangling-host-follow { display: inline-flex !important; align-items: center; gap: 6px; margin: 0 !important; color: var(--text) !important; cursor: pointer; }
@@ -406,12 +426,22 @@
     }
     .cangling-storage-table input:focus, .cangling-storage-table select:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); outline: none; }
     .cangling-storage-table input:disabled { color: var(--subtle); background: var(--bg-3); cursor: not-allowed; }
+    .cangling-storage-plan { margin-top: 22px; }
+    .cangling-storage-plan h4 { margin: 0 0 5px; font-size: 15px; }
+    .cangling-storage-plan .hint { margin: 0 0 8px; }
+    .cangling-storage-plan code { font-size: 12px; word-break: break-all; }
     .cangling-storage-kind { min-width: 150px; }
     .cangling-storage-kind strong { display: block; font-size: 13px; }
     .cangling-storage-kind span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
     .cangling-storage-path { min-width: 360px; }
     .cangling-storage-mapped { min-width: 310px; }
-    .cangling-storage-mapped input { color: var(--muted); background: var(--bg-3); cursor: default; }
+    #cangling-panel-cluster input[readonly] {
+      border-color: var(--line-muted); color: var(--muted); background: var(--bg-3);
+      box-shadow: none; cursor: default;
+    }
+    #cangling-panel-cluster input[readonly]:focus {
+      border-color: var(--line-muted); box-shadow: none; outline: none;
+    }
     .cangling-storage-type { width: 130px; }
     .cangling-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
     .cangling-section-head {
@@ -434,6 +464,9 @@
       border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: var(--bg-input);
     }
     .cangling-app-table input[type="number"] { width: 76px; }
+    .cangling-service-ref { min-width: 190px; }
+    .cangling-service-ref strong { display: block; font-size: 13px; font-weight: 650; }
+    .cangling-service-ref span { display: block; margin-top: 3px; color: var(--muted); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .cangling-node-field {
       display: grid; grid-template-columns: minmax(150px, 1fr) auto; gap: 6px;
       align-items: center; min-width: 260px;
@@ -465,11 +498,55 @@
     .cangling-kv-actions-inner { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
     .cangling-kv-actions .btn { min-width: 54px; padding: 5px 10px; white-space: nowrap; }
     .cangling-kv-empty { padding: 18px !important; color: var(--muted); text-align: center !important; }
+    .cangling-environment-groups { display: grid; gap: 18px; }
+    .cangling-environment-group { min-width: 0; }
+    .cangling-environment-group-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 4px; }
+    .cangling-environment-group-head h4 { margin: 0; font-size: 15px; }
+    .cangling-environment-group-head p { margin: 0; color: var(--muted); font-size: 12px; }
+    .cangling-nginx-editor { position: relative; height: min(540px, 65vh); min-height: 320px; border: 1px solid var(--line); background: var(--log-bg); }
+    #cangling-nginx-ace { position: absolute; inset: 0; width: 100%; height: 100%; }
+    #cangling-nginx-fallback { width: 100%; height: 100%; padding: 12px; border: 0; resize: none; background: var(--log-bg); color: var(--log-text); font: 13px/1.5 ui-monospace, monospace; }
     .cangling-yaml-preview { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     .cangling-yaml-warnings { flex: 0 0 auto; padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; line-height: 1.5; }
     .cangling-yaml-warnings strong { color: var(--text); }
     .cangling-yaml-editor { position: relative; flex: 1; min-height: 0; background: var(--log-bg); }
     #cangling-yaml-ace { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .cangling-yaml-workspace { display: flex; flex-direction: column; min-height: 640px; }
+    .cangling-yaml-workspace .cangling-yaml-warnings { border: 1px solid var(--line); border-bottom: 0; }
+    .cangling-yaml-tab-editor { min-height: 560px; border: 1px solid var(--line); }
+    .cangling-yaml-tab-editor[hidden] { display: none; }
+    #cangling-yaml-tab-ace { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .cangling-yaml-empty {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      padding: 24px; color: var(--muted); text-align: center; pointer-events: none;
+    }
+    .cangling-yaml-empty[hidden] { display: none; }
+    .cangling-yaml-graph {
+      min-height: 560px; overflow: auto; border: 1px solid var(--line); background: var(--bg-2);
+    }
+    .cangling-yaml-graph[hidden] { display: none; }
+    .cangling-graph-summary { padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+    .cangling-graph-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 6px; }
+    .cangling-graph-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .cangling-graph-line { width: 24px; height: 0; border-top: 2px solid var(--accent); border-radius: 0; }
+    .cangling-graph-line.inferred { border-top-style: dashed; }
+    .cangling-graph-canvas { display: block; min-width: 1080px; }
+    .cangling-yaml-diff { max-height: 280px; margin: 0; padding: 12px 14px; overflow: auto; border: 1px solid var(--line); border-bottom: 0; border-radius: 0; background: var(--log-bg); font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+    .cangling-yaml-diff[hidden] { display: none; }
+    .cangling-yaml-layout { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); grid-template-areas: "versions editor"; border: 1px solid var(--line); }
+    .cangling-yaml-content { grid-area: editor; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+    .cangling-yaml-versions { grid-area: versions; width: 280px; min-width: 0; padding: 14px 12px; overflow: auto; border-right: 1px solid var(--line); border-radius: 0; background: var(--bg-3); }
+    .cangling-yaml-version-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+    .cangling-yaml-version { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 7px; text-align: left; }
+    .cangling-yaml-version.active { border-color: var(--accent); color: var(--accent); }
+    .cangling-yaml-version em { color: var(--success); font-size: 11px; font-style: normal; }
+    @media (max-width: 900px) {
+      .cangling-yaml-layout { grid-template-columns: 1fr; grid-template-areas: "versions" "editor"; }
+      .cangling-yaml-versions { width: 100%; max-height: 190px; border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+    .cangling-apply-result { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px; }
+    .cangling-apply-result .flash { flex: 0 0 auto; margin-bottom: 12px; }
+    .cangling-apply-output { flex: 1; min-height: 0; margin: 0; padding: 14px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--log-bg); color: var(--log-text); font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
     .modal.cangling-node-modal { width: min(760px, 100%); height: min(660px, 100%); }
     .cangling-node-picker { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 16px; }
     .cangling-node-picker-head { flex: 0 0 auto; margin: 0 0 12px; color: var(--muted); line-height: 1.5; }
@@ -1039,6 +1116,43 @@
       display: flex; flex-direction: column; min-height: 0;
     }
     .modal.narrow { width: min(1200px, 100%); }
+    .modal.resource-detail-modal { width: min(980px, 100%); height: min(720px, calc(100vh - 96px)); }
+    .resource-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 14px; padding: 18px; }
+    .resource-detail-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; color: var(--muted); font-size: 13px; }
+    .resource-detail-meta strong { color: var(--text); font-weight: 600; }
+    .resource-detail-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; }
+    .resource-detail-toolbar .hint { margin: 0; }
+    .resource-detail-toolbar select { max-width: min(420px, 100%); min-width: 180px; }
+    .resource-detail-editor { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid var(--line); background: var(--log-bg); }
+    #resource-detail-ace { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .resource-detail-fallback { height: 100%; margin: 0; padding: 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, monospace; }
+    @media (max-width: 640px) { .resource-detail { padding: 12px; } .resource-detail-toolbar { align-items: stretch; flex-direction: column; } }
+    .modal.image-import-modal { width: min(720px, 100%); height: auto; max-height: calc(100vh - 96px); }
+    .modal.image-import-modal .modal-body { overflow: auto; }
+    .image-import-panel { padding: 20px; }
+    .image-import-state { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+    .image-import-spinner {
+      width: 34px; height: 34px; flex: 0 0 auto; box-sizing: border-box;
+      border: 3px solid var(--line); border-top-color: var(--success-emphasis); border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    .image-import-state.done .image-import-spinner { animation: none; border-color: var(--success-emphasis); background: var(--success-emphasis); position: relative; }
+    .image-import-state.done .image-import-spinner::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-weight: 700; }
+    .image-import-state.error .image-import-spinner { animation: none; border-color: var(--danger-emphasis); background: var(--danger-emphasis); position: relative; }
+    .image-import-state.error .image-import-spinner::after { content: "!"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-weight: 700; }
+    .image-import-state-copy { min-width: 0; }
+    .image-import-state-copy strong { display: block; margin-bottom: 3px; font-size: 16px; }
+    .image-import-state-copy span { display: block; overflow: hidden; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .image-import-details { display: grid; grid-template-columns: 88px minmax(0, 1fr); margin-bottom: 18px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-3); }
+    .image-import-details dt, .image-import-details dd { margin: 0; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+    .image-import-details dt { color: var(--muted); font-size: 13px; }
+    .image-import-details dd { min-width: 0; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+    .image-import-details dt:last-of-type, .image-import-details dd:last-of-type { border-bottom: 0; }
+    .image-import-progress .progress-meta { align-items: baseline; }
+    .image-import-progress .progress-meta strong { font-size: 13px; }
+    .image-import-progress .progress { height: 8px; border-radius: 4px; }
+    .image-import-progress .progress > span { border-radius: 4px; }
+    .image-import-note { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
     .modal.dir-modal { width: min(760px, 100%); height: min(600px, 100%); }
     .modal.form-modal { width: min(600px, 100%); height: auto; max-height: calc(100vh - 96px); }
     .modal.db-auto-modal { width: min(520px, 100%); height: auto; max-height: calc(100vh - 64px); }
@@ -1530,7 +1644,7 @@
       return proto + "://" + location.host + appPath(path);
     }
 
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "jars", canglingJars: [], canglingJarDirectory: "/opt/cangling/jar-deploy/incoming", canglingJarDistributionDirectory: "/opt/cangling/jars", canglingHostAuto: true, canglingHostSync: 0 };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "jars", canglingRunTab: "runtime", canglingJars: [], canglingJarSelection: new Set(), canglingRuntime: null, canglingJarDirectory: "/opt/cangling/jar-deploy/incoming", canglingJarDistributionDirectory: "/opt/cangling/jars", canglingHostAuto: true, canglingHostSync: 0, canglingImageImportWatch: 0 };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1564,7 +1678,7 @@
       },
     ];
     const PROJECT_TAB_ORDER = ["import", "versions", "containers", "edit", "db", "files"];
-    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null, k3sLogToken: 0 };
+    const dialog = { ws: null, term: null, fit: null, onResize: null, xtermReady: null, aceReady: null, confirmClose: null, sqlEditor: null, sqlResizeObs: null, resourceEditor: null, resourceResizeObs: null, resourceToken: 0, k3sLogToken: 0 };
     const dirPicker = { path: "", selected: "", parent: null, token: 0 };
     const DIR_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>';
     const REPO_ICON_DIR = DIR_ICON;
@@ -1576,11 +1690,14 @@
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
     const k3sPoll = { timer: null, inflight: false };
+    const canglingRuntimePoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
     const jarUpgradePoll = { timer: null, jobId: null };
     const KIND = { baseline: "基线", "baseline-compose": "Compose 基线", update: "升级", "pre-replace": "JAR 替换前备份", "pre-rollback": "回滚前快照" };
     const COMPOSE_REV_KIND = { baseline: "基线", save: "保存", restore: "恢复", external: "外部变更" };
     const composeEdit = { kind: "compose", etag: "", disk: "", filename: "", selected: null, busy: false, editor: null, resizeObs: null };
+    const canglingYamlEdit = { editor: null, resizeObs: null, filename: "cangling.yaml", graphVisible: false, savedYaml: "", currentVersion: "", appliedVersion: "", viewingVersion: "", suppressChange: false };
+    const canglingNginxEdit = { editor: null, resizeObs: null, loading: false, version: 0 };
     const FILE_EDIT = {
       compose: {
         title: "编辑 Compose 文件",
@@ -2225,6 +2342,7 @@
       stopComposePoll();
       stopClusterPoll();
       stopK3sPoll();
+      stopCanglingRuntimePoll();
       stopImageMonitorPoll();
       stopJarUpgradePoll();
       comboClose();
@@ -2936,8 +3054,14 @@
         <div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取部署模板…</div></div>
       </div>`;
       try {
-        const config = state.canglingConfig || await api("/api/cangling/apps/defaults");
+        const [config, storages, nodes] = await Promise.all([
+          state.canglingConfig || api("/api/cangling/apps/config"),
+          api("/api/storages").catch(() => state.storages || []),
+          api("/api/cluster/nodes").catch(() => state.clusterNodes || []),
+        ]);
         state.canglingConfig = config;
+        state.storages = storages || [];
+        state.clusterNodes = nodes || [];
         renderCanglingAppsForm();
       } catch (e) {
         main.innerHTML = `<div class="cangling-page"><div class="title-row"><div><h2>苍灵应用</h2></div></div><div class="card"><h3>无法读取部署模板</h3><p class="hint">${esc(e.message)}</p><button type="button" class="btn" id="cangling-retry">重试</button></div></div>`;
@@ -2958,9 +3082,9 @@
     };
 
     const CANGLING_STORAGE_ROOTS = [
-      { label: "外部共享存储", detail: "跨节点业务数据", path: "sharedRoot", storage: "sharedStorage", defaultType: "nfs" },
-      { label: "本地数据", detail: "缓存与高性能临时数据", path: "localRoot", storage: "localStorage", defaultType: "local" },
       { label: "核心数据", detail: "数据库与服务状态", path: "coreRoot", storage: "coreStorage", defaultType: "local" },
+      { label: "本地数据", detail: "缓存与高性能临时数据", path: "localRoot", storage: "localStorage", defaultType: "local" },
+      { label: "外部共享存储", detail: "跨节点业务数据", path: "sharedRoot", storage: "sharedStorage", defaultType: "nfs" },
     ];
 
     function canglingStorageRows(config) {
@@ -2973,10 +3097,60 @@
         return `<tr data-cangling-storage-row="${esc(item.storage)}">
           <td class="cangling-storage-kind"><strong>${esc(item.label)}</strong><span>${esc(item.detail)}</span></td>
           <td class="cangling-storage-type"><select data-cangling-storage-type="${esc(item.storage)}"><option value="local" ${type === "local" ? "selected" : ""}>本地目录</option><option value="nfs" ${type === "nfs" ? "selected" : ""}>NFS</option></select></td>
-          <td class="cangling-storage-path"><input data-cangling-storage-path="${esc(item.storage)}" type="text" value="${esc(value)}" placeholder="${esc(placeholder)}" spellcheck="false" /></td>
+          <td class="cangling-storage-path"><div class="cangling-global-select"><input data-cangling-storage-path="${esc(item.storage)}" type="text" value="${esc(value)}" placeholder="${esc(placeholder)}" spellcheck="false" />${item.storage === "sharedStorage" ? '<button type="button" class="btn" id="cangling-shared-storage-select">选择存储</button>' : ""}</div></td>
           <td class="cangling-storage-mapped"><input id="cangling-${esc(item.path)}" data-cangling-storage-mapped="${esc(item.storage)}" type="text" value="${esc(mappedPath)}" readonly aria-label="${esc(item.label)}映射到本地位置" /></td>
         </tr>`;
       }).join("");
+    }
+
+    const CANGLING_AUTO_STORAGE_PATHS = {
+      sharedStorage: ["np4", "algo_tools", "cldata", "np4-resource-images"],
+      coreStorage: ["postgis/17", "broker", "tile-config"],
+      localStorage: ["cangling-map/data", "cangling-map/cache", "cangling-map/geodata", "tiledata", "nginx-log", "ibcache", "ibbackup", "base-logs"],
+    };
+
+    const CANGLING_WRITABLE_LOCAL_PATHS = {
+      coreStorage: ["broker", "tile-config"],
+      localStorage: ["cangling-map/data", "cangling-map/cache", "cangling-map/geodata", "tiledata"],
+    };
+
+    function joinCanglingStoragePath(root, child) {
+      return `${String(root || "").replace(/\/+$/, "")}/${child}`;
+    }
+
+    function canglingStoragePlanRows(config) {
+      const rows = [];
+      for (const item of CANGLING_STORAGE_ROOTS) {
+        const storage = config[item.storage] || { type: item.defaultType, source: "", server: "" };
+        const type = storage.type === "nfs" ? "nfs" : "local";
+        let root = storage.source || config[item.path] || "";
+        let target = "所有集群节点";
+        let owner = "10001:10001";
+        let mode = "0775";
+        let children = CANGLING_WRITABLE_LOCAL_PATHS[item.storage] || [];
+        if (type === "nfs") {
+          try {
+            const parsed = parseCanglingNfsPath(root);
+            root = parsed.path;
+            target = parsed.server;
+          } catch {
+            target = storage.server || "NFS 服务器";
+            root = root.replace(/^.*?:/, "");
+          }
+          owner = "root:root";
+          mode = "0777";
+          children = CANGLING_AUTO_STORAGE_PATHS[item.storage] || [];
+        }
+        for (const child of children) {
+          rows.push({ type: type === "nfs" ? "NFS 目录" : "本地可写目录", path: joinCanglingStoragePath(root, child), target, owner, mode });
+        }
+      }
+      return rows.map((row) => `<tr><td>${esc(row.type)}</td><td><code>${esc(row.path)}</code></td><td>${esc(row.target)}</td><td><code>${esc(row.owner)}</code></td><td><code>${esc(row.mode)}</code></td></tr>`).join("");
+    }
+
+    function renderCanglingStoragePlan() {
+      const body = $("#cangling-storage-plan-rows");
+      if (body && state.canglingConfig) body.innerHTML = canglingStoragePlanRows(state.canglingConfig) || '<tr><td colspan="5" class="empty">当前配置不需要预先创建目录</td></tr>';
     }
 
     function parseCanglingNfsPath(value) {
@@ -3003,6 +3177,69 @@
             state.canglingConfig[field].type = select.value === "nfs" ? "nfs" : "local";
             state.canglingConfig[field].source = input.value.trim();
           }
+          renderCanglingStoragePlan();
+        };
+      });
+      document.querySelectorAll("[data-cangling-storage-path]").forEach((input) => {
+        input.oninput = () => {
+          const field = input.dataset.canglingStoragePath;
+          if (state.canglingConfig && state.canglingConfig[field]) {
+            state.canglingConfig[field].source = input.value.trim();
+            if (state.canglingConfig[field].type === "nfs") {
+              try { state.canglingConfig[field].server = parseCanglingNfsPath(input.value).server; } catch {}
+            }
+          }
+          renderCanglingStoragePlan();
+        };
+      });
+      const picker = $("#cangling-shared-storage-select");
+      if (picker) picker.onclick = openCanglingSharedStoragePicker;
+    }
+
+    function canglingStorageServer(storage) {
+      if (storage.server) return storage.server;
+      const node = (state.clusterNodes || []).find((item) => item.id === storage.host_id);
+      if (node && node.host && node.host.primary_ip) return node.host.primary_ip;
+      if (node && node.addr) return String(node.addr).replace(/^https?:\/\//, "").split(":")[0];
+      if (!storage.host_id && state.canglingConfig) return state.canglingConfig.hostIp || "";
+      return "";
+    }
+
+    function canglingStorageNfsSource(storage) {
+      if (!storage || storage.protocol !== "nfs") return "";
+      const server = canglingStorageServer(storage);
+      const path = storage.kind === "host_share" ? (storage.path || storage.share) : storage.share;
+      return server && path && path.startsWith("/") ? `${server}:${path}` : "";
+    }
+
+    function openCanglingSharedStoragePicker() {
+      const candidates = (state.storages || []).filter((storage) => storage.protocol === "nfs");
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("narrow");
+      $("#dialog-title").textContent = "选择外部共享存储";
+      const rows = candidates.map((storage, index) => {
+        const source = canglingStorageNfsSource(storage);
+        const status = storage.status === "deployed" || storage.status === "shared" ? "已部署" : storage.status === "mounted" ? "已挂载" : "已定义";
+        return `<button type="button" class="cangling-node-picker-item" data-cangling-storage-choice="${index}" ${source ? "" : "disabled"}><span><strong>${esc(storage.name)}</strong><small>${esc(storage.kind === "host_share" ? "主机 NFS 共享" : "外部 NFS 存储")} · ${esc(status)}</small></span><code>${esc(source || "无法确定共享主机地址")}</code></button>`;
+      }).join("");
+      $("#dialog-body").innerHTML = `<div class="cangling-node-picker"><p class="cangling-node-picker-head">选择后将自动填写 NFS 服务器与导出路径；生成 YAML 时，各业务子目录会挂载到该共享根目录下。</p><div class="cangling-node-picker-list">${rows || '<div class="empty">“存储”模块中还没有 NFS 存储，请先添加并部署 NFS 存储。</div>'}</div></div>`;
+      $("#dialog").hidden = false;
+      setDialogAction(null, null);
+      $("#dialog-foot").hidden = false;
+      document.querySelectorAll("[data-cangling-storage-choice]").forEach((button) => {
+        button.onclick = () => {
+          const storage = candidates[Number(button.dataset.canglingStorageChoice)];
+          const source = canglingStorageNfsSource(storage);
+          if (!source) return;
+          const type = document.querySelector('[data-cangling-storage-type="sharedStorage"]');
+          const input = document.querySelector('[data-cangling-storage-path="sharedStorage"]');
+          if (type) type.value = "nfs";
+          if (input) input.value = source;
+          if (state.canglingConfig) state.canglingConfig.sharedStorage = { type: "nfs", server: canglingStorageServer(storage), source };
+          renderCanglingStoragePlan();
+          closeDialog();
+          flash("ok", `已选择共享存储“${storage.name}”：${source}`);
         };
       });
     }
@@ -3064,6 +3301,37 @@
         : `<tr data-cangling-kv-empty><td colspan="3" class="cangling-kv-empty">暂无配置</td></tr>`;
     }
 
+    const CANGLING_ENVIRONMENT_GROUPS = [
+      { id: "database", title: "数据库", hint: "PostgreSQL / PostGIS 连接与 Schema", names: ["JDBC_DRIVER_NAME", "JDBC_URL_PREFIX", "JDBC_DEFAULT_DB", "JDBC_SCHEMA", "POSTGIS_USER", "POSTGIS_MVT_USER"] },
+      { id: "messaging", title: "消息服务", hint: "Broker、Kafka 及 MQTT 端口", prefixes: ["CL_BROKER_"], names: ["HOST_KAFKA", "KAFKA_PORT"] },
+      { id: "services", title: "服务地址", hint: "CIS、地图、GeoServer 与前端访问地址", names: ["AI_WEB", "AI_MAP", "HOST_GEOSERVER_URL", "GEOSERVER_FRONT", "MAP_FRONT", "CL_SERVER_URL", "SERVER_URL"] },
+      { id: "runtime", title: "CIS 运行参数", hint: "命名空间、主题、功能开关与部署自动值", names: ["TZ", "HOST", "AI_K8S_NAMESPACE", "AI_THEME", "IM_THEME", "AI_IMAGE_PREFIX", "ENABLE_DOC", "CIS_MONGO_MIGRATION_ENABLED", "WEB_PORT"] },
+      { id: "storage", title: "存储路径", hint: "共享、本地缓存与应用数据目录", names: ["DATA_PATH", "VOLUME_DEFAULT_PATH", "IB_CACHE_PATH", "AI_IM_PATH", "CL_BASE_PATH"] },
+      { id: "tile", title: "地图与瓦片", hint: "cangling-map 与 cangling-tile 配置", names: ["TILE_CACHE_URL"], prefixes: ["CANGLING_TILE_"] },
+    ];
+
+    function canglingEnvironmentGroup(name) {
+      return CANGLING_ENVIRONMENT_GROUPS.find((group) =>
+        (group.names || []).includes(name) || (group.prefixes || []).some((prefix) => name.startsWith(prefix))
+      );
+    }
+
+    function canglingEnvironmentRows(values) {
+      const entries = Object.entries(values || {}).sort(([left], [right]) => left.localeCompare(right));
+      const groups = CANGLING_ENVIRONMENT_GROUPS.map((group) => ({ ...group, entries: [] }));
+      const custom = { id: "custom", title: "其他与自定义", hint: "兼容配置或用户自行添加的变量", entries: [] };
+      entries.forEach((entry) => {
+        const matched = canglingEnvironmentGroup(entry[0]);
+        const target = matched ? groups.find((group) => group.id === matched.id) : custom;
+        target.entries.push(entry);
+      });
+      return [...groups, custom].map((group) => `
+        <section class="cangling-environment-group">
+          <div class="cangling-environment-group-head"><h4>${esc(group.title)}</h4><p>${esc(group.hint)}</p></div>
+          <div class="cangling-table-wrap cangling-kv-wrap"><table class="cangling-kv-table"><thead><tr><th>变量名</th><th>值</th><th></th></tr></thead><tbody id="cangling-environment-${group.id}-rows">${group.entries.length ? group.entries.map(([name, value]) => canglingKeyValueRow("environment", name, value, false)).join("") : '<tr data-cangling-kv-empty><td colspan="3" class="cangling-kv-empty">暂无配置</td></tr>'}</tbody></table></div>
+        </section>`).join("");
+    }
+
     function bindCanglingKeyValueActions() {
       document.querySelectorAll("[data-cangling-kv-random]").forEach((button) => {
         button.onclick = () => {
@@ -3118,7 +3386,7 @@
     }
 
     function addCanglingKeyValue(kind, secret = false) {
-      const body = $(`#cangling-${kind}-rows`);
+      const body = kind === "environment" ? $("#cangling-environment-custom-rows") : $(`#cangling-${kind}-rows`);
       if (!body) return;
       const empty = body.querySelector("[data-cangling-kv-empty]");
       if (empty) empty.remove();
@@ -3148,6 +3416,7 @@
         return `<tr data-cangling-app="${index}">
           <td class="cangling-app-name"><strong>${esc(app.title)}</strong><span>${esc(app.id)}</span></td>
           <td><span class="pill">${esc(app.workload)}</span></td>
+          ${group === "entry" ? `<td class="cangling-service-ref"><strong>ClusterIP</strong><span>${esc(app.id)}:${Number((app.ports || [])[0]) || "—"}</span></td>` : ""}
           <td class="cangling-image-cell"><input data-cangling-app-field="image" type="text" value="${esc(app.image)}" placeholder="镜像名称:版本" aria-label="${esc(app.title)}镜像名称和版本" /></td>
           ${group === "single" ? "" : `<td>${deployment ? `<input data-cangling-app-field="replicas" type="number" min="1" max="100" value="${Number(app.replicas) || 1}" aria-label="${esc(app.title)}副本数" />` : "每节点 1 个"}</td>`}
           <td>${deployment ? `<div class="cangling-node-field"><input data-cangling-app-field="node" type="text" value="${esc(app.node)}" aria-label="${esc(app.title)}部署节点" readonly /><button type="button" class="btn" data-cangling-node-select="${index}">选择节点</button></div>` : '<span class="hint">所有可调度节点</span>'}</td>
@@ -3323,13 +3592,33 @@
       if (directory) directory.textContent = state.canglingJarDirectory || "/opt/cangling/jar-deploy/incoming";
       if (distribution) distribution.textContent = state.canglingJarDistributionDirectory || "/opt/cangling/jars";
       if (!rows) return;
-      rows.innerHTML = state.canglingJars.length ? state.canglingJars.map((file) => `<tr><td class="path">${esc(file.name)}</td><td>${fmtBytes(file.size || 0)}</td><td>${esc(fmtDateTime(file.modifiedAt))}</td></tr>`).join("") : `<tr><td colspan="3" class="empty">目录中还没有 JAR 包</td></tr>`;
+      const currentNames = new Set(state.canglingJars.map((file) => file.name));
+      state.canglingJarSelection = new Set([...state.canglingJarSelection].filter((name) => currentNames.has(name)));
+      rows.innerHTML = state.canglingJars.length ? state.canglingJars.map((file) => `<tr><td class="select-cell"><input type="checkbox" data-cangling-jar-select-name="${esc(file.name)}" aria-label="选择 ${esc(file.name)}" ${state.canglingJarSelection.has(file.name) ? "checked" : ""} /></td><td class="path">${esc(file.name)}</td><td>${fmtBytes(file.size || 0)}</td><td>${esc(fmtDateTime(file.modifiedAt))}</td></tr>`).join("") : `<tr><td colspan="4" class="empty">目录中还没有 JAR 包</td></tr>`;
+      document.querySelectorAll("[data-cangling-jar-select-name]").forEach((checkbox) => {
+        checkbox.onchange = () => {
+          if (checkbox.checked) state.canglingJarSelection.add(checkbox.dataset.canglingJarSelectName);
+          else state.canglingJarSelection.delete(checkbox.dataset.canglingJarSelectName);
+          updateCanglingJarDeleteState();
+        };
+      });
+      const selectAll = $("#cangling-jar-select-all");
+      if (selectAll) {
+        selectAll.checked = state.canglingJars.length > 0 && state.canglingJarSelection.size === state.canglingJars.length;
+        selectAll.indeterminate = state.canglingJarSelection.size > 0 && state.canglingJarSelection.size < state.canglingJars.length;
+      }
+      updateCanglingJarDeleteState();
+    }
+
+    function updateCanglingJarDeleteState() {
+      const button = $("#cangling-jar-delete");
+      if (button) button.disabled = state.canglingJarSelection.size === 0;
     }
 
     async function loadCanglingJars() {
       const rows = $("#cangling-jar-rows");
       if (!rows || state.canglingTab !== "jars") return;
-      rows.innerHTML = `<tr><td colspan="3" class="empty db-loading"><span class="spin"></span>正在读取 JAR 包…</td></tr>`;
+      rows.innerHTML = `<tr><td colspan="4" class="empty db-loading"><span class="spin"></span>正在读取 JAR 包…</td></tr>`;
       try {
         const result = await api("/api/cangling/apps/jars");
         state.canglingJars = result.files || [];
@@ -3337,7 +3626,28 @@
         state.canglingJarDistributionDirectory = result.distributionDirectory || "/opt/cangling/jars";
         renderCanglingJars();
       } catch (error) {
-        rows.innerHTML = `<tr><td colspan="3" class="empty bad">${esc(error.message)}</td></tr>`;
+        rows.innerHTML = `<tr><td colspan="4" class="empty bad">${esc(error.message)}</td></tr>`;
+      }
+    }
+
+    async function deleteCanglingJars() {
+      const files = [...state.canglingJarSelection];
+      if (!files.length) return;
+      if (!(await confirmDialog(`仅从上传目录删除所选的 ${files.length} 个 JAR 包？\n各节点 /opt/cangling/jars 中已分发的文件不会删除。`, { danger: true, confirmText: "删除" }))) return;
+      const button = $("#cangling-jar-delete");
+      if (button) button.disabled = true;
+      try {
+        const result = await api("/api/cangling/apps/jars/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ files }),
+        });
+        state.canglingJarSelection.clear();
+        await loadCanglingJars();
+        flash("ok", `已从上传目录删除 ${result.deleted.length} 个 JAR；JAR 升级状态已更新`);
+      } catch (error) {
+        flash("err", "删除 JAR 失败：" + error.message);
+        updateCanglingJarDeleteState();
       }
     }
 
@@ -3485,8 +3795,378 @@
       }
     }
 
+    function stopCanglingRuntimePoll() {
+      if (canglingRuntimePoll.timer) {
+        clearInterval(canglingRuntimePoll.timer);
+        canglingRuntimePoll.timer = null;
+      }
+    }
+
+    function canglingRuntimeEvent(pod, events) {
+      const metadata = pod.metadata || {};
+      const matches = (events || []).filter((event) => {
+        const involved = event.involvedObject || {};
+        return involved.uid === metadata.uid || (involved.kind === "Pod" && involved.name === metadata.name);
+      });
+      matches.sort((left, right) => {
+        const time = (event) => new Date(event.eventTime || event.lastTimestamp || event.metadata && event.metadata.creationTimestamp || 0).getTime();
+        const warning = (event) => event.type === "Warning" ? 1 : 0;
+        return warning(right) - warning(left) || time(right) - time(left);
+      });
+      return matches[0] || null;
+    }
+
+    function canglingEventTime(event) {
+      if (!event) return "—";
+      return fmtDateTime(event.eventTime || event.lastTimestamp || event.metadata && event.metadata.creationTimestamp || "");
+    }
+
+    function canglingPodDiagnosis(pod, events) {
+      const status = pod.status || {};
+      const statuses = [...(status.initContainerStatuses || []), ...(status.containerStatuses || [])];
+      let waitingFallback = null;
+      for (const container of statuses) {
+        const waiting = container.state && container.state.waiting;
+        if (waiting) {
+          const diagnosis = { reason: waiting.reason || "等待启动", message: waiting.message || "容器正在等待启动" };
+          if (!["ContainerCreating", "PodInitializing"].includes(waiting.reason)) return diagnosis;
+          waitingFallback = diagnosis;
+        }
+        const terminated = container.state && container.state.terminated;
+        if (terminated && terminated.exitCode !== 0) return { reason: terminated.reason || `退出 ${terminated.exitCode}`, message: terminated.message || `容器退出码 ${terminated.exitCode}` };
+      }
+      const scheduled = (status.conditions || []).find((item) => item.type === "PodScheduled" && item.status === "False");
+      if (scheduled) return { reason: scheduled.reason || "无法调度", message: scheduled.message || "Pod 尚未分配到节点" };
+      const event = canglingRuntimeEvent(pod, events);
+      if (event && (event.type === "Warning" || status.phase !== "Running")) {
+        return { reason: event.reason || event.type || "事件", message: event.message || "K3s 报告了异常事件" };
+      }
+      if (waitingFallback) return waitingFallback;
+      const containers = status.containerStatuses || [];
+      if (status.phase === "Running" && containers.length && containers.every((item) => item.ready)) return { reason: "运行正常", message: "所有容器均已就绪" };
+      return { reason: status.reason || status.phase || "等待状态", message: status.message || "正在等待 K3s 更新运行状态" };
+    }
+
+    function renderCanglingRuntime() {
+      const root = $("#cangling-runtime-root");
+      if (!root) return;
+      const data = state.canglingRuntime;
+      if (!data) {
+        root.innerHTML = `<div class="empty db-loading"><span class="spin"></span>正在读取应用运行状态…</div>`;
+        return;
+      }
+      const deployments = data.deployments || [];
+      const deploymentRows = deployments.map((item) => {
+        const metadata = item.metadata || {}, spec = item.spec || {}, status = item.status || {};
+        const desired = spec.replicas == null ? 1 : spec.replicas;
+        const ready = status.readyReplicas || 0;
+        const available = status.availableReplicas || 0;
+        const ok = desired > 0 && ready >= desired;
+        const condition = (status.conditions || []).slice().reverse().find((entry) => entry.status === "False" || entry.type === "Progressing") || {};
+        return `<tr><td class="runtime-status"><span class="dot ${ok ? "online" : "offline"}"></span>${ok ? "已就绪" : "未就绪"}</td><td class="k3s-resource-name runtime-name">${esc(metadata.name || "—")}</td><td class="runtime-count">${ready}/${desired}</td><td class="runtime-count">${available}</td><td class="runtime-reason">${esc(condition.reason || (ok ? "运行正常" : "等待 Pod 就绪"))}</td><td class="runtime-time">${esc(fmtDateTime(metadata.creationTimestamp))}</td></tr>`;
+      }).join("");
+      root.innerHTML = `
+        <div class="k3s-summary">
+          <div class="k3s-stat"><span>Deployment</span><strong>${deployments.filter((item) => { const spec = item.spec || {}; return (item.status && item.status.readyReplicas || 0) >= (spec.replicas == null ? 1 : spec.replicas); }).length}/${deployments.length}</strong></div>
+          <div class="k3s-stat"><span>更新时间</span><strong>${esc(fmtDateTime(data.checkedAt))}</strong></div>
+        </div>
+        <div class="cangling-section-head"><h3>工作负载</h3><p class="hint">Deployment 的期望、就绪及可用副本</p></div>
+        <div class="cangling-table-wrap"><table class="cluster-table cangling-runtime-table"><thead><tr><th class="runtime-status">状态</th><th class="runtime-name">名称</th><th class="runtime-count">就绪/期望</th><th class="runtime-count">可用</th><th class="runtime-reason">说明</th><th class="runtime-time">创建时间</th></tr></thead><tbody>${deploymentRows || '<tr><td colspan="6" class="empty">当前命名空间没有 Deployment</td></tr>'}</tbody></table></div>`;
+    }
+
+    function renderCanglingDiagnosis() {
+      const root = $("#cangling-diagnosis-root");
+      if (!root) return;
+      const data = state.canglingRuntime;
+      if (!data) {
+        root.innerHTML = `<div class="empty db-loading"><span class="spin"></span>正在读取 Pod 诊断…</div>`;
+        return;
+      }
+      const pods = data.pods || [];
+      const events = data.events || [];
+      const healthyPods = pods.filter((pod) => {
+        const statuses = pod.status && pod.status.containerStatuses || [];
+        return pod.status && pod.status.phase === "Running" && statuses.length > 0 && statuses.every((item) => item.ready);
+      }).length;
+      const podRows = pods.map((pod, index) => {
+        const metadata = pod.metadata || {}, status = pod.status || {};
+        const containers = status.containerStatuses || [];
+        const ready = containers.filter((item) => item.ready).length;
+        const restarts = containers.reduce((sum, item) => sum + (item.restartCount || 0), 0);
+        const diagnosis = canglingPodDiagnosis(pod, events);
+        const latestEvent = canglingRuntimeEvent(pod, events);
+        const ok = status.phase === "Running" && containers.length > 0 && ready === containers.length;
+        return `<tr><td class="runtime-status"><span class="dot ${ok ? "online" : status.phase === "Failed" ? "offline" : "pending"}"></span>${esc(status.phase || "Unknown")}</td><td class="k3s-resource-name runtime-name">${esc(metadata.name || "—")}</td><td class="runtime-node">${esc(status.nodeName || "未调度")}</td><td class="runtime-count">${ready}/${containers.length}</td><td class="runtime-count">${restarts}</td><td class="runtime-reason"><strong class="${ok ? "ok" : "bad"}">${esc(diagnosis.reason)}</strong><div class="hint" title="${esc(diagnosis.message)}">${esc(diagnosis.message)}</div></td><td class="runtime-time">${esc(canglingEventTime(latestEvent))}</td><td class="runtime-actions"><button type="button" class="btn" data-cangling-runtime-pod="${index}">事件 / 日志</button></td></tr>`;
+      }).join("");
+      root.innerHTML = `
+        <div class="k3s-summary">
+          <div class="k3s-stat"><span>Pod 就绪</span><strong>${healthyPods}/${pods.length}</strong></div>
+          <div class="k3s-stat"><span>异常 Pod</span><strong class="${healthyPods === pods.length ? "ok" : "bad"}">${pods.length - healthyPods}</strong></div>
+          <div class="k3s-stat"><span>更新时间</span><strong>${esc(fmtDateTime(data.checkedAt))}</strong></div>
+        </div>
+        <div class="cangling-table-wrap"><table class="cluster-table cangling-runtime-table"><thead><tr><th class="runtime-status">阶段</th><th class="runtime-name">Pod</th><th class="runtime-node">节点</th><th class="runtime-count">就绪</th><th class="runtime-count">重启</th><th class="runtime-reason">原因</th><th class="runtime-time">最近事件</th><th class="runtime-actions">操作</th></tr></thead><tbody>${podRows || '<tr><td colspan="8" class="empty">当前命名空间没有 Pod；可能尚未应用 cangling.yaml</td></tr>'}</tbody></table></div>`;
+      root.querySelectorAll("[data-cangling-runtime-pod]").forEach((button) => {
+        button.onclick = () => openCanglingRuntimePod(pods[Number(button.dataset.canglingRuntimePod)]);
+      });
+    }
+
+    async function loadCanglingRuntime(quiet = false) {
+      if (canglingRuntimePoll.inflight || state.canglingTab !== "run") return;
+      canglingRuntimePoll.inflight = true;
+      const activeRunTab = state.canglingRunTab;
+      const root = $("#cangling-" + activeRunTab + "-root");
+      if (!quiet && root) root.innerHTML = `<div class="empty db-loading"><span class="spin"></span>正在读取应用运行状态…</div>`;
+      try {
+        const namespace = state.canglingConfig && state.canglingConfig.namespace || "cangling";
+        state.canglingRuntime = await api("/api/cangling/apps/runtime?namespace=" + encodeURIComponent(namespace));
+        if (activeRunTab !== state.canglingRunTab || state.canglingTab !== "run") return;
+        if (activeRunTab === "containers") renderCanglingContainers();
+        else if (activeRunTab === "diagnosis") renderCanglingDiagnosis();
+        else if (["services", "configs"].includes(activeRunTab)) renderCanglingResources(activeRunTab);
+        else renderCanglingRuntime();
+      } catch (error) {
+        if (state.canglingTab === "run" && activeRunTab === state.canglingRunTab) {
+          if (root) root.innerHTML = `<div class="empty bad">读取运行状态失败：${esc(error.message)}<div style="margin-top:12px"><button type="button" class="btn" id="cangling-runtime-retry">重试</button></div></div>`;
+          const retry = $("#cangling-runtime-retry");
+          if (retry) retry.onclick = () => loadCanglingRuntime(false);
+        }
+      } finally {
+        canglingRuntimePoll.inflight = false;
+        if (state.canglingTab === "run" && activeRunTab !== state.canglingRunTab) loadCanglingRuntime(false);
+      }
+    }
+
+    function canglingContainerRows() {
+      const pods = state.canglingRuntime && state.canglingRuntime.pods || [];
+      const services = state.canglingRuntime && state.canglingRuntime.services || [];
+      const rows = [];
+      for (const pod of pods) {
+        const metadata = pod.metadata || {}, spec = pod.spec || {}, status = pod.status || {};
+        const labels = metadata.labels || {};
+        const podServices = services.filter((service) => {
+          const selector = service.spec && service.spec.selector || {};
+          const entries = Object.entries(selector);
+          return entries.length > 0 && entries.every(([name, value]) => labels[name] === value);
+        }).map((service) => {
+          const ports = (service.spec && service.spec.ports || []).map((port) => `${port.port}${port.targetPort && String(port.targetPort) !== String(port.port) ? `→${port.targetPort}` : ""}`).join(", ");
+          return { name: service.metadata && service.metadata.name || "", ports };
+        });
+        const volumes = new Map((spec.volumes || []).map((volume) => [volume.name, volume]));
+        const statuses = new Map((status.containerStatuses || []).map((item) => [item.name, item]));
+        for (const container of spec.containers || []) {
+          const current = statuses.get(container.name) || {};
+          const stateName = current.state && (current.state.running ? "运行中" : current.state.waiting ? current.state.waiting.reason || "等待中" : current.state.terminated ? current.state.terminated.reason || "已退出" : "未知") || "尚未启动";
+          const configMaps = new Set(), secrets = new Set();
+          for (const source of container.envFrom || []) {
+            if (source.configMapRef && source.configMapRef.name) configMaps.add(source.configMapRef.name);
+            if (source.secretRef && source.secretRef.name) secrets.add(source.secretRef.name);
+          }
+          for (const env of container.env || []) {
+            const source = env.valueFrom || {};
+            if (source.configMapKeyRef && source.configMapKeyRef.name) configMaps.add(source.configMapKeyRef.name);
+            if (source.secretKeyRef && source.secretKeyRef.name) secrets.add(source.secretKeyRef.name);
+          }
+          for (const mount of container.volumeMounts || []) {
+            const volume = volumes.get(mount.name) || {};
+            if (volume.configMap && volume.configMap.name) configMaps.add(volume.configMap.name);
+            if (volume.secret && volume.secret.secretName) secrets.add(volume.secret.secretName);
+            for (const source of volume.projected && volume.projected.sources || []) {
+              if (source.configMap && source.configMap.name) configMaps.add(source.configMap.name);
+              if (source.secret && source.secret.name) secrets.add(source.secret.name);
+            }
+          }
+          rows.push({
+            pod: metadata.name || "",
+            namespace: metadata.namespace || "cangling",
+            node: spec.nodeName || "未调度",
+            name: container.name || "",
+            image: container.image || "",
+            ready: !!current.ready,
+            state: stateName,
+            restarts: current.restartCount || 0,
+            services: podServices,
+            configMaps: [...configMaps].sort(),
+            secrets: [...secrets].sort(),
+          });
+        }
+      }
+      return rows.sort((left, right) => left.name.localeCompare(right.name, "zh-CN") || left.pod.localeCompare(right.pod, "zh-CN"));
+    }
+
+    function renderCanglingContainers() {
+      const root = $("#cangling-containers-root");
+      if (!root) return;
+      const rows = canglingContainerRows();
+      root.innerHTML = `<div class="cangling-table-wrap"><table class="cluster-table cangling-container-table"><thead><tr><th>状态</th><th>容器名称</th><th>Pod</th><th>节点</th><th>镜像</th><th>重启</th><th class="container-actions">操作</th></tr></thead><tbody>${rows.map((item, index) => `<tr><td><span class="dot ${item.ready ? "online" : "offline"}"></span>${esc(item.state)}</td><td class="k3s-resource-name">${esc(item.name)}</td><td>${esc(item.pod)}</td><td>${esc(item.node)}</td><td class="cangling-container-image" title="${esc(item.image)}">${esc(item.image)}</td><td>${item.restarts}</td><td class="container-actions"><button type="button" class="btn" data-cangling-container-enter="${index}">进入容器</button><button type="button" class="btn" data-cangling-container-logs="${index}">查看日志</button><button type="button" class="btn danger" data-cangling-container-restart="${index}">重启</button></td></tr>`).join("") || '<tr><td colspan="7" class="empty">cangling 命名空间中没有容器</td></tr>'}</tbody></table></div>`;
+      root.querySelectorAll("[data-cangling-container-enter]").forEach((button) => button.onclick = () => openCanglingContainerTerminal(rows[Number(button.dataset.canglingContainerEnter)]));
+      root.querySelectorAll("[data-cangling-container-logs]").forEach((button) => button.onclick = () => openCanglingContainerLogs(rows[Number(button.dataset.canglingContainerLogs)]));
+      root.querySelectorAll("[data-cangling-container-restart]").forEach((button) => button.onclick = () => restartCanglingContainer(rows[Number(button.dataset.canglingContainerRestart)]));
+    }
+
+    function renderCanglingResources(kind) {
+      const root = $(`#cangling-${kind}-root`);
+      if (!root) return;
+      const data = state.canglingRuntime || {};
+      const items = kind === "services" ? (data.services || []) : [
+        ...(data.configMaps || []).map((resource) => ({ ...resource, resourceKind: "ConfigMap" })),
+        ...(data.secrets || []).map((resource) => ({ ...resource, resourceKind: "Secret" })),
+      ];
+      items.sort((a, b) => (a.metadata?.name || "").localeCompare(b.metadata?.name || ""));
+      const rows = items.map((item, index) => {
+        const name = item.metadata?.name || "";
+        const detail = kind === "services"
+          ? (item.spec?.ports || []).map((port) => `${port.name || "端口"} ${port.port} → ${port.targetPort || port.port}/${port.protocol || "TCP"}`).join("、")
+          : (item.resourceKind === "Secret" ? item.keys : Object.keys(item.data || {})).join("、");
+        const ip = (item.spec?.clusterIPs || []).join(", ") || item.spec?.clusterIP || "—";
+        return `<tr><td><button type="button" class="btn" data-cangling-resource="${index}">${esc(name)}</button></td><td>${esc(kind === "services" ? item.spec?.type || "ClusterIP" : item.resourceKind)}</td>${kind === "services" ? `<td>${esc(ip)}</td>` : ""}<td>${esc(detail || "—")}</td></tr>`;
+      });
+      root.innerHTML = `<div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th>名称</th><th>类型</th>${kind === "services" ? "<th>IP</th>" : ""}<th>${kind === "services" ? "端口" : "配置键"}</th></tr></thead><tbody>${rows.join("") || `<tr><td colspan="${kind === "services" ? 4 : 3}" class="empty">暂无资源</td></tr>`}</tbody></table></div>`;
+      root.querySelectorAll("[data-cangling-resource]").forEach((button) => {
+        button.onclick = () => openCanglingResourceDetail(items[Number(button.dataset.canglingResource)], kind);
+      });
+    }
+
+    async function openCanglingResourceDetail(item, kind) {
+      if (!item) return;
+      closeDialog();
+      const token = dialog.resourceToken;
+      const type = kind === "services" ? "Service" : item.resourceKind;
+      const name = item.metadata?.name || "—";
+      const namespace = item.metadata?.namespace || state.canglingConfig?.namespace || "cangling";
+      const keys = type === "ConfigMap" ? Object.keys(item.data || {}).sort() : [];
+      const selectedKey = keys.length === 1 ? 0 : -1;
+      const ip = (item.spec?.clusterIPs || []).join(", ") || item.spec?.clusterIP || "—";
+      const detail = type === "Service" ? { spec: item.spec || {}, status: item.status || {} } :
+        type === "Secret" ? { type: item.type, keys: item.keys || [] } :
+        { data: item.data || {}, binaryDataKeys: Object.keys(item.binaryData || {}) };
+      const content = (index) => type === "ConfigMap" && index >= 0
+        ? String(item.data[keys[index]] ?? "") : JSON.stringify(detail, null, 2);
+      const summary = type === "Service" ? `类型：${item.spec?.type || "ClusterIP"} · IP：${ip}` :
+        `类型：${type} · ${type === "Secret" ? (item.keys || []).length : keys.length} 个键`;
+      $("#dialog-modal").classList.add("resource-detail-modal");
+      $("#dialog-title").textContent = `${type} · ${name}`;
+      $("#dialog-body").innerHTML = `<div class="resource-detail">
+        <div class="resource-detail-meta"><span>命名空间 <strong>${esc(namespace)}</strong></span><span>${esc(summary)}</span><span>创建时间 <strong>${esc(fmtDateTime(item.metadata?.creationTimestamp))}</strong></span></div>
+        <div class="resource-detail-toolbar"><p class="hint">只读详情 · 可选择并复制编辑器中的内容</p>${type === "ConfigMap" && keys.length ? `<select id="resource-detail-key" aria-label="选择配置键"><option value="-1">全部数据（JSON）</option>${keys.map((key, index) => `<option value="${index}" ${index === selectedKey ? "selected" : ""}>${esc(key)}</option>`).join("")}</select>` : ""}</div>
+        <div class="resource-detail-editor"><div id="resource-detail-ace" aria-label="${esc(type)} 只读内容"></div></div>
+      </div>`;
+      $("#dialog").hidden = false;
+      setDialogAction(null, null);
+      $("#dialog-foot").hidden = false;
+      try {
+        await loadAce();
+        if (token !== dialog.resourceToken || $("#dialog").hidden) return;
+        const el = $("#resource-detail-ace");
+        if (!el) return;
+        const editor = window.ace.edit(el, {
+          mode: type === "ConfigMap" && selectedKey >= 0 ? "ace/mode/text" : "ace/mode/json",
+          theme: aceThemeName(), useWorker: false, fontSize: 14, tabSize: 2,
+          wrap: true, showPrintMargin: false, readOnly: true, highlightActiveLine: false,
+          fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
+        });
+        dialog.resourceEditor = editor;
+        editor.setValue(content(selectedKey), -1);
+        editor.setReadOnly(true);
+        const selector = $("#resource-detail-key");
+        if (selector) selector.onchange = () => {
+          const index = Number(selector.value);
+          editor.session.setMode(index >= 0 ? "ace/mode/text" : "ace/mode/json");
+          editor.setValue(content(index), -1);
+        };
+        if (window.ResizeObserver) {
+          dialog.resourceResizeObs = new ResizeObserver(() => editor.resize());
+          dialog.resourceResizeObs.observe(el);
+        }
+        editor.resize();
+      } catch (error) {
+        if (token !== dialog.resourceToken) return;
+        destroyResourceEditor();
+        $("#dialog-body .resource-detail-editor").innerHTML = `<pre class="resource-detail-fallback">${esc(content(selectedKey))}</pre>`;
+      }
+    }
+
+    async function openCanglingContainerLogs(item) {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("narrow");
+      $("#dialog-title").textContent = "容器日志 · " + item.name;
+      $("#dialog-body").innerHTML = '<div class="k3s-log-terminal" id="cangling-container-log"></div>';
+      $("#dialog").hidden = false;
+      await renderK3sPodLogs($("#cangling-container-log"), item.namespace, item.pod, item.name);
+    }
+
+    async function openCanglingContainerTerminal(item) {
+      closeDialog();
+      try {
+        await loadXterm();
+        if (document.fonts && document.fonts.load) await document.fonts.load('15px "Iosevka Term"');
+      } catch (error) {
+        flash("err", error.message);
+        return;
+      }
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("narrow");
+      $("#dialog-title").textContent = "容器终端 · " + item.name;
+      $("#dialog-body").innerHTML = '<div class="term" id="cangling-container-term"></div>';
+      $("#dialog").hidden = false;
+      const term = new window.Terminal({ cursorBlink: true, fontSize: 15, fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace', theme: termTheme() });
+      const Fit = window.FitAddon && (window.FitAddon.FitAddon || window.FitAddon);
+      const fit = Fit ? new Fit() : null;
+      if (fit) term.loadAddon(fit);
+      term.open($("#cangling-container-term"));
+      if (fit) fit.fit();
+      dialog.term = term;
+      dialog.fit = fit;
+      const qs = "?container=" + encodeURIComponent(item.name) + "&cols=" + (term.cols || 80) + "&rows=" + (term.rows || 24) + (sessionToken() ? "&token=" + encodeURIComponent(sessionToken()) : "");
+      const ws = new WebSocket(appWebSocket("/api/k3s/pods/" + encodeURIComponent(item.namespace) + "/" + encodeURIComponent(item.pod) + "/exec" + qs));
+      ws.binaryType = "arraybuffer";
+      dialog.ws = ws;
+      ws.onmessage = (event) => term.write(typeof event.data === "string" ? event.data : new Uint8Array(event.data));
+      ws.onerror = () => term.writeln("\r\n连接失败");
+      ws.onclose = () => term.writeln("\r\n连接已关闭");
+      term.onData((data) => { if (ws.readyState === 1) ws.send(data); });
+      const resize = () => {
+        if (fit) fit.fit();
+        if (ws.readyState === 1) ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      };
+      dialog.onResize = resize;
+      window.addEventListener("resize", resize);
+      setTimeout(resize, 50);
+      term.focus();
+    }
+
+    async function restartCanglingContainer(item) {
+      if (!(await confirmDialog(`重启容器会删除 Pod ${item.pod}，控制器将自动重新创建。是否继续？`, { danger: true, confirmText: "重启" }))) return;
+      try {
+        await api("/api/k3s/pods/" + encodeURIComponent(item.namespace) + "/" + encodeURIComponent(item.pod), { method: "DELETE" });
+        flash("ok", `已请求重启 ${item.name}，正在等待 Pod 重新创建`);
+        await loadCanglingRuntime(true);
+      } catch (error) {
+        flash("err", "重启容器失败：" + error.message);
+      }
+    }
+
+    async function openCanglingRuntimePod(pod) {
+      const metadata = pod && pod.metadata || {};
+      const namespace = metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling";
+      const name = metadata.name || "";
+      const base = "/api/k3s/resources/pods/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(name);
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("narrow");
+      $("#dialog-title").textContent = "Pod · " + name;
+      $("#dialog-body").innerHTML = `<div class="empty db-loading"><span class="spin"></span>正在读取事件与日志入口…</div>`;
+      $("#dialog").hidden = false;
+      try {
+        const [detail, yaml, events] = await Promise.all([api(base), api(base + "/yaml"), api(base + "/events")]);
+        renderK3sDetail({ id: "pods", label: "Pod" }, namespace, detail, yaml.text || "", events.items || []);
+      } catch (error) {
+        $("#dialog-body").innerHTML = `<div class="flash err" style="margin:16px">${esc(error.message)}</div>`;
+      }
+    }
+
     function selectCanglingTab(tab) {
-      const tabs = ["jars", "cluster", "environment", "secrets", "deployment"];
+      const tabs = ["jars", "cluster", "environment", "secrets", "deployment", "yaml", "run"];
       const selected = tabs.includes(tab) ? tab : "jars";
       state.canglingTab = selected;
       document.querySelectorAll("[data-cangling-tab]").forEach((button) => {
@@ -3499,6 +4179,27 @@
         panel.hidden = panel.dataset.canglingTabPanel !== selected;
       });
       if (selected === "jars") loadCanglingJars();
+      if (selected === "secrets") mountCanglingNginxEditor();
+      stopCanglingRuntimePoll();
+      if (selected === "run") {
+        selectCanglingRunTab(state.canglingRunTab);
+        canglingRuntimePoll.timer = setInterval(() => loadCanglingRuntime(true), 5000);
+      }
+      if (selected === "yaml" && canglingYamlEdit.editor) setTimeout(() => canglingYamlEdit.editor.resize(), 0);
+    }
+
+    function selectCanglingRunTab(tab) {
+      const tabs = ["runtime", "diagnosis", "containers", "services", "configs"];
+      state.canglingRunTab = tabs.includes(tab) ? tab : "runtime";
+      document.querySelectorAll("[data-cangling-run-tab]").forEach((button) => {
+        const active = button.dataset.canglingRunTab === state.canglingRunTab;
+        button.classList.toggle("primary", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+      document.querySelectorAll("[data-cangling-run-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.canglingRunPanel !== state.canglingRunTab;
+      });
+      if (state.canglingTab === "run") loadCanglingRuntime(false);
     }
 
     function bindCanglingTabs() {
@@ -3517,17 +4218,108 @@
           buttons[next].focus();
         };
       });
+      const runButtons = Array.from(document.querySelectorAll("[data-cangling-run-tab]"));
+      runButtons.forEach((button, index) => {
+        button.onclick = () => selectCanglingRunTab(button.dataset.canglingRunTab);
+        button.onkeydown = (event) => {
+          let next = null;
+          if (event.key === "ArrowRight") next = (index + 1) % runButtons.length;
+          else if (event.key === "ArrowLeft") next = (index - 1 + runButtons.length) % runButtons.length;
+          else if (event.key === "Home") next = 0;
+          else if (event.key === "End") next = runButtons.length - 1;
+          if (next === null) return;
+          event.preventDefault();
+          selectCanglingRunTab(runButtons[next].dataset.canglingRunTab);
+          runButtons[next].focus();
+        };
+      });
       selectCanglingTab(state.canglingTab);
+    }
+
+    function destroyCanglingNginxEditor() {
+      canglingNginxEdit.version++;
+      canglingNginxEdit.loading = false;
+      if (canglingNginxEdit.resizeObs) {
+        try { canglingNginxEdit.resizeObs.disconnect(); } catch {}
+        canglingNginxEdit.resizeObs = null;
+      }
+      if (canglingNginxEdit.editor) {
+        try { canglingNginxEdit.editor.destroy(); } catch {}
+        canglingNginxEdit.editor = null;
+      }
+    }
+
+    async function mountCanglingNginxEditor() {
+      if (canglingNginxEdit.editor) {
+        canglingNginxEdit.editor.resize();
+        return;
+      }
+      if (canglingNginxEdit.loading) return;
+      const el = $("#cangling-nginx-ace");
+      const fallback = $("#cangling-nginx-fallback");
+      if (!el || !fallback) return;
+      const version = canglingNginxEdit.version;
+      canglingNginxEdit.loading = true;
+      try {
+        await loadAce();
+        if (version !== canglingNginxEdit.version || !el.isConnected) return;
+        el.hidden = false;
+        fallback.hidden = true;
+        const editor = window.ace.edit(el, {
+          mode: "ace/mode/nginx", theme: aceThemeName(), useWorker: false,
+          fontSize: 14, tabSize: 2, useSoftTabs: true, wrap: false,
+          showPrintMargin: false,
+          fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
+        });
+        canglingNginxEdit.editor = editor;
+        editor.setValue(fallback.value, -1);
+        if (window.ResizeObserver) {
+          canglingNginxEdit.resizeObs = new ResizeObserver(() => editor.resize());
+          canglingNginxEdit.resizeObs.observe(el);
+        }
+        editor.resize();
+      } catch (error) {
+        if (version !== canglingNginxEdit.version) return;
+        el.hidden = true;
+        fallback.hidden = false;
+        flash("err", `ACE 编辑器加载失败，已切换到普通文本框：${error.message}`);
+      } finally {
+        if (version === canglingNginxEdit.version) canglingNginxEdit.loading = false;
+      }
+    }
+
+    async function resetCanglingNginxTemplate() {
+      if (!(await confirmDialog("恢复内置 NGINX 配置模板？当前模板中的修改将丢失。", { confirmText: "恢复默认模板" }))) return;
+      try {
+        const defaults = await api("/api/cangling/apps/defaults");
+        const value = defaults.nginxConfig || "";
+        const fallback = $("#cangling-nginx-fallback");
+        if (fallback) fallback.value = value;
+        if (canglingNginxEdit.editor) canglingNginxEdit.editor.setValue(value, -1);
+        state.canglingConfig.nginxConfig = value;
+        flash("ok", "已恢复内置 NGINX 模板；生成 YAML 后可预览变更");
+      } catch (error) {
+        flash("err", `恢复 NGINX 模板失败：${error.message}`);
+      }
     }
 
     function renderCanglingAppsForm() {
       const config = state.canglingConfig;
       const main = $("#main");
       if (!config || !main) return;
+      if (canglingYamlEdit.resizeObs) {
+        try { canglingYamlEdit.resizeObs.disconnect(); } catch {}
+        canglingYamlEdit.resizeObs = null;
+      }
+      if (canglingYamlEdit.editor) {
+        try { canglingYamlEdit.editor.destroy(); } catch {}
+        canglingYamlEdit.editor = null;
+      }
+      destroyCanglingNginxEditor();
       main.innerHTML = `<div class="cangling-page">
         <div class="title-row">
           <div><h2>苍灵应用</h2><div class="path">配置单实例、多实例与系统入口，生成可审查的 K3s 部署清单</div></div>
-          <div class="cangling-actions"><button type="button" class="btn" id="cangling-reset">恢复默认值</button><button type="button" class="btn primary" id="cangling-generate">生成 cangling.yaml</button></div>
+          <div class="cangling-actions"><button type="button" class="btn" id="cangling-import-images">导入镜像</button><button type="button" class="btn" id="cangling-reset">恢复默认值</button></div>
         </div>
         <div id="flash" hidden></div>
         <div class="cangling-tabs" role="tablist" aria-label="苍灵应用配置">
@@ -3536,13 +4328,15 @@
           <button type="button" class="cangling-tab" data-cangling-tab="environment" role="tab" aria-controls="cangling-panel-environment">环境变量</button>
           <button type="button" class="cangling-tab" data-cangling-tab="secrets" role="tab" aria-controls="cangling-panel-secrets">密钥</button>
           <button type="button" class="cangling-tab" data-cangling-tab="deployment" role="tab" aria-controls="cangling-panel-deployment">部署</button>
+          <button type="button" class="cangling-tab" data-cangling-tab="yaml" role="tab" aria-controls="cangling-panel-yaml">YAML</button>
+          <button type="button" class="cangling-tab" data-cangling-tab="run" role="tab" aria-controls="cangling-panel-run">运行状态</button>
         </div>
         <section class="cangling-tab-panel" id="cangling-panel-jars" data-cangling-tab-panel="jars" role="tabpanel">
           <div class="card">
-            <div class="cangling-section-head"><div><h3>JAR 包</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
+            <div class="cangling-section-head"><div><h3>JAR 包</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新</button><button type="button" class="btn danger" id="cangling-jar-delete" disabled>删除所选</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
             <div class="progress-wrap" id="cangling-jar-prog" hidden><div class="progress-meta"><span id="cangling-jar-prog-msg">准备中</span><span id="cangling-jar-prog-pct">0%</span></div><div class="progress" id="cangling-jar-prog-bar"><span></span></div><div class="progress-sub" id="cangling-jar-prog-sub"></div></div>
             <p class="hint hint-soft">上传前分块计算 SHA-256，与服务器一致的文件会跳过上传；同步采用临时文件传输、校验和原子替换。正在运行的容器不会被中断，仍使用原来的只读挂载；重启或重新部署 Pod 后才会加载新 JAR。</p>
-            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="3" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
+            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th class="select-cell"><input type="checkbox" id="cangling-jar-select-all" aria-label="全选 JAR 包" /></th><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="4" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-cluster" data-cangling-tab-panel="cluster" role="tabpanel">
@@ -3556,12 +4350,13 @@
           </div>
           <div class="cangling-storage-config"><table class="cangling-storage-table"><thead><tr><th>数据目录</th><th>存储类型</th><th>Value</th><th>映射到本地位置</th></tr></thead><tbody>${canglingStorageRows(config)}</tbody></table></div>
           <p class="cangling-note">Value 填写实际本地目录或 <code>服务器:/NFS/导出路径</code>；应用统一使用只读展示的标准位置 <code>/opt/cl/&lt;类型&gt;/&lt;namespace&gt;</code>。本地 Value 不同时，生成的节点准备 Job 会创建“标准位置 → 实际目录”软链接；NFS 仍使用原生 NFS volume。JAR 包由“JAR 包”页统一同步到各节点的 <code>/opt/cangling/jars</code>。</p>
+          <div class="cangling-storage-plan"><h4>部署时自动准备的目录</h4><p class="hint">点击“应用到集群”后，程序会先在目标主机创建并设置以下目录；全部成功后才应用 cangling.yaml。</p><div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th>类型</th><th>实际路径</th><th>目标主机</th><th>所有者</th><th>Mode</th></tr></thead><tbody id="cangling-storage-plan-rows">${canglingStoragePlanRows(config)}</tbody></table></div></div>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-environment" data-cangling-tab-panel="environment" role="tabpanel" hidden>
           <div class="card">
-          <div class="cangling-section-head"><div><h3>环境变量</h3><p class="hint">生成到 cangling-env ConfigMap，并通过 envFrom 挂载到所有应用</p></div><button type="button" class="btn" id="cangling-add-environment">+ 添加环境变量</button></div>
-          <div class="cangling-table-wrap cangling-kv-wrap"><table class="cangling-kv-table"><thead><tr><th>变量名</th><th>值</th><th></th></tr></thead><tbody id="cangling-environment-rows">${canglingKeyValueRows("environment", config.environment, false)}</tbody></table></div>
+          <div class="cangling-section-head"><div><h3>环境变量</h3><p class="hint">按用途分类并生成到 cangling-env ConfigMap，通过 envFrom 挂载到所有应用</p></div><button type="button" class="btn" id="cangling-add-environment">+ 添加环境变量</button></div>
+          <div class="cangling-environment-groups" id="cangling-environment-rows">${canglingEnvironmentRows(config.environment)}</div>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-secrets" data-cangling-tab-panel="secrets" role="tabpanel" hidden>
@@ -3569,11 +4364,16 @@
           <div class="cangling-section-head"><div><h3>密钥</h3><p class="hint">生成到 cangling-secret Secret，并通过 envFrom 挂载到所有应用</p></div><button type="button" class="btn" id="cangling-add-secrets">+ 添加密钥</button></div>
           <div class="cangling-table-wrap cangling-kv-wrap"><table class="cangling-kv-table"><thead><tr><th>密钥名</th><th>值</th><th></th></tr></thead><tbody id="cangling-secrets-rows">${canglingKeyValueRows("secrets", config.secrets, true)}</tbody></table></div>
           </div>
+          <div class="card" style="margin-top:16px">
+            <div class="cangling-section-head"><div><h3>NGINX 配置模板</h3><p class="hint">用于生成 cangling-nginx ConfigMap 中的 nginx.conf；应用 YAML 时一同保存当前配置</p></div><button type="button" class="btn" id="cangling-nginx-reset">恢复默认模板</button></div>
+            <div class="cangling-nginx-editor"><div id="cangling-nginx-ace" hidden></div><textarea id="cangling-nginx-fallback" aria-label="NGINX 配置模板" spellcheck="false">${esc(config.nginxConfig || "")}</textarea></div>
+            <p class="hint">入口及上游服务的默认端口会根据部署设置自动替换；自定义端口请同时检查模板中的 listen 和 upstream 配置。</p>
+          </div>
         </section>
         <section class="cangling-tab-panel cangling-deployment-stack" id="cangling-panel-deployment" data-cangling-tab-panel="deployment" role="tabpanel" hidden>
           <div class="card">
           <div class="cangling-section-head"><h3>系统入口</h3><p class="hint">统一承载外部访问、反向代理和服务路由，独立于业务工作负载展示</p></div>
-          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>镜像名称与版本</th><th>副本</th><th>入口节点</th><th>入口端口</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("entry")}</tbody></table></div>
+          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>Service</th><th>镜像名称与版本</th><th>副本</th><th>入口节点</th><th>入口端口</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("entry")}</tbody></table></div>
           </div>
           <div class="card">
           <div class="cangling-section-head"><h3>单实例部署</h3><p class="hint">Deployment 固定到指定节点，适合数据库和有状态基础服务</p></div>
@@ -3585,13 +4385,80 @@
           <p class="cangling-note">地图服务由 cangling-map 独立提供；该部署方案不包含 GeoServer 容器或回退工作负载。</p>
           </div>
         </section>
+        <section class="cangling-tab-panel" id="cangling-panel-yaml" data-cangling-tab-panel="yaml" role="tabpanel" hidden>
+          <div class="card cangling-yaml-workspace">
+            <div class="cangling-section-head">
+              <div><h3>cangling.yaml</h3><p class="hint">根据当前配置生成 K3s 部署清单，可在下载前直接预览和编辑</p></div>
+              <div class="row"><button type="button" class="btn" id="cangling-yaml-download" disabled>下载 cangling.yaml</button><button type="button" class="btn" id="cangling-yaml-graph" disabled>依赖关系</button><button type="button" class="btn" id="cangling-yaml-save" disabled>覆盖保存</button><button type="button" class="btn" id="cangling-yaml-apply" disabled>应用到集群</button><button type="button" class="btn primary" id="cangling-generate">生成 cangling.yaml</button></div>
+            </div>
+            <div class="cangling-yaml-layout">
+              <div class="cangling-yaml-versions"><strong>版本列表</strong><div class="hint" id="cangling-yaml-version-state">正在读取…</div><div class="cangling-yaml-version-list" id="cangling-yaml-version-list"></div></div>
+              <div class="cangling-yaml-content">
+                <div class="cangling-yaml-warnings" id="cangling-yaml-status">尚未生成 YAML。点击“生成 cangling.yaml”读取当前各项配置。</div>
+                <pre class="cangling-yaml-diff" id="cangling-yaml-diff" hidden></pre>
+                <div class="cangling-yaml-editor cangling-yaml-tab-editor" id="cangling-yaml-editor-view"><div id="cangling-yaml-tab-ace"></div><div class="cangling-yaml-empty" id="cangling-yaml-empty">生成后将在这里显示可编辑的 YAML 文件</div></div>
+                <div class="cangling-yaml-graph" id="cangling-yaml-graph-view" hidden></div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="cangling-tab-panel" id="cangling-panel-run" data-cangling-tab-panel="run" role="tabpanel" hidden>
+          <div class="cangling-run-nav" role="group" aria-label="苍灵应用运行信息">
+            <button type="button" class="btn" data-cangling-run-tab="runtime" aria-controls="cangling-panel-runtime">部署</button>
+            <button type="button" class="btn" data-cangling-run-tab="diagnosis" aria-controls="cangling-panel-diagnosis">Pod 诊断</button>
+            <button type="button" class="btn" data-cangling-run-tab="containers" aria-controls="cangling-panel-containers">容器</button>
+            <button type="button" class="btn" data-cangling-run-tab="services" aria-controls="cangling-panel-services">Service</button>
+            <button type="button" class="btn" data-cangling-run-tab="configs" aria-controls="cangling-panel-configs">配置</button>
+          </div>
+        <section class="cangling-tab-panel" id="cangling-panel-runtime" data-cangling-run-panel="runtime" hidden>
+          <div class="card">
+            <div class="cangling-section-head"><div><h3>部署</h3><p class="hint">查看苍灵应用 Deployment 的期望、就绪及可用副本；页面每 5 秒自动刷新</p></div><button type="button" class="btn" id="cangling-runtime-refresh">刷新</button></div>
+            <div id="cangling-runtime-root"><div class="empty db-loading"><span class="spin"></span>正在读取应用运行状态…</div></div>
+          </div>
+        </section>
+        <section class="cangling-tab-panel" id="cangling-panel-diagnosis" data-cangling-run-panel="diagnosis" hidden>
+          <div class="card">
+            <div class="cangling-section-head"><div><h3>Pod 诊断</h3><p class="hint">查看等待原因、K3s 警告事件和容器重启次数；页面每 5 秒自动刷新</p></div><button type="button" class="btn" id="cangling-diagnosis-refresh">刷新</button></div>
+            <div id="cangling-diagnosis-root"><div class="empty db-loading"><span class="spin"></span>正在读取 Pod 诊断…</div></div>
+          </div>
+        </section>
+        <section class="cangling-tab-panel" id="cangling-panel-containers" data-cangling-run-panel="containers" hidden>
+          <div class="card">
+            <div class="cangling-section-head"><div><h3>容器</h3><p class="hint">按名称列出 cangling 命名空间中的所有容器，可进入终端、查看日志或重启所在 Pod</p></div><button type="button" class="btn" id="cangling-containers-refresh">刷新</button></div>
+            <div id="cangling-containers-root"><div class="empty db-loading"><span class="spin"></span>正在读取容器列表…</div></div>
+          </div>
+        </section>
+        <section class="cangling-tab-panel" id="cangling-panel-services" data-cangling-run-panel="services" hidden>
+          <div class="card"><div class="cangling-section-head"><div><h3>Service</h3><p class="hint">cangling 命名空间中的服务；点击名称查看端口和访问地址</p></div><button type="button" class="btn" id="cangling-services-refresh">刷新</button></div><div id="cangling-services-root"></div></div>
+        </section>
+        <section class="cangling-tab-panel" id="cangling-panel-configs" data-cangling-run-panel="configs" hidden>
+          <div class="card"><div class="cangling-section-head"><div><h3>配置</h3><p class="hint">cangling 命名空间中的 ConfigMap 和 Secret；Secret 仅显示键名</p></div><button type="button" class="btn" id="cangling-configs-refresh">刷新</button></div><div id="cangling-configs-root"></div></div>
+        </section>
+        </section>
       </div>`;
       $("#cangling-generate").onclick = generateCanglingYaml;
+      $("#cangling-yaml-download").onclick = () => downloadCanglingYaml(canglingYamlEdit.filename, currentCanglingYaml());
+      $("#cangling-yaml-graph").onclick = toggleCanglingYamlGraph;
+      $("#cangling-yaml-save").onclick = saveCanglingYaml;
+      $("#cangling-yaml-apply").onclick = applyCanglingYaml;
       $("#cangling-reset").onclick = resetCanglingConfig;
+      $("#cangling-import-images").onclick = importCanglingAppImages;
       $("#cangling-jar-refresh").onclick = loadCanglingJars;
+      $("#cangling-jar-delete").onclick = deleteCanglingJars;
+      $("#cangling-jar-select-all").onchange = (event) => {
+        state.canglingJarSelection = event.target.checked
+          ? new Set(state.canglingJars.map((file) => file.name))
+          : new Set();
+        renderCanglingJars();
+      };
       $("#cangling-jar-sync").onclick = syncCanglingJars;
       $("#cangling-jar-select").onclick = () => $("#cangling-jar-file").click();
       $("#cangling-jar-file").onchange = (event) => uploadCanglingJars(event.target.files);
+      $("#cangling-runtime-refresh").onclick = () => loadCanglingRuntime(false);
+      $("#cangling-diagnosis-refresh").onclick = () => loadCanglingRuntime(false);
+      $("#cangling-containers-refresh").onclick = () => loadCanglingRuntime(false);
+      $("#cangling-services-refresh").onclick = () => loadCanglingRuntime(false);
+      $("#cangling-configs-refresh").onclick = () => loadCanglingRuntime(false);
       const primaryNodeSelect = $("#cangling-primary-node-select");
       if (primaryNodeSelect) primaryNodeSelect.onclick = openCanglingPrimaryNodePicker;
       const namespaceInput = $("#cangling-namespace");
@@ -3630,12 +4497,14 @@
       };
       $("#cangling-add-environment").onclick = () => addCanglingKeyValue("environment", false);
       $("#cangling-add-secrets").onclick = () => addCanglingKeyValue("secrets", true);
+      $("#cangling-nginx-reset").onclick = resetCanglingNginxTemplate;
       bindCanglingTabs();
       bindCanglingKeyValueActions();
       bindCanglingStorageActions();
       bindCanglingNodeSelectors();
       updateCanglingHostMode();
       if (state.canglingHostAuto) syncCanglingHostFromEntryNode({ quiet: true });
+      loadCanglingManifestHistory();
     }
 
     function readCanglingConfig() {
@@ -3660,6 +4529,7 @@
       });
       config.environment = readCanglingKeyValues("environment", "环境变量");
       config.secrets = readCanglingKeyValues("secrets", "密钥");
+      config.nginxConfig = canglingNginxEdit.editor ? canglingNginxEdit.editor.getValue() : $("#cangling-nginx-fallback")?.value ?? config.nginxConfig;
       document.querySelectorAll("[data-cangling-app]").forEach((row) => {
         const app = config.applications[Number(row.dataset.canglingApp)];
         if (!app) return;
@@ -3678,11 +4548,94 @@
       if (!(await confirmDialog("恢复苍灵应用的默认部署配置？当前页面中的修改将丢失。", { confirmText: "恢复默认值" }))) return;
       try {
         state.canglingConfig = await api("/api/cangling/apps/defaults");
+        await api("/api/cangling/apps/config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state.canglingConfig),
+        });
         state.canglingHostAuto = true;
         renderCanglingAppsForm();
-        flash("ok", "已恢复默认部署配置");
+        flash("ok", "已恢复并保存默认部署配置");
       } catch (e) {
         flash("err", e.message);
+      }
+    }
+
+    async function importCanglingAppImages() {
+      const button = $("#cangling-import-images");
+      if (button) button.disabled = true;
+      try {
+        const active = await api("/api/images/active-job");
+        if (active && active.id && !active.done) {
+          openCanglingImageImportDialog(active.id);
+          return;
+        }
+        if (!(await confirmDialog("将从程序目录下的 cangling-repo 按各节点 CPU 架构导入苍灵应用离线镜像。镜像会依次导入所有在线 K3s 节点，是否继续？", { confirmText: "导入镜像" }))) return;
+        if (button) button.textContent = "正在启动…";
+        const started = await api("/api/cangling/apps/images/import", { method: "POST" });
+        openCanglingImageImportDialog(started.job_id);
+      } catch (error) {
+        flash("err", "导入苍灵应用镜像失败：" + error.message);
+      } finally {
+        if (button) { button.disabled = false; button.textContent = "导入镜像"; }
+      }
+    }
+
+    async function openCanglingImageImportDialog(jobId) {
+      const watch = ++state.canglingImageImportWatch;
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("image-import-modal");
+      $("#dialog-title").textContent = "导入苍灵应用镜像";
+      $("#dialog-body").innerHTML = `<div class="image-import-panel">
+          <div class="image-import-state" id="cangling-image-import-state"><span class="image-import-spinner" aria-hidden="true"></span><div class="image-import-state-copy"><strong id="cangling-image-import-title">正在导入镜像</strong><span id="cangling-image-import-message">正在准备离线镜像包…</span></div></div>
+          <dl class="image-import-details"><dt>目标节点</dt><dd id="cangling-image-import-node">—</dd><dt>CPU 架构</dt><dd id="cangling-image-import-arch">—</dd><dt>镜像包</dt><dd id="cangling-image-import-package">—</dd></dl>
+          <div class="image-import-progress" id="cangling-image-import-progress"><div class="progress-meta"><strong>总体进度</strong><span id="cangling-image-import-percent">0%</span></div><div class="progress"><span id="cangling-image-import-bar"></span></div><p class="image-import-note">程序会自动选择 amd64 或 arm64 资源，并依次导入对应节点的 K3s containerd 仓库。</p></div>
+        </div>`;
+      setDialogAction("后台运行", closeDialog);
+      $("#dialog").hidden = false;
+      try {
+        while (true) {
+          const job = await api("/api/jobs/" + encodeURIComponent(jobId));
+          if (watch !== state.canglingImageImportWatch) return;
+          const total = Number(job.total || 0);
+          const current = Number(job.current || 0);
+          const percent = total > 0 ? Math.min(100, Math.round(current * 100 / total)) : 0;
+          const message = $("#cangling-image-import-message");
+          const percentNode = $("#cangling-image-import-percent");
+          const bar = $("#cangling-image-import-bar");
+          const match = String(job.message || "").match(/正在向\s+(.+?)\s+导入\s+(.+?)（(amd64|arm64)）/);
+          if (match) {
+            const node = $("#cangling-image-import-node"), packageNode = $("#cangling-image-import-package"), arch = $("#cangling-image-import-arch");
+            if (node) node.textContent = match[1];
+            if (packageNode) { packageNode.textContent = match[2]; packageNode.title = match[2]; }
+            if (arch) arch.textContent = match[3];
+          }
+          if (message) message.textContent = job.message || "正在导入…";
+          if (percentNode) percentNode.textContent = percent + "%";
+          if (bar) bar.style.width = percent + "%";
+          if (job.done) {
+            if (job.error) throw new Error(job.error);
+            if (percentNode) percentNode.textContent = "100%";
+            if (bar) bar.style.width = "100%";
+            const stateNode = $("#cangling-image-import-state"), title = $("#cangling-image-import-title");
+            if (stateNode) stateNode.classList.add("done");
+            if (title) title.textContent = "镜像导入完成";
+            if (message) message.textContent = job.message || "苍灵应用镜像已导入全部在线节点";
+            const progress = $("#cangling-image-import-progress");
+            if (progress) progress.hidden = true;
+            flash("ok", job.message || "苍灵应用镜像已导入全部在线节点");
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+      } catch (error) {
+        if (watch !== state.canglingImageImportWatch) return;
+        const stateNode = $("#cangling-image-import-state"), title = $("#cangling-image-import-title"), message = $("#cangling-image-import-message");
+        if (stateNode) stateNode.classList.add("error");
+        if (title) title.textContent = "镜像导入失败";
+        if (message) message.textContent = error.message;
+        flash("err", "导入苍灵应用镜像失败：" + error.message);
       }
     }
 
@@ -3695,14 +4648,302 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(readCanglingConfig()),
         });
+        canglingYamlEdit.viewingVersion = "";
+        if (canglingYamlEdit.editor) canglingYamlEdit.editor.setReadOnly(false);
         state.canglingYaml = result.yaml || "";
         const warnings = [...(result.warnings || [])];
-        await openCanglingYamlPreview(result.filename || "cangling.yaml", state.canglingYaml, warnings);
+        await renderCanglingYamlEditor(result.filename || "cangling.yaml", state.canglingYaml, warnings);
       } catch (e) {
         flash("err", e.message);
       } finally {
         if (button) button.disabled = false;
       }
+    }
+
+    function currentCanglingYaml() {
+      return canglingYamlEdit.editor ? canglingYamlEdit.editor.getValue() : state.canglingYaml;
+    }
+
+    function canglingYamlDiff(previous, next) {
+      const before = previous.split("\n"), after = next.split("\n");
+      let start = 0;
+      while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+      let beforeEnd = before.length - 1, afterEnd = after.length - 1;
+      while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) { beforeEnd -= 1; afterEnd -= 1; }
+      if (start === before.length && start === after.length) return "";
+      const removed = before.slice(start, beforeEnd + 1).slice(0, 160).map((line) => `- ${line}`);
+      const added = after.slice(start, afterEnd + 1).slice(0, 160).map((line) => `+ ${line}`);
+      const truncated = beforeEnd - start + 1 > 160 || afterEnd - start + 1 > 160;
+      return [`@@ 第 ${start + 1} 行附近 @@`, ...removed, ...added, ...(truncated ? ["… 差异过长，仅显示前 160 行"] : [])].join("\n");
+    }
+
+    function updateCanglingYamlActions() {
+      const yaml = currentCanglingYaml();
+      const hasYaml = !!yaml.trim();
+      const dirty = yaml !== canglingYamlEdit.savedYaml;
+      const download = $("#cangling-yaml-download"), graph = $("#cangling-yaml-graph"), save = $("#cangling-yaml-save"), apply = $("#cangling-yaml-apply");
+      if (download) download.disabled = !hasYaml;
+      if (graph) graph.disabled = !hasYaml;
+      if (save) save.disabled = !hasYaml || !dirty;
+      if (apply) apply.disabled = !hasYaml || dirty || !canglingYamlEdit.currentVersion;
+      const diff = $("#cangling-yaml-diff");
+      if (diff) {
+        const text = canglingYamlEdit.savedYaml ? canglingYamlDiff(canglingYamlEdit.savedYaml, yaml) : "";
+        diff.textContent = text;
+        diff.hidden = !text;
+      }
+    }
+
+    function renderCanglingVersions(versions) {
+      const list = $("#cangling-yaml-version-list");
+      const stateText = $("#cangling-yaml-version-state");
+      if (!list || !stateText) return;
+      stateText.textContent = versions.length ? ` · ${versions.length} 个版本` : " · 尚无已保存版本";
+      list.innerHTML = versions.map((version) => `<button type="button" class="btn cangling-yaml-version ${version.id === (canglingYamlEdit.viewingVersion || canglingYamlEdit.currentVersion) ? "active" : ""}" data-cangling-yaml-version="${esc(version.id)}" title="${esc(fmtDateTime(version.createdAt))} · ${fmtBytes(version.bytes)}"><span>${esc(fmtDateTime(version.createdAt))}</span>${version.applied ? "<em>已应用</em>" : ""}</button>`).join("");
+      list.querySelectorAll("[data-cangling-yaml-version]").forEach((button) => {
+        button.onclick = () => loadCanglingManifestVersion(button.dataset.canglingYamlVersion);
+      });
+    }
+
+    async function loadCanglingManifestHistory(attempt = 0) {
+      try {
+        const history = await api("/api/cangling/apps/manifests");
+        canglingYamlEdit.savedYaml = history.currentYaml || "";
+        canglingYamlEdit.currentVersion = history.currentVersion || "";
+        canglingYamlEdit.appliedVersion = history.appliedVersion || "";
+        renderCanglingVersions(history.versions || []);
+        if (history.currentYaml) {
+          state.canglingYaml = history.currentYaml;
+          await renderCanglingYamlEditor("cangling.yaml", history.currentYaml, []);
+          if (canglingYamlEdit.editor) canglingYamlEdit.editor.setReadOnly(false);
+          const status = $("#cangling-yaml-status");
+          if (status) status.textContent = `已加载当前保存版本 ${history.currentVersion}${history.currentVersion === history.appliedVersion ? "（已应用）" : "（尚未应用）"}`;
+        }
+        updateCanglingYamlActions();
+      } catch (error) {
+        if (attempt < 2 && /failed to fetch|load failed|network/i.test(error.message || "")) {
+          const stateText = $("#cangling-yaml-version-state");
+          if (stateText) stateText.textContent = ` · 连接中断，正在进行第 ${attempt + 1} 次重试…`;
+          await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+          return loadCanglingManifestHistory(attempt + 1);
+        }
+        const stateText = $("#cangling-yaml-version-state");
+        if (stateText) stateText.textContent = " · 读取失败：" + error.message;
+        const list = $("#cangling-yaml-version-list");
+        if (list) {
+          list.innerHTML = '<button type="button" class="btn" id="cangling-yaml-version-retry">重新读取</button>';
+          $("#cangling-yaml-version-retry").onclick = () => loadCanglingManifestHistory();
+        }
+      }
+    }
+
+    async function loadCanglingManifestVersion(version) {
+      try {
+        const result = await api("/api/cangling/apps/manifests/" + encodeURIComponent(version));
+        canglingYamlEdit.viewingVersion = version;
+        document.querySelectorAll("[data-cangling-yaml-version]").forEach((button) => button.classList.toggle("active", button.dataset.canglingYamlVersion === version));
+        state.canglingYaml = result.yaml || "";
+        await renderCanglingYamlEditor("cangling.yaml", state.canglingYaml, []);
+        if (canglingYamlEdit.editor) canglingYamlEdit.editor.setReadOnly(false);
+        const status = $("#cangling-yaml-status");
+        if (status) status.textContent = `正在查看历史版本 ${version}；如需设为当前版本，请点击“覆盖保存”。`;
+        updateCanglingYamlActions();
+      } catch (error) {
+        flash("err", "读取 YAML 版本失败：" + error.message);
+      }
+    }
+
+    async function saveCanglingYaml() {
+      const yaml = currentCanglingYaml();
+      const prompt = canglingYamlEdit.currentVersion
+        ? "将用编辑器中的内容覆盖当前 cangling.yaml，并自动保留为一个新版本。是否继续？"
+        : "将把编辑器中的内容保存为第一个 cangling.yaml 版本。是否继续？";
+      if (!(await confirmDialog(prompt, { confirmText: "覆盖保存" }))) return;
+      const button = $("#cangling-yaml-save");
+      if (button) { button.disabled = true; button.textContent = "正在保存…"; }
+      try {
+        const result = await api("/api/cangling/apps/manifests", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ yaml }) });
+        canglingYamlEdit.savedYaml = yaml;
+        canglingYamlEdit.currentVersion = result.version.id;
+        canglingYamlEdit.viewingVersion = "";
+        flash("ok", result.message || "cangling.yaml 已保存");
+        await loadCanglingManifestHistory();
+      } catch (error) {
+        flash("err", "保存 cangling.yaml 失败：" + error.message);
+      } finally {
+        if (button) button.textContent = "覆盖保存";
+        updateCanglingYamlActions();
+      }
+    }
+
+    async function renderCanglingYamlEditor(filename, yaml, warnings) {
+      canglingYamlEdit.filename = filename || "cangling.yaml";
+      const status = $("#cangling-yaml-status");
+      const empty = $("#cangling-yaml-empty");
+      const download = $("#cangling-yaml-download");
+      const apply = $("#cangling-yaml-apply");
+      const graph = $("#cangling-yaml-graph");
+      if (status) status.innerHTML = warnings.length
+        ? `<strong>部署前检查：</strong>${warnings.map((item) => esc(item)).join("；")}`
+        : "YAML 已通过服务端语法校验，可继续编辑或下载。";
+      if (empty) empty.hidden = true;
+      if (download) download.disabled = false;
+      if (apply) apply.disabled = false;
+      if (graph) graph.disabled = false;
+      setCanglingYamlGraphVisible(false);
+      await loadAce();
+      const el = $("#cangling-yaml-tab-ace");
+      if (!el) return;
+      if (canglingYamlEdit.editor) {
+        canglingYamlEdit.editor.setValue(yaml, -1);
+        canglingYamlEdit.editor.resize();
+        updateCanglingYamlActions();
+        return;
+      }
+      canglingYamlEdit.editor = window.ace.edit(el, {
+        mode: "ace/mode/yaml",
+        theme: aceThemeName(),
+        useWorker: false,
+        fontSize: 15,
+        tabSize: 2,
+        useSoftTabs: true,
+        wrap: false,
+        showPrintMargin: false,
+        readOnly: false,
+        fontFamily: '"Iosevka Term", "Iosevka Terminal", ui-monospace, monospace',
+      });
+      canglingYamlEdit.editor.setValue(yaml, -1);
+      canglingYamlEdit.editor.session.on("change", () => {
+        if (canglingYamlEdit.suppressChange) return;
+        state.canglingYaml = canglingYamlEdit.editor.getValue();
+        updateCanglingYamlActions();
+      });
+      if (window.ResizeObserver) {
+        canglingYamlEdit.resizeObs = new ResizeObserver(() => canglingYamlEdit.editor && canglingYamlEdit.editor.resize());
+        canglingYamlEdit.resizeObs.observe(el);
+      }
+      updateCanglingYamlActions();
+    }
+
+    function setCanglingYamlGraphVisible(visible) {
+      canglingYamlEdit.graphVisible = visible;
+      const editorView = $("#cangling-yaml-editor-view");
+      const graphView = $("#cangling-yaml-graph-view");
+      const button = $("#cangling-yaml-graph");
+      if (editorView) editorView.hidden = visible;
+      if (graphView) graphView.hidden = !visible;
+      if (button) button.textContent = visible ? "返回编辑" : "依赖关系";
+      if (!visible && canglingYamlEdit.editor) setTimeout(() => canglingYamlEdit.editor.resize(), 0);
+    }
+
+    function renderCanglingDependencyGraph(graph) {
+      const view = $("#cangling-yaml-graph-view");
+      if (!view) return;
+      const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+      const edges = Array.isArray(graph.edges) ? graph.edges : [];
+      const groups = [
+        { title: "工作负载", kinds: ["Deployment", "DaemonSet", "StatefulSet"], x: 40, color: "var(--accent-emphasis)" },
+        { title: "服务", kinds: ["Service"], x: 400, color: "var(--success-emphasis)" },
+        { title: "配置与存储", kinds: ["ConfigMap", "Secret", "PersistentVolumeClaim"], x: 760, color: "#8250df" },
+      ];
+      const width = 1080, nodeWidth = 270, nodeHeight = 48, rowHeight = 68;
+      const positions = new Map();
+      let maxRows = 1;
+      groups.forEach((group) => {
+        const members = nodes.filter((node) => group.kinds.includes(node.kind));
+        maxRows = Math.max(maxRows, members.length);
+        members.forEach((node, index) => positions.set(node.id, { x: group.x, y: 54 + index * rowHeight, color: group.color, node }));
+      });
+      const height = Math.max(560, 90 + maxRows * rowHeight);
+      const edgeSvg = edges.map((edge) => {
+        const from = positions.get(edge.from), to = positions.get(edge.to);
+        if (!from || !to) return "";
+        const forward = from.x <= to.x;
+        const x1 = forward ? from.x + nodeWidth : from.x;
+        const x2 = forward ? to.x : to.x + nodeWidth;
+        const y1 = from.y + nodeHeight / 2, y2 = to.y + nodeHeight / 2;
+        const bend = Math.max(70, Math.abs(x2 - x1) * .45);
+        const path = `M ${x1} ${y1} C ${x1 + (forward ? bend : -bend)} ${y1}, ${x2 + (forward ? -bend : bend)} ${y2}, ${x2} ${y2}`;
+        const midX = (x1 + x2) / 2, midY = (y1 + y2) / 2 - 5;
+        return `<g><path d="${path}" fill="none" stroke="${edge.inferred ? "var(--muted)" : "var(--accent)"}" stroke-width="1.8" ${edge.inferred ? 'stroke-dasharray="6 5"' : ""} marker-end="url(#cangling-graph-arrow)"/><text x="${midX}" y="${midY}" text-anchor="middle" fill="var(--muted)" font-size="11">${esc(edge.relation)}</text></g>`;
+      }).join("");
+      const nodeSvg = Array.from(positions.values()).map(({ x, y, color, node }) => `<g><title>${esc(node.kind)} · ${esc(node.namespace)}/${esc(node.name)}${node.defined ? "" : " · YAML 中未定义"}</title><rect x="${x}" y="${y}" width="${nodeWidth}" height="${nodeHeight}" rx="6" fill="var(--bg-3)" stroke="${color}" stroke-width="${node.defined ? 1.5 : 1}" ${node.defined ? "" : 'stroke-dasharray="5 4"'}/><text x="${x + 14}" y="${y + 20}" fill="var(--text)" font-size="13" font-weight="600">${esc(node.name)}</text><text x="${x + 14}" y="${y + 37}" fill="var(--muted)" font-size="11">${esc(node.kind)} · ${esc(node.namespace)}</text></g>`).join("");
+      const headings = groups.map((group) => `<text x="${group.x}" y="30" fill="var(--text)" font-size="14" font-weight="600">${group.title}</text>`).join("");
+      const warnings = Array.isArray(graph.warnings) && graph.warnings.length ? ` · ${graph.warnings.map((item) => esc(item)).join("；")}` : "";
+      view.innerHTML = `<div class="cangling-graph-summary">共 ${nodes.length} 个资源节点、${edges.length} 条关系${warnings}<div class="cangling-graph-legend"><span><i class="cangling-graph-line"></i>明确关系</span><span><i class="cangling-graph-line inferred"></i>根据容器配置推断的服务调用</span></div></div><svg class="cangling-graph-canvas" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="cangling.yaml 依赖关系图"><defs><marker id="cangling-graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/></marker></defs>${headings}${edgeSvg}${nodeSvg}</svg>`;
+    }
+
+    async function toggleCanglingYamlGraph() {
+      if (canglingYamlEdit.graphVisible) {
+        setCanglingYamlGraphVisible(false);
+        return;
+      }
+      const button = $("#cangling-yaml-graph");
+      if (button) { button.disabled = true; button.textContent = "正在分析…"; }
+      try {
+        const graph = await api("/api/cangling/apps/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ yaml: currentCanglingYaml() }),
+        });
+        renderCanglingDependencyGraph(graph);
+        setCanglingYamlGraphVisible(true);
+      } catch (error) {
+        flash("err", "分析依赖关系失败：" + error.message);
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function applyCanglingYaml() {
+      const yaml = currentCanglingYaml();
+      if (!yaml.trim()) {
+        flash("err", "请先生成 cangling.yaml");
+        return;
+      }
+      if (!(await confirmDialog("将把编辑器中的当前 cangling.yaml 应用到 K3s 集群。现有同名资源将被更新，是否继续？", {
+        confirmText: "应用到集群",
+      }))) return;
+      const apply = $("#cangling-yaml-apply");
+      const generate = $("#cangling-generate");
+      const download = $("#cangling-yaml-download");
+      if (apply) { apply.disabled = true; apply.textContent = "正在部署…"; }
+      if (generate) generate.disabled = true;
+      if (download) download.disabled = true;
+      try {
+        const config = readCanglingConfig();
+        await api("/api/cangling/apps/config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(config),
+        });
+        const result = await api("/api/cangling/apps/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ yaml }),
+        });
+        await loadCanglingManifestHistory();
+        const status = $("#cangling-yaml-status");
+        if (status) status.innerHTML = `<strong>${esc(result.message || "部署完成")}</strong> · 已处理 ${Number(result.resources || 0)} 个资源`;
+        showCanglingApplyResult(true, result.message || "cangling.yaml 已应用到 K3s 集群", "完整应用配置已保存。\n" + (result.output || "kubectl apply 已完成"), result.resources || 0);
+      } catch (error) {
+        showCanglingApplyResult(false, "部署 cangling.yaml 失败", error.message, 0);
+      } finally {
+        if (apply) apply.textContent = "应用到集群";
+        if (generate) generate.disabled = false;
+        updateCanglingYamlActions();
+      }
+    }
+
+    function showCanglingApplyResult(success, message, output, resources) {
+      closeDialog();
+      const modal = $("#dialog-modal");
+      if (modal) modal.classList.add("narrow");
+      $("#dialog-title").textContent = success ? "cangling.yaml 部署结果" : "cangling.yaml 部署失败";
+      $("#dialog-body").innerHTML = `<div class="cangling-apply-result"><div class="flash ${success ? "ok" : "err"}"><strong>${esc(message)}</strong>${success ? ` · 已处理 ${Number(resources)} 个资源` : ""}</div><pre class="cangling-apply-output">${esc(output)}</pre></div>`;
+      setDialogAction(null, null);
+      $("#dialog-foot").hidden = false;
+      $("#dialog").hidden = false;
     }
 
     async function openCanglingYamlPreview(filename, yaml, warnings) {
@@ -4580,7 +5821,7 @@
           </div>
           <div class="card">
             <h3>升级流程</h3>
-            <ol class="hint"><li>点击“检查环境”，逐台检查主机中的运行容器和 JAR 挂载路径</li><li>检查通过后自动生成升级脚本</li><li>可选择 1～4 个固定名称的 JAR；仅更新与上传文件匹配的容器</li><li>每个目标先备份旧 JAR，再替换并重启验证</li></ol>
+            <ol class="hint"><li>点击“检查环境”，检查 K3s Deployment 或 Docker 容器中的 JAR 挂载路径</li><li>检查通过后自动生成升级脚本</li><li>可选择 1～4 个固定名称的 JAR；仅更新与上传文件匹配的工作负载</li><li>每个目标先备份旧 JAR，再替换并滚动重启验证</li></ol>
             <p class="hint">脚本：<code>${esc(data.script)}</code></p>
             <pre class="task-log" id="jar-upgrade-log">${data.upgrading ? "升级任务正在运行…" : "等待操作"}</pre>
           </div>
@@ -8383,6 +9624,8 @@
       }
       disposeDialogTerminal();
       destroyAceEditor();
+      destroyResourceEditor();
+      dialog.resourceToken++;
       destroySqlEditor();
       dialog.confirmClose = null;
       composeEdit.kind = "compose";
@@ -8403,12 +9646,14 @@
       if (modal) {
         modal.classList.remove("compose-modal");
         modal.classList.remove("narrow");
+        modal.classList.remove("image-import-modal");
         modal.classList.remove("dir-modal");
         modal.classList.remove("form-modal");
         modal.classList.remove("db-auto-modal");
         modal.classList.remove("network-modal");
         modal.classList.remove("password-modal");
         modal.classList.remove("cangling-node-modal");
+        modal.classList.remove("resource-detail-modal");
       }
       const box = $("#dialog");
       if (box) {
@@ -8465,7 +9710,10 @@
 
     function applyAceTheme() {
       if (composeEdit.editor) composeEdit.editor.setTheme(aceThemeName());
+      if (canglingYamlEdit.editor) canglingYamlEdit.editor.setTheme(aceThemeName());
       if (dialog.sqlEditor) dialog.sqlEditor.setTheme(aceThemeName());
+      if (dialog.resourceEditor) dialog.resourceEditor.setTheme(aceThemeName());
+      if (canglingNginxEdit.editor) canglingNginxEdit.editor.setTheme(aceThemeName());
       if (projectFiles.editor) projectFiles.editor.setTheme(aceThemeName());
     }
 
@@ -8484,8 +9732,8 @@
     }
 
     function loadAce() {
-      if (window.ace) return Promise.resolve();
       if (dialog.aceReady) return dialog.aceReady;
+      if (window.ace) return Promise.resolve();
       dialog.aceReady = (async () => {
         await loadScriptOnce(appPath("/vendor/ace/ace.js"));
         if (!window.ace) throw new Error("无法加载 Ace 编辑器");
@@ -8493,6 +9741,8 @@
         window.ace.config.set("loadWorkerFromBlob", false);
         await Promise.all([
           loadScriptOnce(appPath("/vendor/ace/mode-yaml.js")),
+          loadScriptOnce(appPath("/vendor/ace/mode-json.js")),
+          loadScriptOnce(appPath("/vendor/ace/mode-nginx.js")),
           loadScriptOnce(appPath("/vendor/ace/mode-ini.js")),
           loadScriptOnce(appPath("/vendor/ace/mode-sql.js")),
           loadScriptOnce(appPath("/vendor/ace/theme-github.js")),
@@ -8511,6 +9761,17 @@
       if (composeEdit.editor) {
         try { composeEdit.editor.destroy(); } catch {}
         composeEdit.editor = null;
+      }
+    }
+
+    function destroyResourceEditor() {
+      if (dialog.resourceResizeObs) {
+        try { dialog.resourceResizeObs.disconnect(); } catch {}
+        dialog.resourceResizeObs = null;
+      }
+      if (dialog.resourceEditor) {
+        try { dialog.resourceEditor.destroy(); } catch {}
+        dialog.resourceEditor = null;
       }
     }
 

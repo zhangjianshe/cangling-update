@@ -258,7 +258,15 @@ fn inspect_jar_host(
         format!("{username}@{host}:{port}")
     };
     let output = if kind == "local" {
-        discover_jar_targets(Command::new("docker"))
+        let mut targets = discover_jar_targets(Command::new("docker")).unwrap_or_default();
+        targets.extend(discover_k3s_jar_targets().unwrap_or_default());
+        targets.sort_by(|a, b| {
+            a.jar
+                .cmp(&b.jar)
+                .then_with(|| a.container.cmp(&b.container))
+        });
+        targets.dedup_by(|a, b| a.jar == b.jar && a.container == b.container && a.path == b.path);
+        Ok(targets)
     } else {
         discover_remote_jar_targets(&host, port, &username)
     };
@@ -292,6 +300,75 @@ fn inspect_jar_host(
         port,
         username,
     }
+}
+
+fn discover_k3s_jar_targets() -> Result<Vec<JarTarget>, AppError> {
+    let k3s = ["/usr/local/bin/k3s", "/usr/bin/k3s", "/opt/bin/k3s"]
+        .iter()
+        .map(Path::new)
+        .find(|path| path.is_file())
+        .ok_or_else(|| AppError::internal("未安装 k3s"))?;
+    let output = Command::new(k3s)
+        .args([
+            "kubectl",
+            "-n",
+            "cangling",
+            "get",
+            "deployments",
+            "-o",
+            "json",
+        ])
+        .output()
+        .map_err(|error| AppError::internal(format!("无法检查 K3s Deployment：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(output_tail(
+            &output.stderr,
+            "无法读取 K3s Deployment",
+        )));
+    }
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| AppError::internal(format!("解析 K3s Deployment 失败：{error}")))?;
+    let mut targets = Vec::new();
+    for deployment in document
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(name) = deployment
+            .pointer("/metadata/name")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        for volume in deployment
+            .pointer("/spec/template/spec/volumes")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(source) = volume
+                .pointer("/hostPath/path")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let Some(jar) = Path::new(source)
+                .file_name()
+                .and_then(|value| value.to_str())
+            else {
+                continue;
+            };
+            if REQUIRED_JARS.contains(&jar) {
+                targets.push(JarTarget {
+                    jar: jar.into(),
+                    container: format!("k3s/{name}"),
+                    path: source.into(),
+                });
+            }
+        }
+    }
+    Ok(targets)
 }
 
 fn discover_remote_jar_targets(
@@ -440,6 +517,18 @@ fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<Strin
                     safe_name(&node.status.name),
                     shell_quote(&target.jar)
                 );
+                if let Some(deployment) = target.container.strip_prefix("k3s/") {
+                    script.push_str(&format!(
+                        "if [ -f {incoming} ]; then\n  mkdir -p {} $(dirname {})\n  [ ! -f {} ] || cp -a {} {}\n  install -m 0644 {incoming} {}\n  if ! (/usr/local/bin/k3s kubectl -n cangling rollout restart deployment/{} >/dev/null && /usr/local/bin/k3s kubectl -n cangling rollout status deployment/{} --timeout=180s); then\n    [ ! -f {} ] || cp -a {} {}\n    /usr/local/bin/k3s kubectl -n cangling rollout restart deployment/{} >/dev/null || true\n    echo 'K3s JAR 升级失败，已恢复 {}' >&2\n    exit 1\n  fi\n  UPDATED=$((UPDATED+1))\nfi\n",
+                        format!("{}/\"$RUN_ID\"/{}", shell_quote(&backup_dir.display().to_string()), safe_name(&node.status.name)),
+                        shell_quote(&target.path),
+                        shell_quote(&target.path), shell_quote(&target.path), &backup,
+                        shell_quote(&target.path),
+                        shell_quote(deployment), shell_quote(deployment),
+                        &backup, &backup, shell_quote(&target.path), shell_quote(deployment), shell_quote(deployment),
+                    ));
+                    continue;
+                }
                 script.push_str(&format!(
                     "if [ -f {incoming} ]; then\n  mkdir -p {}\n  cp -a {} {}\n  if ! (install -m 0644 {incoming} {} && docker restart {} >/dev/null && test \"$(docker inspect -f '{{{{.State.Running}}}}' {})\" = true); then\n    cp -a {} {}\n    docker restart {} >/dev/null || true\n    echo '升级失败，已恢复 {}' >&2\n    exit 1\n  fi\n  UPDATED=$((UPDATED+1))\nfi\n",
                     format!("{}/\"$RUN_ID\"/{}", shell_quote(&backup_dir.display().to_string()), safe_name(&node.status.name)),

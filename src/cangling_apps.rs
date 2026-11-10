@@ -1,17 +1,27 @@
 //! Editable Cangling application deployment defaults and manifest generation.
 //!
 //! The embedded template mirrors the production `cangling` namespace layout.
-//! This module deliberately generates YAML only; applying it remains an explicit
-//! operator action so configuration review and cluster mutation stay separate.
+//! Applying generated or edited YAML remains an explicit operator action so
+//! configuration review and cluster mutation stay separate.
 
 use crate::error::AppError;
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::fs;
 use std::net::IpAddr;
-use std::path::Path as FsPath;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path as FsPath, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 const MANIFEST_TEMPLATE: &str = include_str!("assets/cangling-apps.yaml");
 const DEFAULT_IMAGE_PREFIX: &str = "hub.cangling.cn/cangling";
@@ -51,7 +61,26 @@ pub struct CanglingConfig {
     pub environment: BTreeMap<String, String>,
     #[serde(default = "default_secrets")]
     pub secrets: BTreeMap<String, String>,
+    #[serde(default = "default_nginx_config")]
+    pub nginx_config: String,
     pub applications: Vec<ApplicationConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterStorageSettings {
+    image_prefix: String,
+    namespace: String,
+    primary_node: String,
+    host_ip: String,
+    shared_root: String,
+    local_root: String,
+    core_root: String,
+    jar_root: String,
+    shared_storage: StorageConfig,
+    local_storage: StorageConfig,
+    core_storage: StorageConfig,
+    jar_storage: StorageConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,10 +138,1030 @@ struct ManifestResponse {
     warnings: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ApplyManifestRequest {
+    yaml: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeQuery {
+    #[serde(default = "default_runtime_namespace")]
+    namespace: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyManifestResponse {
+    message: &'static str,
+    output: String,
+    resources: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphNode {
+    id: String,
+    name: String,
+    kind: String,
+    namespace: String,
+    defined: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphEdge {
+    from: String,
+    to: String,
+    relation: String,
+    inferred: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphResponse {
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestVersion {
+    id: String,
+    created_at: DateTime<Utc>,
+    bytes: u64,
+    applied: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestHistoryResponse {
+    current_yaml: String,
+    current_version: String,
+    applied_version: String,
+    versions: Vec<ManifestVersion>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedManifestResponse {
+    version: ManifestVersion,
+    message: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ManifestContentResponse {
+    version: String,
+    yaml: String,
+}
+
 pub fn routes() -> Router<crate::state::AppState> {
     Router::new()
         .route("/api/cangling/apps/defaults", get(defaults))
+        .route(
+            "/api/cangling/apps/config",
+            get(saved_config).put(save_config),
+        )
         .route("/api/cangling/apps/manifest", post(generate_manifest))
+        .route("/api/cangling/apps/apply", post(apply_manifest))
+        .route("/api/cangling/apps/analyze", post(analyze_manifest))
+        .route("/api/cangling/apps/runtime", get(runtime_status))
+        .route(
+            "/api/cangling/apps/manifests",
+            get(list_manifests).post(save_manifest),
+        )
+        .route(
+            "/api/cangling/apps/manifests/{version}",
+            get(read_manifest_version),
+        )
+}
+
+fn legacy_cluster_settings_path(state: &crate::state::AppState) -> PathBuf {
+    state.paths.config_dir.join("cangling-cluster-storage.json")
+}
+
+fn saved_config_path(state: &crate::state::AppState) -> PathBuf {
+    state.paths.config_dir.join("cangling-apps-config.json")
+}
+
+impl ClusterStorageSettings {
+    fn apply_to(self, config: &mut CanglingConfig) {
+        config.image_prefix = self.image_prefix;
+        config.namespace = self.namespace;
+        config.primary_node = self.primary_node;
+        config.host_ip = self.host_ip;
+        config.shared_root = self.shared_root;
+        config.local_root = self.local_root;
+        config.core_root = self.core_root;
+        config.jar_root = self.jar_root;
+        config.shared_storage = self.shared_storage;
+        config.local_storage = self.local_storage;
+        config.core_storage = self.core_storage;
+        config.jar_storage = self.jar_storage;
+    }
+}
+
+fn load_saved_config(state: &crate::state::AppState) -> Result<CanglingConfig, AppError> {
+    let path = saved_config_path(state);
+    if path.is_file() {
+        let bytes = fs::read(&path)
+            .map_err(|error| AppError::internal(format!("读取苍灵应用配置失败：{error}")))?;
+        let mut config: CanglingConfig = serde_json::from_slice(&bytes)
+            .map_err(|error| AppError::internal(format!("解析苍灵应用配置失败：{error}")))?;
+        migrate_builtin_image_versions(&mut config);
+        migrate_builtin_application_ports(&mut config);
+        migrate_environment_variables(&mut config);
+        config.applications.retain(|app| app.id != "cis-k8s");
+        validate_config(&config)?;
+        return Ok(config);
+    }
+    let legacy = legacy_cluster_settings_path(state);
+    if !legacy.is_file() {
+        return Ok(default_config());
+    }
+    let bytes = fs::read(&legacy)
+        .map_err(|error| AppError::internal(format!("读取旧版集群与存储配置失败：{error}")))?;
+    let settings: ClusterStorageSettings = serde_json::from_slice(&bytes)
+        .map_err(|error| AppError::internal(format!("解析旧版集群与存储配置失败：{error}")))?;
+    let mut config = default_config();
+    settings.apply_to(&mut config);
+    validate_config(&config)?;
+    Ok(config)
+}
+
+fn migrate_builtin_image_versions(config: &mut CanglingConfig) {
+    for app in &mut config.applications {
+        app.image = match app.image.as_str() {
+            "cangling-broker:0.1.60" => "cangling-broker:0.1.73".into(),
+            "cangling-map:0.1.11" => "cangling-map:0.1.21".into(),
+            _ => continue,
+        };
+    }
+}
+
+fn migrate_builtin_application_ports(config: &mut CanglingConfig) {
+    if let Some(broker) = config
+        .applications
+        .iter_mut()
+        .find(|application| application.id == "cangling-broker")
+    {
+        if broker.ports.len() < 3 {
+            broker.ports.push(7883);
+        }
+    }
+}
+
+fn migrate_environment_variables(config: &mut CanglingConfig) {
+    for name in [
+        "DOMAIN_NAME",
+        "LDAP_PORT",
+        "K8S_PORT",
+        "MAP_PORT",
+        "MQTT_WEB_SERVER",
+        "PROJECT_DIR_NAME",
+    ] {
+        config.environment.remove(name);
+    }
+    for (legacy, current) in [
+        ("TILE_CACHE_CONFIG_DIR", "CANGLING_TILE_CONFIG_DIR"),
+        (
+            "TILE_CACHE_MEMORY_CACHE_BYTES",
+            "CANGLING_TILE_MEMORY_CACHE_BYTES",
+        ),
+        ("TILE_CACHE_ROOT", "CANGLING_TILE_ROOT"),
+    ] {
+        if let Some(value) = config.environment.remove(legacy) {
+            config.environment.entry(current.into()).or_insert(value);
+        }
+    }
+}
+
+async fn saved_config(
+    State(state): State<crate::state::AppState>,
+) -> Result<Json<CanglingConfig>, AppError> {
+    Ok(Json(load_saved_config(&state)?))
+}
+
+async fn save_config(
+    State(state): State<crate::state::AppState>,
+    Json(config): Json<CanglingConfig>,
+) -> Result<Json<CanglingConfig>, AppError> {
+    validate_config(&config)?;
+    let bytes = serde_json::to_vec_pretty(&config)
+        .map_err(|error| AppError::internal(format!("序列化苍灵应用配置失败：{error}")))?;
+    let path = saved_config_path(&state);
+    atomic_write(&path, &bytes)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| AppError::internal(format!("设置苍灵应用配置权限失败：{error}")))?;
+    let legacy = legacy_cluster_settings_path(&state);
+    if legacy.is_file() {
+        fs::remove_file(&legacy)
+            .map_err(|error| AppError::internal(format!("清理旧版配置失败：{error}")))?;
+    }
+    Ok(Json(config))
+}
+
+fn default_runtime_namespace() -> String {
+    DEFAULT_NAMESPACE.to_string()
+}
+
+async fn runtime_status(Query(query): Query<RuntimeQuery>) -> Result<Json<JsonValue>, AppError> {
+    let namespace = query.namespace.trim();
+    if namespace.is_empty()
+        || namespace.len() > 63
+        || !namespace
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(AppError::bad("命名空间名称无效"));
+    }
+    let deployments = kubectl_resource_json(namespace, "deployments.apps").await?;
+    let pods = kubectl_resource_json(namespace, "pods").await?;
+    let services = kubectl_resource_json(namespace, "services").await?;
+    let config_maps = kubectl_resource_json(namespace, "configmaps").await?;
+    let secrets = kubectl_resource_json(namespace, "secrets").await?;
+    let events = kubectl_resource_json(namespace, "events").await?;
+    Ok(Json(json!({
+        "namespace": namespace,
+        "checkedAt": Utc::now().to_rfc3339(),
+        "deployments": deployments["items"].as_array().cloned().unwrap_or_default(),
+        "pods": pods["items"].as_array().cloned().unwrap_or_default(),
+        "services": services["items"].as_array().cloned().unwrap_or_default(),
+        "configMaps": config_maps["items"].as_array().cloned().unwrap_or_default(),
+        "secrets": secrets["items"].as_array().map(|items| items.iter().map(|item| json!({
+            "metadata": {
+                "name": item["metadata"]["name"],
+                "namespace": item["metadata"]["namespace"],
+                "creationTimestamp": item["metadata"]["creationTimestamp"]
+            },
+            "type": item["type"],
+            "keys": item["data"].as_object().map(|data| data.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
+        })).collect::<Vec<_>>()).unwrap_or_default(),
+        "events": events["items"].as_array().cloned().unwrap_or_default(),
+    })))
+}
+
+async fn kubectl_resource_json(namespace: &str, resource: &str) -> Result<JsonValue, AppError> {
+    let (program, is_k3s) = find_kubectl()
+        .ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl，无法读取运行状态"))?;
+    let mut command = Command::new(program);
+    if is_k3s {
+        command.arg("kubectl");
+    } else if FsPath::new("/etc/rancher/k3s/k3s.yaml").is_file() {
+        command.env("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml");
+    }
+    let output = timeout(
+        Duration::from_secs(20),
+        command
+            .args(["-n", namespace, "get", resource, "-o", "json"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| AppError::internal("读取苍灵应用运行状态超时"))?
+    .map_err(|error| AppError::internal(format!("启动 kubectl 失败：{error}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::bad(if stderr.is_empty() {
+            format!("无法读取 {resource}")
+        } else {
+            stderr
+        }));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| AppError::internal(format!("解析 {resource} 状态失败：{error}")))
+}
+
+fn manifest_store(state: &crate::state::AppState) -> PathBuf {
+    state.paths.config_dir.join("cangling-manifests")
+}
+
+fn read_trimmed(path: &FsPath) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn atomic_write(path: &FsPath, contents: &[u8]) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::internal("YAML 保存路径无效"))?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(
+        ".cangling-yaml-{}.tmp",
+        Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    ));
+    fs::write(&temporary, contents)?;
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+fn manifest_history(state: &crate::state::AppState) -> Result<ManifestHistoryResponse, AppError> {
+    let root = manifest_store(state);
+    let versions_dir = root.join("versions");
+    let current_version = read_trimmed(&root.join("current-version"));
+    let applied_version = read_trimmed(&root.join("applied-version"));
+    let current_yaml = fs::read_to_string(root.join("current.yaml")).unwrap_or_default();
+    let mut versions = Vec::new();
+    if let Ok(entries) = fs::read_dir(&versions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("yaml") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let metadata = entry.metadata()?;
+            let created_at = metadata
+                .modified()
+                .map(DateTime::<Utc>::from)
+                .unwrap_or_else(|_| Utc::now());
+            versions.push(ManifestVersion {
+                id: id.into(),
+                created_at,
+                bytes: metadata.len(),
+                applied: id == applied_version,
+            });
+        }
+    }
+    versions.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    Ok(ManifestHistoryResponse {
+        current_yaml,
+        current_version,
+        applied_version,
+        versions,
+    })
+}
+
+async fn list_manifests(
+    State(state): State<crate::state::AppState>,
+) -> Result<Json<ManifestHistoryResponse>, AppError> {
+    Ok(Json(manifest_history(&state)?))
+}
+
+async fn save_manifest(
+    State(state): State<crate::state::AppState>,
+    Json(request): Json<ApplyManifestRequest>,
+) -> Result<Json<SavedManifestResponse>, AppError> {
+    validate_apply_yaml(&request.yaml)?;
+    let root = manifest_store(&state);
+    let versions = root.join("versions");
+    fs::create_dir_all(&versions)?;
+    let id = Utc::now()
+        .format("%Y%m%d%H%M%S%.3f")
+        .to_string()
+        .replace('.', "-");
+    let version_path = versions.join(format!("{id}.yaml"));
+    atomic_write(&version_path, request.yaml.as_bytes())?;
+    atomic_write(&root.join("current.yaml"), request.yaml.as_bytes())?;
+    atomic_write(&root.join("current-version"), id.as_bytes())?;
+    let metadata = fs::metadata(&version_path)?;
+    Ok(Json(SavedManifestResponse {
+        version: ManifestVersion {
+            id,
+            created_at: metadata
+                .modified()
+                .map(DateTime::<Utc>::from)
+                .unwrap_or_else(|_| Utc::now()),
+            bytes: metadata.len(),
+            applied: false,
+        },
+        message: "cangling.yaml 已保存为新版本",
+    }))
+}
+
+async fn read_manifest_version(
+    State(state): State<crate::state::AppState>,
+    AxumPath(version): AxumPath<String>,
+) -> Result<Json<ManifestContentResponse>, AppError> {
+    if version.is_empty()
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(AppError::bad("版本编号无效"));
+    }
+    let yaml = fs::read_to_string(
+        manifest_store(&state)
+            .join("versions")
+            .join(format!("{version}.yaml")),
+    )
+    .map_err(|_| AppError::not_found("找不到该 cangling.yaml 版本"))?;
+    Ok(Json(ManifestContentResponse { version, yaml }))
+}
+
+fn graph_id(namespace: &str, kind: &str, name: &str) -> String {
+    format!("{namespace}/{kind}/{name}")
+}
+
+fn document_namespace(value: &Value) -> &str {
+    value_str(value, &["metadata", "namespace"]).unwrap_or("default")
+}
+
+fn string_map(value: Option<&Value>) -> BTreeMap<String, String> {
+    value
+        .and_then(Value::as_mapping)
+        .map(|mapping| {
+            mapping
+                .iter()
+                .filter_map(|(key, value)| Some((key.as_str()?.into(), value.as_str()?.into())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn value_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for name in path {
+        current = current.as_mapping()?.get(key(name))?;
+    }
+    Some(current)
+}
+
+fn collect_resource_references(value: &Value, references: &mut Vec<(String, String)>) {
+    match value {
+        Value::Mapping(mapping) => {
+            for (field, kind, name_field) in [
+                ("configMapRef", "ConfigMap", "name"),
+                ("configMapKeyRef", "ConfigMap", "name"),
+                ("configMap", "ConfigMap", "name"),
+                ("secretRef", "Secret", "name"),
+                ("secretKeyRef", "Secret", "name"),
+                ("secret", "Secret", "secretName"),
+                (
+                    "persistentVolumeClaim",
+                    "PersistentVolumeClaim",
+                    "claimName",
+                ),
+            ] {
+                if let Some(name) = mapping
+                    .get(key(field))
+                    .and_then(Value::as_mapping)
+                    .and_then(|reference| reference.get(key(name_field)))
+                    .and_then(Value::as_str)
+                {
+                    references.push((kind.into(), name.into()));
+                }
+            }
+            for child in mapping.values() {
+                collect_resource_references(child, references);
+            }
+        }
+        Value::Sequence(sequence) => {
+            for child in sequence {
+                collect_resource_references(child, references);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_strings(value: &Value, strings: &mut Vec<String>) {
+    match value {
+        Value::String(value) => strings.push(value.clone()),
+        Value::Mapping(mapping) => {
+            for child in mapping.values() {
+                collect_strings(child, strings);
+            }
+        }
+        Value::Sequence(sequence) => {
+            for child in sequence {
+                collect_strings(child, strings);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn mentions_service(value: &str, service: &str) -> bool {
+    value
+        .split(|character: char| {
+            !(character.is_ascii_alphanumeric() || character == '-' || character == '.')
+        })
+        .any(|token| token == service || token.starts_with(&format!("{service}.")))
+}
+
+fn analyze_yaml(yaml: &str) -> Result<GraphResponse, AppError> {
+    validate_apply_yaml(yaml)?;
+    let documents = serde_yaml::Deserializer::from_str(yaml)
+        .filter_map(|document| Value::deserialize(document).ok())
+        .filter(|document| !document.is_null())
+        .collect::<Vec<_>>();
+    let mut nodes = BTreeMap::<String, GraphNode>::new();
+    for document in &documents {
+        let Some(kind) = value_str(document, &["kind"]) else {
+            continue;
+        };
+        let Some(name) = metadata_name(document) else {
+            continue;
+        };
+        if !matches!(
+            kind,
+            "Deployment"
+                | "DaemonSet"
+                | "StatefulSet"
+                | "Service"
+                | "ConfigMap"
+                | "Secret"
+                | "PersistentVolumeClaim"
+        ) {
+            continue;
+        }
+        let namespace = document_namespace(document);
+        let id = graph_id(namespace, kind, name);
+        nodes.insert(
+            id.clone(),
+            GraphNode {
+                id,
+                name: name.into(),
+                kind: kind.into(),
+                namespace: namespace.into(),
+                defined: true,
+            },
+        );
+    }
+
+    let services = documents
+        .iter()
+        .filter(|document| value_str(document, &["kind"]) == Some("Service"))
+        .filter_map(|document| {
+            Some((
+                document_namespace(document),
+                metadata_name(document)?,
+                string_map(value_at(document, &["spec", "selector"])),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let mut edges = BTreeSet::<(String, String, String, bool)>::new();
+    for document in &documents {
+        let Some(kind @ ("Deployment" | "DaemonSet" | "StatefulSet")) =
+            value_str(document, &["kind"])
+        else {
+            continue;
+        };
+        let Some(name) = metadata_name(document) else {
+            continue;
+        };
+        let namespace = document_namespace(document);
+        let workload_id = graph_id(namespace, kind, name);
+        let pod_spec = value_at(document, &["spec", "template", "spec"]);
+        let labels = string_map(value_at(
+            document,
+            &["spec", "template", "metadata", "labels"],
+        ));
+
+        let mut references = Vec::new();
+        if let Some(spec) = pod_spec {
+            collect_resource_references(spec, &mut references);
+        }
+        for (reference_kind, reference_name) in references {
+            let target = graph_id(namespace, &reference_kind, &reference_name);
+            nodes.entry(target.clone()).or_insert_with(|| GraphNode {
+                id: target.clone(),
+                name: reference_name,
+                kind: reference_kind.clone(),
+                namespace: namespace.into(),
+                defined: false,
+            });
+            edges.insert((workload_id.clone(), target, "引用".into(), false));
+        }
+
+        for (service_namespace, service_name, selector) in &services {
+            if *service_namespace == namespace
+                && !selector.is_empty()
+                && selector
+                    .iter()
+                    .all(|(key, value)| labels.get(key) == Some(value))
+            {
+                edges.insert((
+                    graph_id(service_namespace, "Service", service_name),
+                    workload_id.clone(),
+                    "流量转发".into(),
+                    false,
+                ));
+            }
+        }
+
+        let mut strings = Vec::new();
+        for path in [
+            &["spec", "template", "spec", "containers"][..],
+            &["spec", "template", "spec", "initContainers"][..],
+        ] {
+            if let Some(value) = value_at(document, path) {
+                collect_strings(value, &mut strings);
+            }
+        }
+        for (service_namespace, service_name, _) in &services {
+            if *service_namespace == namespace
+                && service_name != &name
+                && strings
+                    .iter()
+                    .any(|value| mentions_service(value, service_name))
+            {
+                edges.insert((
+                    workload_id.clone(),
+                    graph_id(service_namespace, "Service", service_name),
+                    "服务调用".into(),
+                    true,
+                ));
+            }
+        }
+    }
+    let warnings = nodes
+        .values()
+        .filter(|node| !node.defined)
+        .map(|node| format!("{} {} 被引用但未在 YAML 中定义", node.kind, node.name))
+        .collect();
+    Ok(GraphResponse {
+        nodes: nodes.into_values().collect(),
+        edges: edges
+            .into_iter()
+            .map(|(from, to, relation, inferred)| GraphEdge {
+                from,
+                to,
+                relation,
+                inferred,
+            })
+            .collect(),
+        warnings,
+    })
+}
+
+async fn analyze_manifest(
+    Json(request): Json<ApplyManifestRequest>,
+) -> Result<Json<GraphResponse>, AppError> {
+    Ok(Json(analyze_yaml(&request.yaml)?))
+}
+
+fn validate_apply_yaml(yaml: &str) -> Result<usize, AppError> {
+    if yaml.trim().is_empty() {
+        return Err(AppError::bad("cangling.yaml 内容不能为空"));
+    }
+    if yaml.len() > 8 * 1024 * 1024 {
+        return Err(AppError::bad("cangling.yaml 不能超过 8 MB"));
+    }
+    let mut resources = 0;
+    for document in serde_yaml::Deserializer::from_str(yaml) {
+        let value = Value::deserialize(document)
+            .map_err(|error| AppError::bad(format!("YAML 语法错误：{error}")))?;
+        if value.is_null() {
+            continue;
+        }
+        let mapping = value
+            .as_mapping()
+            .ok_or_else(|| AppError::bad("YAML 中的每个文档必须是 Kubernetes 资源对象"))?;
+        for field in ["apiVersion", "kind", "metadata"] {
+            if !mapping.contains_key(&Value::String(field.into())) {
+                return Err(AppError::bad(format!("Kubernetes 资源缺少 {field} 字段")));
+            }
+        }
+        resources += 1;
+    }
+    if resources == 0 {
+        return Err(AppError::bad(
+            "cangling.yaml 中没有可部署的 Kubernetes 资源",
+        ));
+    }
+    Ok(resources)
+}
+
+fn find_kubectl() -> Option<(PathBuf, bool)> {
+    for candidate in ["/usr/local/bin/k3s", "/usr/bin/k3s", "/opt/bin/k3s"] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return Some((path, true));
+        }
+    }
+    for candidate in ["/usr/local/bin/kubectl", "/usr/bin/kubectl"] {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return Some((path, false));
+        }
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+struct StoragePrepareHost {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+}
+
+fn prepare_hosts(state: &crate::state::AppState) -> Result<Vec<StoragePrepareHost>, AppError> {
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let mut hosts = Vec::new();
+    let mut known = HashSet::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT name,host,ssh_port,username FROM managed_hosts WHERE kind IN ('local','cluster') ORDER BY kind,name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoragePrepareHost {
+                name: row.get(0)?,
+                host: row.get(1)?,
+                port: row.get::<_, i64>(2)?.clamp(1, u16::MAX as i64) as u16,
+                username: row.get(3)?,
+            })
+        })?;
+        for row in rows {
+            let host = row?;
+            if !host.host.trim().is_empty() && known.insert(host.host.clone()) {
+                hosts.push(host);
+            }
+        }
+    }
+    let mut stmt = conn.prepare("SELECT name,info_json FROM cluster_nodes ORDER BY name")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (name, info_json) = row?;
+        let host = serde_json::from_str::<JsonValue>(&info_json)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("primary_ip")
+                    .and_then(JsonValue::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        if !host.is_empty() && known.insert(host.clone()) {
+            hosts.push(StoragePrepareHost {
+                name,
+                host,
+                port: 22,
+                username: "root".into(),
+            });
+        }
+    }
+    if hosts.is_empty() {
+        hosts.push(StoragePrepareHost {
+            name: "本机".into(),
+            host: crate::hostinfo::primary_ip(),
+            port: 22,
+            username: "root".into(),
+        });
+    }
+    Ok(hosts)
+}
+
+fn is_local_prepare_host(host: &str) -> bool {
+    let host = host.trim();
+    host.is_empty()
+        || matches!(host, "127.0.0.1" | "localhost" | "::1")
+        || host == crate::hostinfo::primary_ip()
+}
+
+async fn run_prepare_script(target: &StoragePrepareHost, script: &str) -> Result<(), AppError> {
+    let output = if is_local_prepare_host(&target.host) {
+        Command::new("sh").args(["-c", script]).output().await
+    } else {
+        Command::new("ssh")
+            .args([
+                "-p",
+                &target.port.to_string(),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                &format!("{}@{}", target.username, target.host),
+                "sh",
+                "-c",
+                &shell_quote(script),
+            ])
+            .output()
+            .await
+    }
+    .map_err(|error| AppError::internal(format!("准备主机 {} 存储失败：{error}", target.name)))?;
+    if !output.status.success() {
+        return Err(AppError::internal(format!(
+            "准备主机 {} 存储失败：{}",
+            target.name,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+fn manifest_volumes(document: &Value) -> &[Value] {
+    document
+        .as_mapping()
+        .and_then(|value| value.get(key("spec")))
+        .and_then(Value::as_mapping)
+        .and_then(|value| value.get(key("template")))
+        .and_then(Value::as_mapping)
+        .and_then(|value| value.get(key("spec")))
+        .and_then(Value::as_mapping)
+        .and_then(|value| value.get(key("volumes")))
+        .and_then(Value::as_sequence)
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+async fn prepare_application_storage(
+    state: &crate::state::AppState,
+    yaml: &str,
+) -> Result<(), AppError> {
+    let config = load_saved_config(state)?;
+    let local_roots = [
+        (&config.local_storage, config.local_root.as_str()),
+        (&config.core_storage, config.core_root.as_str()),
+    ]
+    .into_iter()
+    .filter(|(storage, _)| storage.storage_type == StorageType::Local)
+    .map(|(storage, target)| PathBuf::from(storage_source(storage, target)))
+    .collect::<Vec<_>>();
+    let nfs_roots = [
+        (&config.shared_storage, config.shared_root.as_str()),
+        (&config.local_storage, config.local_root.as_str()),
+        (&config.core_storage, config.core_root.as_str()),
+        (&config.jar_storage, config.jar_root.as_str()),
+    ]
+    .into_iter()
+    .filter(|(storage, _)| storage.storage_type == StorageType::Nfs)
+    .map(|(storage, target)| {
+        let source = storage_source(storage, target);
+        let (server, root) = parse_nfs_source(&source)?;
+        Ok::<_, AppError>((server.to_string(), root.to_string()))
+    })
+    .collect::<Result<Vec<_>, _>>()?;
+    let writable_apps = ["cangling-broker", "cangling-map", "cangling-tile"];
+    let mut writable_paths = BTreeSet::new();
+    let mut nfs_paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for document in serde_yaml::Deserializer::from_str(yaml) {
+        let document = Value::deserialize(document)
+            .map_err(|error| AppError::bad(format!("YAML 语法错误：{error}")))?;
+        let writable = metadata_name(&document).is_some_and(|name| writable_apps.contains(&name));
+        for volume in manifest_volumes(&document) {
+            if writable {
+                if let Some(path) = value_str(volume, &["hostPath", "path"]) {
+                    let candidate = FsPath::new(path);
+                    if candidate.is_absolute()
+                        && local_roots.iter().any(|root| candidate.starts_with(root))
+                    {
+                        writable_paths.insert(path.to_string());
+                    } else if candidate.is_absolute() {
+                        return Err(AppError::bad(format!(
+                            "应用可写目录不在已配置的本地存储中：{path}"
+                        )));
+                    }
+                }
+            }
+            if let (Some(server), Some(path)) = (
+                value_str(volume, &["nfs", "server"]),
+                value_str(volume, &["nfs", "path"]),
+            ) {
+                if !server.trim().is_empty() && FsPath::new(path).is_absolute() {
+                    let allowed = nfs_roots.iter().any(|(configured_server, root)| {
+                        configured_server == server.trim()
+                            && FsPath::new(path).starts_with(FsPath::new(root))
+                    });
+                    if !allowed {
+                        return Err(AppError::bad(format!(
+                            "NFS 路径不在已配置的共享存储中：{server}:{path}"
+                        )));
+                    }
+                    nfs_paths
+                        .entry(server.trim().to_string())
+                        .or_default()
+                        .insert(path.to_string());
+                }
+            }
+        }
+    }
+
+    let hosts = prepare_hosts(state)?;
+    for (server, paths) in nfs_paths {
+        let target = hosts
+            .iter()
+            .find(|host| host.host == server)
+            .cloned()
+            .unwrap_or(StoragePrepareHost {
+                name: format!("NFS {server}"),
+                host: server,
+                port: 22,
+                username: "root".into(),
+            });
+        let quoted = paths
+            .iter()
+            .map(|path| shell_quote(path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        run_prepare_script(
+            &target,
+            &format!("set -eu; install -d -m 0777 -- {quoted}; chmod 0777 -- {quoted}"),
+        )
+        .await?;
+    }
+    if !writable_paths.is_empty() {
+        let quoted = writable_paths
+            .iter()
+            .map(|path| shell_quote(path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let script = format!(
+            "set -eu; install -d -m 0775 -- {quoted}; chown 10001:10001 -- {quoted}; chmod 0775 -- {quoted}"
+        );
+        for host in &hosts {
+            run_prepare_script(host, &script).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn apply_manifest(
+    State(state): State<crate::state::AppState>,
+    Json(request): Json<ApplyManifestRequest>,
+) -> Result<Json<ApplyManifestResponse>, AppError> {
+    let resources = validate_apply_yaml(&request.yaml)?;
+    let history = manifest_history(&state)?;
+    if history.current_version.is_empty() || history.current_yaml != request.yaml {
+        return Err(AppError::conflict(
+            "当前 YAML 尚未保存，请先覆盖保存为新版本后再应用到集群",
+        ));
+    }
+    prepare_application_storage(&state, &request.yaml).await?;
+    let (program, is_k3s) = find_kubectl()
+        .ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl，无法部署"))?;
+    let mut command = Command::new(program);
+    if is_k3s {
+        command.arg("kubectl");
+    } else if FsPath::new("/etc/rancher/k3s/k3s.yaml").is_file() {
+        command.env("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml");
+    }
+    command
+        .args(["apply", "-f", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|error| AppError::internal(format!("启动 kubectl 失败：{error}")))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| AppError::internal("无法向 kubectl 传递 cangling.yaml"))?;
+    stdin
+        .write_all(request.yaml.as_bytes())
+        .await
+        .map_err(|error| AppError::internal(format!("写入 cangling.yaml 失败：{error}")))?;
+    drop(stdin);
+    let output = timeout(Duration::from_secs(180), child.wait_with_output())
+        .await
+        .map_err(|_| AppError::internal("部署超时（180 秒）"))?
+        .map_err(|error| AppError::internal(format!("等待 kubectl 完成失败：{error}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        return Err(AppError::bad(if stderr.is_empty() {
+            "kubectl apply 执行失败".into()
+        } else {
+            stderr
+        }));
+    }
+    let mut combined = match (stdout.is_empty(), stderr.is_empty()) {
+        (false, false) => format!("{stdout}\n{stderr}"),
+        (false, true) => stdout,
+        (true, false) => stderr,
+        (true, true) => "kubectl apply 已完成".into(),
+    };
+    let loadbalance_state = state.clone();
+    match tokio::task::spawn_blocking(move || {
+        crate::cluster::init::ensure_loadbalance(&loadbalance_state)
+    })
+    .await
+    {
+        Ok(Ok(message)) => {
+            combined.push_str("\n\nLoad Balancer：");
+            combined.push_str(&message);
+        }
+        Ok(Err(error)) => {
+            combined.push_str("\n\nLoad Balancer 更新失败：");
+            combined.push_str(&error.to_string());
+        }
+        Err(error) => {
+            combined.push_str("\n\nLoad Balancer 更新任务失败：");
+            combined.push_str(&error.to_string());
+        }
+    }
+    atomic_write(
+        &manifest_store(&state).join("applied-version"),
+        history.current_version.as_bytes(),
+    )?;
+    Ok(Json(ApplyManifestResponse {
+        message: "cangling.yaml 已应用到 K3s 集群",
+        output: combined,
+        resources,
+    }))
 }
 
 async fn defaults() -> Json<CanglingConfig> {
@@ -151,8 +1200,8 @@ fn default_config() -> CanglingConfig {
             "消息代理",
             ApplicationGroup::Single,
             WorkloadKind::Deployment,
-            "cangling-broker:0.1.60",
-            &[7500, 7501],
+            "cangling-broker:0.1.73",
+            &[7500, 7501, 7883],
             "/opt/cangling-core/broker",
         ),
         app(
@@ -169,7 +1218,7 @@ fn default_config() -> CanglingConfig {
             "地图服务",
             ApplicationGroup::Multi,
             WorkloadKind::Deployment,
-            "cangling-map:0.1.11",
+            "cangling-map:0.1.21",
             &[3000],
             "/opt/cangling/local/cangling-map",
         ),
@@ -180,15 +1229,6 @@ fn default_config() -> CanglingConfig {
             WorkloadKind::Deployment,
             "gdal-base:v4.2.35",
             &[8078],
-            "/opt/cangling/local/ibcache",
-        ),
-        app(
-            "cis-k8s",
-            "算法调度",
-            ApplicationGroup::Single,
-            WorkloadKind::Deployment,
-            "gdal-base:v4.2.35",
-            &[8077],
             "/opt/cangling/local/ibcache",
         ),
         app(
@@ -237,8 +1277,21 @@ fn default_config() -> CanglingConfig {
         jar_storage: storage(StorageType::Local, jar_root),
         environment: default_environment(),
         secrets: default_secrets(),
+        nginx_config: default_nginx_config(),
         applications,
     }
+}
+
+fn default_nginx_config() -> String {
+    parse_documents()
+        .expect("内置苍灵应用 YAML 模板必须有效")
+        .into_iter()
+        .find(|doc| {
+            metadata_name(doc) == Some("cangling-nginx")
+                && value_str(doc, &["kind"]) == Some("ConfigMap")
+        })
+        .and_then(|doc| value_str(&doc, &["data", "nginx.conf"]).map(str::to_owned))
+        .expect("内置苍灵应用模板必须包含 nginx.conf")
 }
 
 fn namespaced_root(root: &str, namespace: &str) -> String {
@@ -430,7 +1483,7 @@ fn render_manifest(config: &CanglingConfig) -> Result<(String, Vec<String>), App
         } else if metadata_name(doc) == Some("cangling-nginx")
             && value_str(doc, &["kind"]) == Some("ConfigMap")
         {
-            patch_nginx_config(doc, &apps)?;
+            patch_nginx_config(doc, config, &apps)?;
         }
         if let Some(name) = metadata_name(doc).map(ToOwned::to_owned) {
             if let Some(app) = apps.get(name.as_str()) {
@@ -680,6 +1733,12 @@ fn validate_config(config: &CanglingConfig) -> Result<(), AppError> {
     }
     validate_variable_map(&config.environment, "环境变量")?;
     validate_variable_map(&config.secrets, "密钥")?;
+    if config.nginx_config.trim().is_empty() || config.nginx_config.len() > 128 * 1024 {
+        return Err(AppError::bad("NGINX 配置模板不能为空或超过 128 KiB"));
+    }
+    if config.nginx_config.contains('\0') {
+        return Err(AppError::bad("NGINX 配置模板不能包含 NUL 字符"));
+    }
     let mut ids = HashSet::new();
     for app in &config.applications {
         validate_dns_label(&app.id, "应用名称")?;
@@ -919,16 +1978,16 @@ fn patch_secret(doc: &mut Value, config: &CanglingConfig) -> Result<(), AppError
 
 fn patch_nginx_config(
     doc: &mut Value,
+    config: &CanglingConfig,
     apps: &BTreeMap<&str, &ApplicationConfig>,
 ) -> Result<(), AppError> {
     let data = child_mut(doc, "data")?
         .as_mapping_mut()
         .ok_or_else(|| AppError::internal("内置部署模板中的 cangling-nginx.data 不是对象"))?;
-    let nginx = data
-        .get_mut(key("nginx.conf"))
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| AppError::internal("内置部署模板缺少 nginx.conf"))?
-        .to_string();
+    if !data.contains_key(key("nginx.conf")) {
+        return Err(AppError::internal("内置部署模板缺少 nginx.conf"));
+    }
+    let nginx = config.nginx_config.clone();
     let web = apps
         .get("cangling-nginx")
         .and_then(|app| app.ports.first())
@@ -1085,9 +2144,6 @@ fn patch_application_document(
             .and_then(Value::as_sequence_mut)
         {
             patch_port_sequence(ports, &app.ports, "containerPort");
-            if app.id == "cangling-nginx" {
-                patch_port_sequence(ports, &app.ports, "hostPort");
-            }
         }
         if app.id == "cangling-map" {
             patch_named_env(
@@ -1318,6 +2374,109 @@ mod tests {
     use super::*;
 
     #[test]
+    fn environment_migration_removes_unused_keys_and_renames_tile_settings() {
+        let mut config = default_config();
+        config
+            .environment
+            .insert("DOMAIN_NAME".into(), "legacy.example".into());
+        config
+            .environment
+            .insert("TILE_CACHE_ROOT".into(), "/legacy/tiles".into());
+        config.environment.remove("CANGLING_TILE_ROOT");
+
+        migrate_environment_variables(&mut config);
+
+        assert!(!config.environment.contains_key("DOMAIN_NAME"));
+        assert!(!config.environment.contains_key("TILE_CACHE_ROOT"));
+        assert_eq!(
+            config
+                .environment
+                .get("CANGLING_TILE_ROOT")
+                .map(String::as_str),
+            Some("/legacy/tiles")
+        );
+        assert_eq!(
+            config.environment.get("IM_THEME").map(String::as_str),
+            Some("base")
+        );
+        assert!(config.environment.contains_key("CL_BASE_PATH"));
+    }
+
+    #[test]
+    fn deployment_container_names_match_their_workloads() {
+        let (yaml, _) = render_manifest(&default_config()).unwrap();
+        for document in serde_yaml::Deserializer::from_str(&yaml) {
+            let document = Value::deserialize(document).unwrap();
+            if value_str(&document, &["kind"]) != Some("Deployment") {
+                continue;
+            }
+            let workload = metadata_name(&document).unwrap();
+            let container = value_at(&document, &["spec", "template", "spec", "containers"])
+                .and_then(Value::as_sequence)
+                .and_then(|containers| containers.first())
+                .and_then(|container| value_str(container, &["name"]))
+                .unwrap();
+            assert_eq!(container, workload);
+        }
+    }
+
+    #[test]
+    fn broker_port_migration_adds_mqtt_without_overwriting_custom_values() {
+        let mut config = default_config();
+        config
+            .applications
+            .iter_mut()
+            .find(|application| application.id == "cangling-broker")
+            .unwrap()
+            .ports = vec![7500, 7501];
+        migrate_builtin_application_ports(&mut config);
+        assert_eq!(
+            config
+                .applications
+                .iter()
+                .find(|application| application.id == "cangling-broker")
+                .unwrap()
+                .ports,
+            vec![7500, 7501, 7883]
+        );
+        config
+            .applications
+            .iter_mut()
+            .find(|application| application.id == "cangling-broker")
+            .unwrap()
+            .ports[2] = 1883;
+        migrate_builtin_application_ports(&mut config);
+        assert_eq!(
+            config
+                .applications
+                .iter()
+                .find(|application| application.id == "cangling-broker")
+                .unwrap()
+                .ports,
+            vec![7500, 7501, 1883]
+        );
+    }
+
+    #[test]
+    fn apply_yaml_validation_accepts_resources_and_rejects_invalid_documents() {
+        let valid = "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: cangling\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: sample\n";
+        assert_eq!(validate_apply_yaml(valid).unwrap(), 2);
+        assert!(validate_apply_yaml("").is_err());
+        assert!(validate_apply_yaml("kind: ConfigMap\nmetadata:\n  name: sample\n").is_err());
+        assert!(validate_apply_yaml("- one\n- two\n").is_err());
+    }
+
+    #[test]
+    fn generated_manifest_exposes_workload_relationships() {
+        let (yaml, _) = render_manifest(&default_config()).unwrap();
+        let graph = analyze_yaml(&yaml).unwrap();
+        assert!(graph.nodes.iter().any(|node| node.kind == "Deployment"));
+        assert!(graph.nodes.iter().any(|node| node.kind == "Service"));
+        assert!(graph.edges.iter().any(|edge| edge.relation == "流量转发"));
+        assert!(graph.edges.iter().any(|edge| edge.relation == "引用"));
+    }
+
+    #[test]
     fn defaults_describe_current_topology() {
         let config = default_config();
         assert_eq!(config.image_prefix, DEFAULT_IMAGE_PREFIX);
@@ -1329,7 +2488,7 @@ mod tests {
         assert_eq!(config.local_storage.storage_type, StorageType::Local);
         assert_eq!(config.core_storage.storage_type, StorageType::Local);
         assert_eq!(config.jar_storage.storage_type, StorageType::Local);
-        assert_eq!(config.applications.len(), 9);
+        assert_eq!(config.applications.len(), 8);
         assert_eq!(
             config.environment.get("TILE_CACHE_URL").map(String::as_str),
             Some("http://cangling-tile:7601")
@@ -1388,13 +2547,19 @@ mod tests {
             .unwrap();
         assert_eq!(map.group, ApplicationGroup::Multi);
         assert_eq!(map.replicas, 1);
-        assert_eq!(map.image, "cangling-map:0.1.11");
+        assert_eq!(map.image, "cangling-map:0.1.21");
         let tile = config
             .applications
             .iter()
             .find(|app| app.id == "cangling-tile")
             .unwrap();
         assert_eq!(tile.image, "cangling-tile:0.1.20");
+        let broker = config
+            .applications
+            .iter()
+            .find(|app| app.id == "cangling-broker")
+            .unwrap();
+        assert_eq!(broker.ports, vec![7500, 7501, 7883]);
         let entry = config
             .applications
             .iter()
@@ -1463,7 +2628,11 @@ mod tests {
         assert!(yaml.contains("http://cangling-map:3100"));
         assert!(yaml.contains("WEB_PORT: '7700'"));
         assert!(yaml.contains("listen 7700;"));
-        assert!(yaml.contains("hostPort: 7700"));
+        assert!(yaml.contains("name: cangling-nginx"));
+        assert!(yaml.contains("port: 7700"));
+        assert!(yaml.contains("targetPort: 7700"));
+        assert!(!yaml.contains("hostPort: 7700"));
+        assert!(!yaml.contains("hostNetwork: true"));
         assert!(yaml.contains("registry.example.com/cangling/postgis:17-3.5"));
         assert!(!yaml.contains("kind: DaemonSet"));
         assert!(!yaml.contains("geoserver:v2.28.49"));
@@ -1477,6 +2646,32 @@ mod tests {
         assert!(!yaml.contains("cis-mongo"));
         assert!(!yaml.to_ascii_lowercase().contains("mongodb"));
         assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn custom_nginx_template_is_used_in_generated_manifest() {
+        let mut config = default_config();
+        config.nginx_config = config
+            .nginx_config
+            .replace("client_max_body_size 10G;", "client_max_body_size 2G;");
+        config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cangling-nginx")
+            .unwrap()
+            .ports = vec![7700];
+        let (yaml, _) = render_manifest(&config).unwrap();
+        assert!(yaml.contains("client_max_body_size 2G;"));
+        assert!(yaml.contains("listen 7700;"));
+        assert!(!yaml.contains("client_max_body_size 10G;"));
+    }
+
+    #[test]
+    fn saved_config_without_nginx_template_uses_embedded_default() {
+        let mut saved = serde_json::to_value(default_config()).unwrap();
+        saved.as_object_mut().unwrap().remove("nginxConfig");
+        let loaded: CanglingConfig = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.nginx_config, default_nginx_config());
     }
 
     #[test]
@@ -1615,7 +2810,7 @@ mod tests {
                 }
             }
         }
-        assert!(workload_count >= 9);
+        assert!(workload_count >= 8);
     }
 
     #[test]
@@ -1769,5 +2964,15 @@ mod tests {
             .unwrap();
         application.node = "n01, n02".into();
         assert!(render_manifest(&config).is_err());
+    }
+
+    #[test]
+    fn persisted_config_includes_secrets_environment_and_applications() {
+        let json = serde_json::to_string(&default_config()).unwrap();
+        assert!(json.contains("secrets"));
+        assert!(json.contains("nginxConfig"));
+        assert!(json.contains("environment"));
+        assert!(json.contains("applications"));
+        assert!(json.contains("sharedStorage"));
     }
 }

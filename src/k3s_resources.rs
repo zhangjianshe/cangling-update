@@ -2,6 +2,7 @@
 //! Commands are built from validated arguments and never passed through a shell.
 
 use crate::error::AppError;
+use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -120,6 +121,13 @@ pub struct LogsQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PodExecQuery {
+    container: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ScaleBody {
     replicas: u32,
 }
@@ -155,6 +163,7 @@ pub fn routes() -> Router<crate::state::AppState> {
             get(resource_events),
         )
         .route("/api/k3s/pods/{namespace}/{name}/logs", get(pod_logs))
+        .route("/api/k3s/pods/{namespace}/{name}/exec", get(pod_exec))
         .route(
             "/api/k3s/workloads/{kind}/{namespace}/{name}/restart",
             post(workload_restart),
@@ -164,6 +173,62 @@ pub fn routes() -> Router<crate::state::AppState> {
             put(workload_scale),
         )
         .route("/api/k3s/pods/{namespace}/{name}", delete(delete_pod))
+}
+
+async fn pod_exec(
+    Path((namespace, name)): Path<(String, String)>,
+    Query(query): Query<PodExecQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<axum::response::Response, AppError> {
+    validate_name(&namespace, "命名空间")?;
+    validate_name(&name, "Pod 名称")?;
+    validate_name(&query.container, "容器名称")?;
+    let binary =
+        kubectl_binary().ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl"))?;
+    let program = match &binary {
+        KubectlBinary::K3s(path) | KubectlBinary::Standalone(path) => path,
+    }
+    .to_string_lossy()
+    .into_owned();
+    let args = pod_exec_arguments(&binary, &namespace, &name, &query.container);
+    let exec_query = crate::term::ExecQuery {
+        cols: query.cols,
+        rows: query.rows,
+    };
+    let banner = format!("正在进入 {namespace}/{name} · {}…\r\n", query.container);
+    Ok(ws.on_upgrade(move |socket| {
+        crate::term::run_command_socket(
+            socket,
+            program,
+            args,
+            PathBuf::from("/"),
+            exec_query,
+            banner,
+            None,
+        )
+    }))
+}
+
+fn pod_exec_arguments(
+    binary: &KubectlBinary,
+    namespace: &str,
+    name: &str,
+    container: &str,
+) -> Vec<String> {
+    kubectl_arguments(
+        binary,
+        vec![
+            "exec".into(),
+            "-it".into(),
+            name.into(),
+            "--namespace".into(),
+            namespace.into(),
+            "--container".into(),
+            container.into(),
+            "--".into(),
+            "/bin/sh".into(),
+        ],
+    )
 }
 
 fn resource_kind(id: &str) -> Result<ResourceKind, AppError> {
@@ -562,6 +627,31 @@ mod tests {
         assert!(validate_name("../pod", "名称").is_err());
         assert!(validate_name("pod;id", "名称").is_err());
         assert!(validate_name("", "名称").is_err());
+    }
+
+    #[test]
+    fn pod_exec_uses_explicit_namespace_container_and_shell() {
+        let args = pod_exec_arguments(
+            &KubectlBinary::K3s("/usr/bin/k3s".into()),
+            "cangling",
+            "cangling-map-123",
+            "cangling-map",
+        );
+        assert_eq!(
+            args,
+            vec![
+                "kubectl",
+                "exec",
+                "-it",
+                "cangling-map-123",
+                "--namespace",
+                "cangling",
+                "--container",
+                "cangling-map",
+                "--",
+                "/bin/sh",
+            ]
+        );
     }
 
     #[test]

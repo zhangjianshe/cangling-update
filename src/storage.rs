@@ -1183,8 +1183,9 @@ fn remove_fstab_entry(mnt: &str) -> Result<bool, String> {
     let content = std::fs::read_to_string(fstab).map_err(|e| e.to_string())?;
     let mut removed = false;
     let mut out = String::new();
+    let marker = format!("# cangling-storage {mnt}");
     for line in content.lines() {
-        if line.split_whitespace().nth(1) == Some(mnt) {
+        if line.trim() == marker || line.split_whitespace().nth(1) == Some(mnt) {
             removed = true;
             continue;
         }
@@ -1211,31 +1212,73 @@ fn cmd_message(out: &std::process::Output) -> String {
 // 主机共享：Samba / NFS 配置 + 启动
 // ---------------------------------------------------------------------------
 
-fn ensure_symlink(link: &str, target: &str) -> Result<String, AppError> {
-    let lp = FsPath::new(link);
-    let tp = FsPath::new(target);
-    if lp.is_symlink() {
-        let cur = std::fs::read_link(lp).unwrap_or_default();
-        if cur == tp {
-            return Ok(format!("软链接已存在 {link} → {target}"));
+fn ensure_bind_mount(source: &str, target: &str) -> Result<String, AppError> {
+    let source = source.trim();
+    let target = target.trim();
+    if source == target {
+        return Ok(String::new());
+    }
+    if source.chars().any(char::is_whitespace) || target.chars().any(char::is_whitespace) {
+        return Err(AppError::bad("绑定挂载目录不能包含空白字符"));
+    }
+    let source_path = FsPath::new(source);
+    let target_path = FsPath::new(target);
+    if !source_path.is_dir() {
+        return Err(AppError::bad(format!("导出目录不存在或不是目录：{source}")));
+    }
+    if target_path.is_symlink() {
+        let current = std::fs::read_link(target_path)
+            .map_err(|error| AppError::internal(format!("读取现有软链接失败：{error}")))?;
+        if current != source_path {
+            return Err(AppError::bad(format!(
+                "目标路径 {target} 已是指向 {} 的软链接，无法建立绑定挂载",
+                current.display()
+            )));
         }
-        return Err(AppError::bad(format!(
-            "{link} 已是指向 {} 的软链接，无法覆盖",
-            cur.display()
+        std::fs::remove_file(target_path)
+            .map_err(|error| AppError::internal(format!("移除旧软链接失败：{error}")))?;
+    } else if target_path.exists() && !target_path.is_dir() {
+        return Err(AppError::bad(format!("绑定挂载目标不是目录：{target}")));
+    }
+    std::fs::create_dir_all(target_path)
+        .map_err(|error| AppError::internal(format!("创建绑定挂载目标失败：{error}")))?;
+    if is_mounted(target) {
+        let output = Command::new("findmnt")
+            .args(["-n", "-o", "SOURCE", "--target", target])
+            .output()
+            .map_err(|error| AppError::internal(format!("检查现有挂载失败：{error}")))?;
+        let mounted_source = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let bind_suffix = format!("[{source}]");
+        if !output.status.success()
+            || (mounted_source != source && !mounted_source.ends_with(&bind_suffix))
+        {
+            return Err(AppError::bad(format!(
+                "目标路径 {target} 已被其它来源挂载：{mounted_source}"
+            )));
+        }
+        persist_fstab("none", source, target, "bind,nofail")
+            .map_err(|error| AppError::internal(format!("写入 /etc/fstab 失败：{error}")))?;
+        return Ok(format!("绑定挂载已存在：{source} → {target}"));
+    }
+    let output = Command::new("mount")
+        .args(["--bind", source, target])
+        .output()
+        .map_err(|error| AppError::internal(format!("执行绑定挂载失败：{error}")))?;
+    if !output.status.success() {
+        return Err(AppError::internal(format!(
+            "绑定挂载失败：{}",
+            cmd_message(&output)
         )));
     }
-    if lp.exists() {
-        return Err(AppError::bad(format!(
-            "{link} 已存在且不是软链接，无法覆盖"
+    if let Err(error) = persist_fstab("none", source, target, "bind,nofail") {
+        let _ = Command::new("umount").arg(target).output();
+        return Err(AppError::internal(format!(
+            "绑定挂载已回滚，写入 /etc/fstab 失败：{error}"
         )));
     }
-    if let Some(parent) = lp.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AppError::internal(format!("创建 {} 失败：{e}", parent.display())))?;
-    }
-    std::os::unix::fs::symlink(tp, lp)
-        .map_err(|e| AppError::internal(format!("创建软链接 {link} → {target} 失败：{e}")))?;
-    Ok(format!("已创建软链接 {link} → {target}"))
+    Ok(format!(
+        "已建立绑定挂载 {source} → {target}，并写入 /etc/fstab"
+    ))
 }
 
 fn start_host_share_local(s: &Storage) -> Result<String, AppError> {
@@ -1258,20 +1301,17 @@ fn prepare_host_share_path(s: &Storage) -> Result<(String, String), AppError> {
         std::fs::create_dir_all(dir)
             .map_err(|e| AppError::internal(format!("创建共享目录失败 {dir}：{e}")))?;
     }
-    // 在源主机上建立软链接，使所有节点（源主机 + 挂载节点）用同一路径访问该存储。
-    let link_note = if s.target_dir.trim().is_empty() || s.target_dir.trim() == dir {
+    // 导出目录与统一目标目录不同时，在源主机建立持久化绑定挂载。
+    let bind_note = if s.target_dir.trim().is_empty() || s.target_dir.trim() == dir {
         String::new()
     } else {
-        match ensure_symlink(&s.target_dir, dir) {
-            Ok(msg) => msg,
-            Err(e) => format!("未创建软链接：{e}"),
-        }
+        ensure_bind_mount(dir, &s.target_dir)?
     };
-    Ok((dir.to_string(), link_note))
+    Ok((dir.to_string(), bind_note))
 }
 
 fn start_cifs_share_local(s: &Storage) -> Result<String, AppError> {
-    let (dir, link_note) = prepare_host_share_path(s)?;
+    let (dir, bind_note) = prepare_host_share_path(s)?;
     let share_name = sanitize_share_name(&s.share)?;
 
     if find_smbd().is_none() {
@@ -1322,8 +1362,8 @@ fn start_cifs_share_local(s: &Storage) -> Result<String, AppError> {
     let note = reload_smbd()?;
     let mut msg =
         format!("共享 [{share_name}] 已配置（目录 {dir}，{auth_note}）并应用 smbd 配置：{note}");
-    if !link_note.is_empty() {
-        msg.push_str(&format!("；{link_note}"));
+    if !bind_note.is_empty() {
+        msg.push_str(&format!("；{bind_note}"));
     }
     Ok(msg)
 }
@@ -1355,7 +1395,7 @@ fn validate_nfs_export_path(path: &str) -> Result<(), AppError> {
 }
 
 fn start_nfs_share_local(s: &Storage) -> Result<String, AppError> {
-    let (dir, link_note) = prepare_host_share_path(s)?;
+    let (dir, bind_note) = prepare_host_share_path(s)?;
     validate_nfs_export_path(&dir)?;
     validate_nfs_export_options(&s.options)?;
     let exportfs = find_exportfs().ok_or_else(|| {
@@ -1399,8 +1439,8 @@ fn start_nfs_share_local(s: &Storage) -> Result<String, AppError> {
         ));
     }
     let mut msg = format!("NFS 共享 {dir} 已导出（{options}），服务 {service} 已启动");
-    if !link_note.is_empty() {
-        msg.push_str(&format!("；{link_note}"));
+    if !bind_note.is_empty() {
+        msg.push_str(&format!("；{bind_note}"));
     }
     Ok(msg)
 }
@@ -1756,26 +1796,7 @@ mod tests {
     }
 
     #[test]
-    fn ensure_symlink_creates_and_is_idempotent() {
-        let dir = std::env::temp_dir().join(format!("cangling-symlink-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let target = dir.join("data");
-        let link = dir.join("mnt");
-        std::fs::create_dir_all(&target).unwrap();
-
-        let msg = ensure_symlink(link.to_str().unwrap(), target.to_str().unwrap()).unwrap();
-        assert!(msg.contains("已创建软链接"), "{msg}");
-        assert!(link.is_symlink());
-
-        // 重复调用幂等。
-        let again = ensure_symlink(link.to_str().unwrap(), target.to_str().unwrap()).unwrap();
-        assert!(again.contains("已存在"), "{again}");
-
-        // 已存在普通目录时拒绝覆盖。
-        std::fs::remove_file(&link).unwrap();
-        std::fs::create_dir_all(&link).unwrap();
-        assert!(ensure_symlink(link.to_str().unwrap(), target.to_str().unwrap()).is_err());
-
-        let _ = std::fs::remove_dir_all(&dir);
+    fn bind_mount_is_skipped_when_export_and_target_match() {
+        assert_eq!(ensure_bind_mount("/data/share", "/data/share").unwrap(), "");
     }
 }

@@ -95,6 +95,8 @@ struct ImportStarted {
     job_id: String,
 }
 
+const CANGLING_APP_IMAGE_DIR: &str = "apps/base-images/linux";
+
 pub fn console_routes() -> Router<AppState> {
     Router::new()
         .route("/api/images", get(overview))
@@ -103,6 +105,150 @@ pub fn console_routes() -> Router<AppState> {
         .route("/api/images/packages", delete(delete_packages))
         .route("/api/images/node-images", delete(start_node_image_delete))
         .route("/api/images/import", post(start_import))
+        .route(
+            "/api/cangling/apps/images/import",
+            post(start_cangling_app_image_import),
+        )
+}
+
+async fn start_cangling_app_image_import(
+    State(state): State<AppState>,
+) -> Result<Json<ImportStarted>, AppError> {
+    let repo = state.paths.exe_dir.join("cangling-repo");
+    let root = repo.join(CANGLING_APP_IMAGE_DIR);
+    if !root.is_dir() {
+        return Err(AppError::not_found(format!(
+            "未找到苍灵应用离线镜像目录：{}",
+            root.display()
+        )));
+    }
+    let targets = target_nodes_with_arch(&state)?;
+    if targets.is_empty() {
+        return Err(AppError::bad("没有可导入镜像的在线节点"));
+    }
+    let mut plans = Vec::new();
+    for (id, name, arch) in targets {
+        let directory = root.join(&arch);
+        let packages = package_names(&directory).await?;
+        if packages.is_empty() {
+            return Err(AppError::not_found(format!(
+                "节点 {name} 需要 {arch} 镜像，但目录 {} 中没有镜像包",
+                directory.display()
+            )));
+        }
+        plans.push((id, name, arch, directory, packages));
+    }
+    let job = state.jobs.create();
+    let job_id = job.id.clone();
+    state
+        .jobs
+        .set(&job_id, "pending", "等待导入苍灵应用镜像", 0, 0);
+    set_active_image_job(&state, &job_id);
+    let run_state = state.clone();
+    tokio::spawn(async move {
+        let _guard = run_state.image_import_lock.lock().await;
+        let total = plans.iter().map(|plan| plan.4.len()).sum::<usize>() as u64;
+        let mut completed = 0u64;
+        for (id, name, arch, directory, packages) in plans {
+            for filename in packages {
+                run_state.jobs.set(
+                    &job_id,
+                    "import-app-images",
+                    &format!("正在向 {name} 导入 {filename}（{arch}）"),
+                    completed,
+                    total,
+                );
+                if let Err(error) = import_cluster(
+                    &run_state,
+                    &directory,
+                    &filename,
+                    std::slice::from_ref(&id),
+                    &job_id,
+                    false,
+                )
+                .await
+                {
+                    run_state.jobs.finish_err(&job_id, &error.to_string());
+                    clear_active_image_job(&run_state, &job_id);
+                    return;
+                }
+                completed += 1;
+                run_state.jobs.set(
+                    &job_id,
+                    "import-app-images",
+                    &format!("{name} 已导入 {filename}"),
+                    completed,
+                    total,
+                );
+            }
+        }
+        run_state
+            .jobs
+            .finish_ok(&job_id, "苍灵应用镜像已按架构导入全部在线节点");
+        clear_active_image_job(&run_state, &job_id);
+    });
+    Ok(Json(ImportStarted { job_id: job.id }))
+}
+
+async fn package_names(directory: &FsPath) -> Result<Vec<String>, AppError> {
+    let mut packages = scan_packages(directory)
+        .await?
+        .into_iter()
+        .map(|package| package.name)
+        .collect::<Vec<_>>();
+    packages.sort();
+    Ok(packages)
+}
+
+fn normalize_arch(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "x86_64" | "amd64" | "x64" => Some("amd64"),
+        "aarch64" | "arm64" => Some("arm64"),
+        _ => None,
+    }
+}
+
+fn target_nodes_with_arch(state: &AppState) -> Result<Vec<(String, String, String)>, AppError> {
+    if state.cluster.role == Role::Standalone {
+        let arch = normalize_arch(std::env::consts::ARCH).ok_or_else(|| {
+            AppError::bad(format!("不支持的本机架构：{}", std::env::consts::ARCH))
+        })?;
+        return Ok(vec![("local".into(), "本机".into(), arch.into())]);
+    }
+    if state.cluster.role != Role::Master {
+        return Err(AppError::bad("请在主节点导入苍灵应用镜像"));
+    }
+    let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+    let mut stmt =
+        conn.prepare("SELECT id,name,last_seen,info_json FROM cluster_nodes ORDER BY name")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let mut targets = Vec::new();
+    for row in rows {
+        let (id, name, last_seen, info_json) = row?;
+        if !is_online(&last_seen) {
+            continue;
+        }
+        let raw_arch = serde_json::from_str::<serde_json::Value>(&info_json)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/cpu/arch")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        let arch = normalize_arch(&raw_arch)
+            .ok_or_else(|| AppError::bad(format!("无法识别节点 {name} 的 CPU 架构：{raw_arch}")))?;
+        targets.push((id, name, arch.into()));
+    }
+    Ok(targets)
 }
 
 async fn console_active_job(
@@ -506,7 +652,7 @@ fn queue_import(
                 .jobs
                 .set(&job_id, "import", &format!("自动部署 {filename}"), 0, 0);
         }
-        if let Err(err) = import_cluster(&state, &dir, &filename, &node_ids, &job_id).await {
+        if let Err(err) = import_cluster(&state, &dir, &filename, &node_ids, &job_id, true).await {
             state.jobs.finish_err(&job_id, &err.to_string());
         }
         clear_active_image_job(&state, &job_id);
@@ -719,6 +865,7 @@ async fn import_cluster(
     filename: &str,
     selected: &[String],
     job_id: &str,
+    finish_job: bool,
 ) -> Result<(), AppError> {
     let targets = target_nodes(state, selected)?;
     if targets.is_empty() {
@@ -729,13 +876,15 @@ async fn import_cluster(
     let token = state.cluster.token.as_deref().unwrap_or("");
     let master = master_addr(state).unwrap_or_else(|_| format!("127.0.0.1:{}", state.port));
     for (idx, (id, name, addr)) in targets.into_iter().enumerate() {
-        state.jobs.set(
-            job_id,
-            "import",
-            &format!("正在向 {name} 导入 {filename}"),
-            idx as u64,
-            total,
-        );
+        if finish_job {
+            state.jobs.set(
+                job_id,
+                "import",
+                &format!("正在向 {name} 导入 {filename}"),
+                idx as u64,
+                total,
+            );
+        }
         if id == self_id || state.cluster.role == Role::Standalone {
             import_file(&dir.join(filename)).await?;
         } else {
@@ -778,13 +927,15 @@ async fn import_cluster(
                     serde_json::from_value(json).map_err(|e| {
                         AppError::internal(format!("解析节点 {name} 传输进度失败: {e}"))
                     })?;
-                state.jobs.set(
-                    job_id,
-                    "image-transfer",
-                    &format!("{name}: {}", progress.message),
-                    progress.current,
-                    progress.total,
-                );
+                if finish_job {
+                    state.jobs.set(
+                        job_id,
+                        "image-transfer",
+                        &format!("{name}: {}", progress.message),
+                        progress.current,
+                        progress.total,
+                    );
+                }
                 if progress.done {
                     if let Some(error) = progress.error {
                         return Err(AppError::internal(format!("节点 {name} 导入失败: {error}")));
@@ -793,17 +944,21 @@ async fn import_cluster(
                 }
             }
         }
-        state.jobs.set(
-            job_id,
-            "import",
-            &format!("{name} 导入完成"),
-            idx as u64 + 1,
-            total,
-        );
+        if finish_job {
+            state.jobs.set(
+                job_id,
+                "import",
+                &format!("{name} 导入完成"),
+                idx as u64 + 1,
+                total,
+            );
+        }
     }
-    state
-        .jobs
-        .finish_ok(job_id, &format!("{filename} 已导入全部所选节点"));
+    if finish_job {
+        state
+            .jobs
+            .finish_ok(job_id, &format!("{filename} 已导入全部所选节点"));
+    }
     Ok(())
 }
 
