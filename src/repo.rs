@@ -421,6 +421,8 @@ async fn run_installer_in_dir(
     cmd.args(&args)
         .current_dir(dir)
         .envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .env("CANGLING_REPO_PACKAGE", package)
+        .env("DEBIAN_FRONTEND", "noninteractive")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
