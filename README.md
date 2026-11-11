@@ -182,6 +182,18 @@ updates/
 ./cangling-update update --import /path/to/cangling-update-linux-arm64
 ```
 
+### 数据初始化
+
+控制台「运行 → 数据初始化」提供离线图层组、全球 ETOPO DEM、cl-base 基础数据库和行政区划数据库初始化。
+图层组与 DEM 从相邻 `cangling-repo/apps/initial-data/ai-china` 读取，DEM 源文件逐个校验 SHA-256；
+源文件未改变时复用已有发布版本，更新后重新发布 `global-etopo2022`。
+
+行政区划 SQL 来自 `apps/initial-data/sys_region_full.zip`，写入 `cis-postgis` 的
+`biz.cl.t_sys_region` 和 `cl-base.public.sys_region`。已有记录的表跳过数据导入，
+仍检查几何字段的有效 GiST 空间索引；缺失时并发补建，并更新统计信息。
+只有部分记录适用的索引、无效索引不会作为完整索引使用；已有有效索引不会重复创建。
+页面会在需要补建索引时继续提供初始化按钮。
+
 ### 集群初始化（离线）
 
 主节点控制台的「集群」页面提供**初始化集群**按钮：填写集群名称后一键完成各节点基线软件安装。目标集群可完全离线，所有软件包都从主节点的 `repo/cangling-repo/<本机平台>/` 里读取安装脚本执行。

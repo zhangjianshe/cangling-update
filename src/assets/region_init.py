@@ -60,6 +60,45 @@ def pending_targets(remote):
     return pending, completed
 
 
+def has_spatial_index(remote, database, schema, table):
+    # A partial, expression, invalid or unfinished index cannot cover all rows.
+    return psql(remote, database, f"""SELECT EXISTS (
+      SELECT 1 FROM pg_index i
+      JOIN pg_class c ON c.oid=i.indexrelid
+      JOIN pg_am am ON am.oid=c.relam
+      JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attname='geom'
+      JOIN pg_opclass op ON op.oid=i.indclass[0]
+      WHERE i.indrelid='{schema}.{table}'::regclass AND am.amname='gist'
+        AND i.indisvalid AND i.indisready AND i.indpred IS NULL
+        AND i.indexprs IS NULL AND i.indnkeyatts=1 AND i.indkey[0]=a.attnum
+        AND op.opcname='gist_geometry_ops_2d'
+    )""") == "t"
+
+
+def postgis_schema(remote, database):
+    name = psql(remote, database, "SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='postgis'")
+    if not name:
+        raise RuntimeError(f"{database} 尚未安装 PostGIS 扩展")
+    return '"' + name.replace('"', '""') + '"'
+
+
+def ensure_spatial_index(remote, item):
+    _, database, schema, table = item
+    if has_spatial_index(remote, database, schema, table):
+        return f"{database}.{schema}.{table} 空间索引已就绪"
+    extension = postgis_schema(remote, database)
+    name = f"{table}_geom_gist_idx"
+    if psql(remote, database, f"SELECT to_regclass('{schema}.{name}') IS NOT NULL") == "t":
+        name += "_" + uuid.uuid4().hex[:8]
+    report(95, f"正在补建 {database}.{schema}.{table} 空间索引")
+    # Concurrent creation permits normal writes and must run outside a transaction.
+    psql(remote, database, f'CREATE INDEX CONCURRENTLY "{name}" ON "{schema}"."{table}" USING gist ("geom" {extension}."gist_geometry_ops_2d")')
+    psql(remote, database, f'ANALYZE "{schema}"."{table}"')
+    if not has_spatial_index(remote, database, schema, table):
+        raise RuntimeError(f"{database}.{schema}.{table} 空间索引校验失败")
+    return f"{database}.{schema}.{table} 空间索引已补建"
+
+
 def inspect(archive):
     if not os.path.isfile(archive):
         raise RuntimeError(f"未找到行政区划数据包：{archive}")
@@ -77,20 +116,19 @@ def inspect(archive):
 
 def check(archive):
     inspect(archive)
-    pending, completed = pending_targets(target())
-    return {"available": bool(pending), "initialized": not pending,
-            "reason": "行政区划数据已存在，无需初始化" if not pending else "",
+    remote = target()
+    pending, completed = pending_targets(remote)
+    repairs = [f"{d}.{s}.{t}" for _, d, s, t in completed if not has_spatial_index(remote, d, s, t)]
+    return {"available": bool(pending or repairs), "initialized": not pending and not repairs,
+            "reason": "行政区划数据和空间索引已就绪" if not pending and not repairs else "",
+            "indexRepairs": repairs,
             "pending": [f"{d}.{s}.{t}" for _, d, s, t in pending],
             "skipped": [f"{d}.{s}.{t}" for _, d, s, t in completed]}
 
 
 def import_one(remote, archive, item, percent):
     entry, database, schema, table = item
-    extension = psql(remote, database, "SELECT extnamespace::regnamespace::text FROM pg_extension WHERE extname='postgis'")
-    if not extension:
-        raise RuntimeError(f"{database} 尚未安装 PostGIS 扩展")
-    # Identifiers are obtained from PostgreSQL and escaped, never interpolated raw.
-    extension = '"' + extension.replace('"', '""') + '"'
+    extension = postgis_schema(remote, database)
     stage = "region_init_" + uuid.uuid4().hex
     relation = f'"{schema}"."{table}"'
     sequence = f'"{schema}"."sys_region_id_seq"'
@@ -167,6 +205,8 @@ def run(archive):
             raise RuntimeError("行政区划数据包 SHA-256 不匹配")
         for index, item in enumerate(pending):
             summaries.append(import_one(remote, archive, item, 5 + index * 45))
+    for item in TARGETS:
+        summaries.append(ensure_spatial_index(remote, item))
     print("RESULT\t" + "；".join(summaries), flush=True)
 
 

@@ -19,6 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 const PACKAGE: &str = "apps/initial-data/ai-china";
+const DEM_DATASET: &str = "global-etopo2022";
 const BASE_JAR: &str = "/opt/cangling/jars/np4-base-server-1.0.0.jar";
 const BASE_SCRIPT: &str = include_str!("assets/base_init.py");
 const REGION_SCRIPT: &str = include_str!("assets/region_init.py");
@@ -47,6 +48,38 @@ struct DataFile {
     name: String,
     bytes: u64,
     sha256: String,
+}
+
+struct ExtractResult {
+    files: usize,
+    changed: usize,
+}
+
+fn dem_package(package: &Path) -> PathBuf {
+    package.join("dem").join(DEM_DATASET)
+}
+
+fn package_files() -> [&'static str; 4] {
+    [
+        "shape-data.tar.gz",
+        "data-manifest.json",
+        "bundle.json",
+        "import.py",
+    ]
+}
+
+fn package_available(package: &Path) -> bool {
+    package_files()
+        .iter()
+        .all(|name| package.join(name).is_file())
+        && [
+            "source.tar.gz",
+            "data-manifest.json",
+            "config.json",
+            "import_dem.py",
+        ]
+        .iter()
+        .all(|name| dem_package(package).join(name).is_file())
 }
 
 pub fn routes() -> Router<AppState> {
@@ -195,7 +228,9 @@ async fn inspect_region_package(state: &AppState) -> Value {
         Ok(output) => {
             json!({"available":false,"reason":String::from_utf8_lossy(&output.stderr).trim()})
         }
-        Err(error) => json!({"available":false,"reason":format!("无法检查行政区划数据包：{error}")}),
+        Err(error) => {
+            json!({"available":false,"reason":format!("无法检查行政区划数据包：{error}")})
+        }
     }
 }
 
@@ -213,6 +248,7 @@ async fn region_status(State(state): State<AppState>) -> Json<Value> {
         "initialized": availability["initialized"],
         "pending": availability["pending"],
         "skipped": availability["skipped"],
+        "indexRepairs": availability["indexRepairs"],
         "job": job,
         "output": snapshot.region_output,
     }))
@@ -234,7 +270,9 @@ async fn region_start(State(state): State<AppState>) -> Result<Json<Value>, AppE
         .and_then(|id| state.jobs.get(id))
     {
         if !job.done {
-            return Err(AppError::conflict("行政区划数据库正在初始化，请查看当前进度"));
+            return Err(AppError::conflict(
+                "行政区划数据库正在初始化，请查看当前进度",
+            ));
         }
     }
     let job = state.jobs.create();
@@ -261,9 +299,13 @@ fn add_region_output(state: &AppState, line: String) {
 }
 
 async fn run_region_init(state: &AppState, job_id: &str) -> Result<(), AppError> {
-    state
-        .jobs
-        .set(job_id, "checking", "检查行政区划数据包和 cis-postgis", 0, 100);
+    state.jobs.set(
+        job_id,
+        "checking",
+        "检查行政区划数据包和 cis-postgis",
+        0,
+        100,
+    );
     let mut child = Command::new("python3")
         .args(["-c", REGION_SCRIPT, "run"])
         .arg(crate::repo::repo_root(&state.paths).join(REGION_PACKAGE))
@@ -276,10 +318,16 @@ async fn run_region_init(state: &AppState, job_id: &str) -> Result<(), AppError>
         .stdout
         .take()
         .ok_or_else(|| AppError::internal("缺少初始化脚本输出"))?;
-    let stderr = child.stderr.take().ok_or_else(|| AppError::internal("缺少初始化错误输出"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::internal("缺少初始化错误输出"))?;
     let stderr_task = tokio::spawn(async move {
         let mut text = String::new();
-        BufReader::new(stderr).read_to_string(&mut text).await.map(|_| text)
+        BufReader::new(stderr)
+            .read_to_string(&mut text)
+            .await
+            .map(|_| text)
     });
     let mut lines = BufReader::new(stdout).lines();
     let mut summary = String::new();
@@ -298,7 +346,9 @@ async fn run_region_init(state: &AppState, job_id: &str) -> Result<(), AppError>
             add_region_output(state, line);
         }
     }
-    let stderr = stderr_task.await.map_err(|error| AppError::internal(error.to_string()))??;
+    let stderr = stderr_task
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))??;
     let exit = child.wait().await?;
     if !exit.success() {
         return Err(AppError::bad(stderr.trim().to_string()));
@@ -319,10 +369,7 @@ async fn status(State(state): State<AppState>) -> Json<Value> {
     let snapshot = state.data_init.lock().expect("data init state");
     let job = snapshot.job_id.as_deref().and_then(|id| state.jobs.get(id));
     Json(json!({
-        "available": package.join("shape-data.tar.gz").is_file()
-            && package.join("data-manifest.json").is_file()
-            && package.join("bundle.json").is_file()
-            && package.join("import.py").is_file(),
+        "available": package_available(&package),
         "packagePath": package.display().to_string(),
         "job": job,
         "output": snapshot.output,
@@ -331,16 +378,24 @@ async fn status(State(state): State<AppState>) -> Json<Value> {
 
 async fn start(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let package = package_dir(&state);
-    for filename in [
-        "shape-data.tar.gz",
-        "data-manifest.json",
-        "bundle.json",
-        "import.py",
-    ] {
+    for filename in package_files() {
         if !package.join(filename).is_file() {
             return Err(AppError::bad(format!(
                 "基础数据包缺少 {filename}：{}",
                 package.display()
+            )));
+        }
+    }
+    for filename in [
+        "source.tar.gz",
+        "data-manifest.json",
+        "config.json",
+        "import_dem.py",
+    ] {
+        if !dem_package(&package).join(filename).is_file() {
+            return Err(AppError::bad(format!(
+                "DEM 数据包缺少 {filename}：{}",
+                dem_package(&package).display()
             )));
         }
     }
@@ -399,6 +454,15 @@ async fn run_import(state: &AppState, job_id: &str, package: &Path) -> Result<()
             "cangling-map 的 geodata 宿主机目录不符合预期",
         ));
     }
+    let data_host_path = deployment["spec"]["template"]["spec"]["volumes"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["name"] == "data"))
+        .and_then(|item| item["hostPath"]["path"].as_str())
+        .ok_or_else(|| AppError::bad("cangling-map 未配置 data HostPath"))?;
+    let data_host_path = PathBuf::from(data_host_path);
+    if !data_host_path.is_absolute() || !data_host_path.ends_with("cangling-map/data") {
+        return Err(AppError::bad("cangling-map 的 data 宿主机目录不符合预期"));
+    }
     let pods = crate::cangling_apps::kubectl_resource_json(namespace, "pods").await?;
     let node = pods["items"]
         .as_array()
@@ -445,17 +509,21 @@ async fn run_import(state: &AppState, job_id: &str, package: &Path) -> Result<()
     let jobs = state.jobs.clone();
     let id = job_id.to_string();
     let archive = package.join("shape-data.tar.gz");
-    let extracted =
-        tokio::task::spawn_blocking(move || extract_data(&archive, &target, &manifest, &jobs, &id))
-            .await
-            .map_err(|error| AppError::internal(format!("解包任务异常：{error}")))??;
+    let extracted = tokio::task::spawn_blocking(move || {
+        extract_data(&archive, &target, &manifest, &jobs, &id, 0, 35)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("解包任务异常：{error}")))??;
     add_output(
         state,
-        format!("数据文件校验完成：{extracted} 个；容器路径 /geodata/china"),
+        format!(
+            "图层数据校验完成：{} 个文件；容器路径 /geodata/china",
+            extracted.files
+        ),
     );
     state
         .jobs
-        .set(job_id, "importing", "正在导入目录、样式与图层", 75, 100);
+        .set(job_id, "importing", "正在导入目录、样式与图层", 35, 100);
 
     let bundle: Value = serde_json::from_slice(&fs::read(package.join("bundle.json"))?)
         .map_err(|error| AppError::bad(format!("图层配置无效：{error}")))?;
@@ -490,7 +558,7 @@ async fn run_import(state: &AppState, job_id: &str, package: &Path) -> Result<()
             || line.starts_with("导入完成:")
         {
             completed += 1;
-            let percent = 75 + (completed * 24 / total_steps.max(1));
+            let percent = 35 + (completed * 9 / total_steps.max(1));
             state
                 .jobs
                 .set(job_id, "importing", &line, percent as u64, 100);
@@ -505,8 +573,57 @@ async fn run_import(state: &AppState, job_id: &str, package: &Path) -> Result<()
     if !exit.success() {
         return Err(AppError::bad(stderr.trim().to_string()));
     }
+    add_output(state, "行政区划图层组导入完成；开始处理 DEM 数据".into());
+    let dem = dem_package(package);
+    let dem_manifest: DataManifest =
+        serde_json::from_slice(&fs::read(dem.join("data-manifest.json"))?)
+            .map_err(|error| AppError::bad(format!("DEM 数据清单无效：{error}")))?;
+    if dem_manifest.format != "cangling-map-dem-v1" || dem_manifest.files.is_empty() {
+        return Err(AppError::bad("DEM 数据清单格式不受支持"));
+    }
+    let dem_archive = dem.join("source.tar.gz");
+    let dem_target = data_host_path.join("dem").join(DEM_DATASET).join("source");
+    let jobs = state.jobs.clone();
+    let id = job_id.to_string();
+    let dem_extracted = tokio::task::spawn_blocking(move || {
+        extract_data(&dem_archive, &dem_target, &dem_manifest, &jobs, &id, 45, 49)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("DEM 解包任务异常：{error}")))??;
+    add_output(
+        state,
+        format!(
+            "DEM 数据校验完成：{} 个文件，{} 个更新；容器路径 /data/dem/{DEM_DATASET}/source",
+            dem_extracted.files, dem_extracted.changed
+        ),
+    );
+    state
+        .jobs
+        .set(job_id, "importing", "正在发布 DEM 服务配置", 95, 100);
+    let mut dem_command = Command::new("python3");
+    dem_command
+        .arg(dem.join("import_dem.py"))
+        .arg(format!("http://{cluster_ip}:3000"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if dem_extracted.changed > 0 {
+        dem_command.arg("--force");
+    }
+    let dem_result = dem_command.output().await?;
+    for line in String::from_utf8_lossy(&dem_result.stdout).lines() {
+        add_output(state, line.to_string());
+    }
+    if !dem_result.status.success() {
+        return Err(AppError::bad(
+            String::from_utf8_lossy(&dem_result.stderr)
+                .trim()
+                .to_string(),
+        ));
+    }
     let summary = format!(
-        "基础数据导入完成：{catalog_count} 个目录项、{style_count} 个样式、{layer_count} 个发布图层、1 个 ai:china 图层组。重复导入会更新同名配置。"
+        "基础数据导入完成：{catalog_count} 个目录项、{style_count} 个样式、{layer_count} 个发布图层、1 个 ai:china 图层组；DEM 服务已发布 {DEM_DATASET} 数据集（{} 个 GeoTIFF）。重复导入会校验文件并复用未变更的 DEM 配置。",
+        dem_extracted.files,
     );
     add_output(state, summary.clone());
     state.jobs.finish_ok(job_id, &summary);
@@ -516,7 +633,7 @@ async fn run_import(state: &AppState, job_id: &str, package: &Path) -> Result<()
 fn sha256_file(path: &Path) -> Result<String, AppError> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
+    let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         let n = file.read(&mut buffer)?;
         if n == 0 {
@@ -533,7 +650,9 @@ fn extract_data(
     manifest: &DataManifest,
     jobs: &crate::progress::JobHub,
     job_id: &str,
-) -> Result<usize, AppError> {
+    progress_start: u64,
+    progress_span: u64,
+) -> Result<ExtractResult, AppError> {
     fs::create_dir_all(target)?;
     let expected: HashMap<_, _> = manifest
         .files
@@ -542,6 +661,7 @@ fn extract_data(
         .collect();
     let mut seen = HashSet::new();
     let mut processed = 0u64;
+    let mut changed = 0usize;
     let decoder = GzDecoder::new(File::open(archive_path)?);
     let mut archive = Archive::new(decoder);
     for result in archive.entries()? {
@@ -579,7 +699,7 @@ fn extract_data(
             Some(File::create(&temp)?)
         };
         let mut hash = Sha256::new();
-        let mut buffer = [0u8; 1024 * 1024];
+        let mut buffer = vec![0u8; 1024 * 1024];
         loop {
             let n = entry.read(&mut buffer)?;
             if n == 0 {
@@ -590,7 +710,9 @@ fn extract_data(
                 out.write_all(&buffer[..n])?;
             }
             processed += n as u64;
-            let percent = (processed.saturating_mul(75) / manifest.total_bytes.max(1)).min(75);
+            let percent = progress_start
+                + (processed.saturating_mul(progress_span) / manifest.total_bytes.max(1))
+                    .min(progress_span);
             jobs.set(
                 job_id,
                 "extracting",
@@ -610,10 +732,72 @@ fn extract_data(
             drop(out);
             fs::set_permissions(&temp, std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
             fs::rename(temp, destination)?;
+            changed += 1;
         }
     }
     if seen.len() != expected.len() || processed != manifest.total_bytes {
         return Err(AppError::bad("基础数据包缺少文件或大小与清单不符"));
     }
-    Ok(seen.len())
+    Ok(ExtractResult {
+        files: seen.len(),
+        changed,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::{write::GzEncoder, Compression};
+
+    #[test]
+    fn dem_extraction_reuses_verified_files_and_preserves_data_on_bad_hash() {
+        struct TestDir(PathBuf);
+        impl Drop for TestDir {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let root =
+            TestDir(std::env::temp_dir().join(format!("dem-init-test-{}", uuid::Uuid::new_v4())));
+        fs::create_dir_all(&root.0).unwrap();
+        let archive = root.0.join("source.tar.gz");
+        let target = root.0.join("source");
+        let payload = b"test raster contents";
+        let make_archive = |data: &[u8]| {
+            let encoder = GzEncoder::new(File::create(&archive).unwrap(), Compression::default());
+            let mut tar = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, "test.tif", data).unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+        };
+        make_archive(payload);
+        let manifest = DataManifest {
+            format: "cangling-map-dem-v1".into(),
+            total_bytes: payload.len() as u64,
+            files: vec![DataFile {
+                name: "test.tif".into(),
+                bytes: payload.len() as u64,
+                sha256: format!("{:x}", Sha256::digest(payload)),
+            }],
+        };
+        let jobs = crate::progress::JobHub::default();
+        let job = jobs.create();
+        let extract = || extract_data(&archive, &target, &manifest, &jobs, &job.id, 45, 49);
+        let first = extract().unwrap();
+        assert_eq!((first.files, first.changed), (1, 1));
+        let repeat = extract().unwrap();
+        assert_eq!((repeat.files, repeat.changed), (1, 0));
+        assert_eq!(jobs.get(&job.id).unwrap().percent, 94);
+
+        fs::write(target.join("test.tif"), b"damaged raster bytes").unwrap();
+        assert_eq!(extract().unwrap().changed, 1);
+        assert_eq!(fs::read(target.join("test.tif")).unwrap(), payload);
+
+        make_archive(&vec![b'x'; payload.len()]);
+        assert!(extract().is_err());
+        assert_eq!(fs::read(target.join("test.tif")).unwrap(), payload);
+    }
 }
