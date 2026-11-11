@@ -4293,9 +4293,29 @@
         }
         output.textContent = (data.output || []).join("\n");
         output.hidden = !data.output || !data.output.length;
-        if (job && !job.done && !canglingDataInitPoll.timer) {
+        const base = await api("/api/cangling/apps/base-init");
+        const baseJob = base.job;
+        const baseButton = $("#cangling-base-init-start");
+        const baseStatus = $("#cangling-base-init-status");
+        const baseProgress = $("#cangling-base-init-progress");
+        const basePercent = $("#cangling-base-init-percent");
+        const baseOutput = $("#cangling-base-init-output");
+        baseButton.disabled = !base.available || Boolean(baseJob && !baseJob.done);
+        baseStatus.className = baseJob && baseJob.error ? "flash err" : baseJob && baseJob.done ? "flash ok" : "hint";
+        baseStatus.textContent = baseJob ? baseJob.message : base.available
+          ? "初始化脚本已就绪；目标为 cis-postgis 中的 cl-base 数据库。"
+          : (base.reason || "未找到可用的 SQL 脚本：" + base.jarPath);
+        baseProgress.hidden = !baseJob || baseJob.done;
+        basePercent.hidden = !baseJob || baseJob.done;
+        if (baseJob && !baseJob.done) {
+          baseProgress.value = baseJob.percent || 0;
+          basePercent.textContent = `${baseJob.percent || 0}%`;
+        }
+        baseOutput.textContent = (base.output || []).join("\n");
+        baseOutput.hidden = !base.output || !base.output.length;
+        if (((job && !job.done) || (baseJob && !baseJob.done)) && !canglingDataInitPoll.timer) {
           canglingDataInitPoll.timer = setInterval(loadCanglingDataInit, 1200);
-        } else if ((!job || job.done) && canglingDataInitPoll.timer) {
+        } else if ((!job || job.done) && (!baseJob || baseJob.done) && canglingDataInitPoll.timer) {
           clearInterval(canglingDataInitPoll.timer);
           canglingDataInitPoll.timer = null;
         }
@@ -4316,6 +4336,20 @@
       } catch (error) {
         flash("err", "导入基础数据失败：" + error.message);
         await loadCanglingDataInit();
+      }
+    }
+
+    async function startCanglingBaseInit() {
+      const button = $("#cangling-base-init-start");
+      button.disabled = true;
+      try {
+        await api("/api/cangling/apps/base-init", { method: "POST" });
+        await loadCanglingDataInit();
+      } catch (error) {
+        const status = $("#cangling-base-init-status");
+        status.className = "flash err";
+        status.textContent = "base 初始化失败：" + error.message;
+        button.disabled = false;
       }
     }
 
@@ -4559,6 +4593,12 @@
             <div class="row" style="margin-top:12px;align-items:center"><progress id="cangling-data-init-progress" max="100" value="0" style="width:min(520px,80vw);height:14px" hidden></progress><strong id="cangling-data-init-percent"></strong></div>
             <pre id="cangling-data-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>
           </div>
+          <div class="card" style="margin-top:16px">
+            <div class="cangling-section-head"><div><h3>base 初始化</h3><p class="hint">从 np4-base-server-1.0.0.jar 读取 PostgreSQL 建表和基础数据脚本，初始化 cis-postgis 中的 cl-base 数据库。仅在数据库尚无业务表时执行。</p></div><button type="button" class="btn primary" id="cangling-base-init-start" disabled>初始化 base 数据库</button></div>
+            <div id="cangling-base-init-status" class="hint">正在检查 JAR 与数据库…</div>
+            <div class="row" style="margin-top:12px;align-items:center"><progress id="cangling-base-init-progress" max="100" value="0" style="width:min(520px,80vw);height:14px" hidden></progress><strong id="cangling-base-init-percent" hidden></strong></div>
+            <pre id="cangling-base-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>
+          </div>
         </section>
         </section>
       </div>`;
@@ -4586,6 +4626,7 @@
       $("#cangling-services-refresh").onclick = () => loadCanglingRuntime(false);
       $("#cangling-configs-refresh").onclick = () => loadCanglingRuntime(false);
       $("#cangling-data-init-start").onclick = startCanglingDataInit;
+      $("#cangling-base-init-start").onclick = startCanglingBaseInit;
       const primaryNodeSelect = $("#cangling-primary-node-select");
       if (primaryNodeSelect) primaryNodeSelect.onclick = openCanglingPrimaryNodePicker;
       const namespaceInput = $("#cangling-namespace");

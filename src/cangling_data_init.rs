@@ -19,11 +19,15 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 const PACKAGE: &str = "apps/initial-data/ai-china";
+const BASE_JAR: &str = "/opt/cangling/jars/np4-base-server-1.0.0.jar";
+const BASE_SCRIPT: &str = include_str!("assets/base_init.py");
 
 #[derive(Default)]
 pub struct DataInitState {
     job_id: Option<String>,
     output: Vec<String>,
+    base_job_id: Option<String>,
+    base_output: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -42,7 +46,132 @@ struct DataFile {
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/api/cangling/apps/data-init", get(status).post(start))
+    Router::new()
+        .route("/api/cangling/apps/data-init", get(status).post(start))
+        .route(
+            "/api/cangling/apps/base-init",
+            get(base_status).post(base_start),
+        )
+}
+
+async fn inspect_base_jar() -> Value {
+    let output = Command::new("python3")
+        .args(["-c", BASE_SCRIPT, "check", BASE_JAR])
+        .output()
+        .await;
+    match output {
+        Ok(output) if output.status.success() => serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|_| json!({"available":false,"reason":"无法解析 JAR 检查结果"})),
+        Ok(output) => {
+            json!({"available":false,"reason":String::from_utf8_lossy(&output.stderr).trim()})
+        }
+        Err(error) => json!({"available":false,"reason":format!("无法检查 JAR：{error}")}),
+    }
+}
+
+async fn base_status(State(state): State<AppState>) -> Json<Value> {
+    let availability = inspect_base_jar().await;
+    let snapshot = state.data_init.lock().expect("data init state");
+    let job = snapshot
+        .base_job_id
+        .as_deref()
+        .and_then(|id| state.jobs.get(id));
+    Json(json!({
+        "available": availability["available"],
+        "reason": availability["reason"],
+        "jarPath": BASE_JAR,
+        "job": job,
+        "output": snapshot.base_output,
+    }))
+}
+
+async fn base_start(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let availability = inspect_base_jar().await;
+    if availability["available"] != true {
+        return Err(AppError::bad(
+            availability["reason"]
+                .as_str()
+                .unwrap_or("JAR 中缺少初始化脚本"),
+        ));
+    }
+    let mut current = state.data_init.lock().expect("data init state");
+    if let Some(job) = current
+        .base_job_id
+        .as_deref()
+        .and_then(|id| state.jobs.get(id))
+    {
+        if !job.done {
+            return Err(AppError::conflict("base 数据库正在初始化，请查看当前进度"));
+        }
+    }
+    let job = state.jobs.create();
+    current.base_job_id = Some(job.id.clone());
+    current.base_output.clear();
+    drop(current);
+    let job_id = job.id.clone();
+    tokio::spawn(async move {
+        if let Err(error) = run_base_init(&state, &job_id).await {
+            let message = error.to_string();
+            add_base_output(&state, format!("初始化失败：{message}"));
+            state.jobs.finish_err(&job_id, &message);
+        }
+    });
+    Ok(Json(json!({"jobId":job.id})))
+}
+
+fn add_base_output(state: &AppState, line: String) {
+    let mut current = state.data_init.lock().expect("data init state");
+    current.base_output.push(line);
+    if current.base_output.len() > 100 {
+        current.base_output.remove(0);
+    }
+}
+
+async fn run_base_init(state: &AppState, job_id: &str) -> Result<(), AppError> {
+    state
+        .jobs
+        .set(job_id, "checking", "检查 JAR 和 cis-postgis", 0, 100);
+    let mut child = Command::new("python3")
+        .args(["-c", BASE_SCRIPT, "run", BASE_JAR])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| AppError::internal(format!("启动 base 初始化脚本失败：{error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::internal("缺少初始化脚本输出"))?;
+    let mut lines = BufReader::new(stdout).lines();
+    let mut summary = String::new();
+    while let Some(line) = lines.next_line().await? {
+        if let Some(rest) = line.strip_prefix("PROGRESS\t") {
+            if let Some((percent, message)) = rest.split_once('\t') {
+                if let Ok(percent) = percent.parse::<u64>() {
+                    state.jobs.set(job_id, "importing", message, percent, 100);
+                    add_base_output(state, message.to_string());
+                }
+            }
+        } else if let Some(message) = line.strip_prefix("RESULT\t") {
+            summary = message.to_string();
+            add_base_output(state, summary.clone());
+        } else {
+            add_base_output(state, line);
+        }
+    }
+    let mut stderr = String::new();
+    if let Some(stream) = child.stderr.take() {
+        BufReader::new(stream).read_to_string(&mut stderr).await?;
+    }
+    let exit = child.wait().await?;
+    if !exit.success() {
+        return Err(AppError::bad(stderr.trim().to_string()));
+    }
+    if summary.is_empty() {
+        return Err(AppError::internal("初始化脚本没有返回结果说明"));
+    }
+    state.jobs.finish_ok(job_id, &summary);
+    Ok(())
 }
 
 fn package_dir(state: &AppState) -> PathBuf {
