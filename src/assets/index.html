@@ -4313,9 +4313,30 @@
         }
         baseOutput.textContent = (base.output || []).join("\n");
         baseOutput.hidden = !base.output || !base.output.length;
-        if (((job && !job.done) || (baseJob && !baseJob.done)) && !canglingDataInitPoll.timer) {
+        const region = await api("/api/cangling/apps/region-init");
+        const regionJob = region.job;
+        const regionButton = $("#cangling-region-init-start");
+        const regionStatus = $("#cangling-region-init-status");
+        const regionProgress = $("#cangling-region-init-progress");
+        const regionPercent = $("#cangling-region-init-percent");
+        const regionOutput = $("#cangling-region-init-output");
+        if (!regionButton || !regionStatus || !regionProgress || !regionPercent || !regionOutput) return;
+        regionButton.disabled = !region.available || Boolean(regionJob && !regionJob.done);
+        regionStatus.className = regionJob && regionJob.error ? "flash err" : regionJob && regionJob.done ? "flash ok" : "hint";
+        regionStatus.textContent = regionJob ? regionJob.message : region.available
+          ? "行政区划 SQL 已就绪；可初始化：" + (region.pending || []).join("、")
+          : (region.reason || "未找到行政区划数据包：" + region.packagePath);
+        regionProgress.hidden = !regionJob || regionJob.done;
+        regionPercent.hidden = !regionJob || regionJob.done;
+        if (regionJob && !regionJob.done) {
+          regionProgress.value = regionJob.percent || 0;
+          regionPercent.textContent = `${regionJob.percent || 0}%`;
+        }
+        regionOutput.textContent = (region.output || []).join("\n");
+        regionOutput.hidden = !region.output || !region.output.length;
+        if (((job && !job.done) || (baseJob && !baseJob.done) || (regionJob && !regionJob.done)) && !canglingDataInitPoll.timer) {
           canglingDataInitPoll.timer = setInterval(loadCanglingDataInit, 1200);
-        } else if ((!job || job.done) && (!baseJob || baseJob.done) && canglingDataInitPoll.timer) {
+        } else if ((!job || job.done) && (!baseJob || baseJob.done) && (!regionJob || regionJob.done) && canglingDataInitPoll.timer) {
           clearInterval(canglingDataInitPoll.timer);
           canglingDataInitPoll.timer = null;
         }
@@ -4350,6 +4371,19 @@
         status.className = "flash err";
         status.textContent = "base 初始化失败：" + error.message;
         button.disabled = false;
+      }
+    }
+
+    async function startCanglingRegionInit() {
+      const button = $("#cangling-region-init-start");
+      button.disabled = true;
+      try {
+        await api("/api/cangling/apps/region-init", { method: "POST" });
+        await loadCanglingDataInit();
+      } catch (error) {
+        const status = $("#cangling-region-init-status");
+        if (status) { status.className = "flash err"; status.textContent = "行政区划初始化失败：" + error.message; }
+        if (button.isConnected) button.disabled = false;
       }
     }
 
@@ -4599,6 +4633,12 @@
             <div class="row" style="margin-top:12px;align-items:center"><progress id="cangling-base-init-progress" max="100" value="0" style="width:min(520px,80vw);height:14px" hidden></progress><strong id="cangling-base-init-percent" hidden></strong></div>
             <pre id="cangling-base-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>
           </div>
+          <div class="card" style="margin-top:16px">
+            <div class="cangling-section-head"><div><h3>行政区划数据库初始化</h3><p class="hint">将离线 SQL 导入 cis-postgis 的 biz.cl.t_sys_region 和 cl-base.public.sys_region，包含行政区划属性与空间几何。请先初始化基础数据库；已有数据的表会跳过，空表在事务中导入。</p></div><button type="button" class="btn primary" id="cangling-region-init-start" disabled>初始化行政区划数据</button></div>
+            <div id="cangling-region-init-status" class="hint">正在检查数据包与 PostGIS 数据库…</div>
+            <div class="row" style="margin-top:12px;align-items:center"><progress id="cangling-region-init-progress" max="100" value="0" style="width:min(520px,80vw);height:14px" hidden></progress><strong id="cangling-region-init-percent" hidden></strong></div>
+            <pre id="cangling-region-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>
+          </div>
         </section>
         </section>
       </div>`;
@@ -4627,6 +4667,7 @@
       $("#cangling-configs-refresh").onclick = () => loadCanglingRuntime(false);
       $("#cangling-data-init-start").onclick = startCanglingDataInit;
       $("#cangling-base-init-start").onclick = startCanglingBaseInit;
+      $("#cangling-region-init-start").onclick = startCanglingRegionInit;
       const primaryNodeSelect = $("#cangling-primary-node-select");
       if (primaryNodeSelect) primaryNodeSelect.onclick = openCanglingPrimaryNodePicker;
       const namespaceInput = $("#cangling-namespace");

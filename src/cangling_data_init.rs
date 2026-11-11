@@ -21,6 +21,8 @@ use tokio::process::Command;
 const PACKAGE: &str = "apps/initial-data/ai-china";
 const BASE_JAR: &str = "/opt/cangling/jars/np4-base-server-1.0.0.jar";
 const BASE_SCRIPT: &str = include_str!("assets/base_init.py");
+const REGION_SCRIPT: &str = include_str!("assets/region_init.py");
+const REGION_PACKAGE: &str = "apps/initial-data/sys_region_full.zip";
 
 #[derive(Default)]
 pub struct DataInitState {
@@ -28,6 +30,8 @@ pub struct DataInitState {
     output: Vec<String>,
     base_job_id: Option<String>,
     base_output: Vec<String>,
+    region_job_id: Option<String>,
+    region_output: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +55,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/api/cangling/apps/base-init",
             get(base_status).post(base_start),
+        )
+        .route(
+            "/api/cangling/apps/region-init",
+            get(region_status).post(region_start),
         )
 }
 
@@ -163,6 +171,134 @@ async fn run_base_init(state: &AppState, job_id: &str) -> Result<(), AppError> {
     if let Some(stream) = child.stderr.take() {
         BufReader::new(stream).read_to_string(&mut stderr).await?;
     }
+    let exit = child.wait().await?;
+    if !exit.success() {
+        return Err(AppError::bad(stderr.trim().to_string()));
+    }
+    if summary.is_empty() {
+        return Err(AppError::internal("初始化脚本没有返回结果说明"));
+    }
+    state.jobs.finish_ok(job_id, &summary);
+    Ok(())
+}
+
+async fn inspect_region_package(state: &AppState) -> Value {
+    let archive = crate::repo::repo_root(&state.paths).join(REGION_PACKAGE);
+    let output = Command::new("python3")
+        .args(["-c", REGION_SCRIPT, "check"])
+        .arg(archive)
+        .output()
+        .await;
+    match output {
+        Ok(output) if output.status.success() => serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|_| json!({"available":false,"reason":"无法解析 行政区划检查结果"})),
+        Ok(output) => {
+            json!({"available":false,"reason":String::from_utf8_lossy(&output.stderr).trim()})
+        }
+        Err(error) => json!({"available":false,"reason":format!("无法检查行政区划数据包：{error}")}),
+    }
+}
+
+async fn region_status(State(state): State<AppState>) -> Json<Value> {
+    let availability = inspect_region_package(&state).await;
+    let snapshot = state.data_init.lock().expect("data init state");
+    let job = snapshot
+        .region_job_id
+        .as_deref()
+        .and_then(|id| state.jobs.get(id));
+    Json(json!({
+        "available": availability["available"],
+        "reason": availability["reason"],
+        "packagePath": crate::repo::repo_root(&state.paths).join(REGION_PACKAGE),
+        "initialized": availability["initialized"],
+        "pending": availability["pending"],
+        "skipped": availability["skipped"],
+        "job": job,
+        "output": snapshot.region_output,
+    }))
+}
+
+async fn region_start(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let availability = inspect_region_package(&state).await;
+    if availability["available"] != true {
+        return Err(AppError::bad(
+            availability["reason"]
+                .as_str()
+                .unwrap_or("行政区划数据包不可用"),
+        ));
+    }
+    let mut current = state.data_init.lock().expect("data init state");
+    if let Some(job) = current
+        .region_job_id
+        .as_deref()
+        .and_then(|id| state.jobs.get(id))
+    {
+        if !job.done {
+            return Err(AppError::conflict("行政区划数据库正在初始化，请查看当前进度"));
+        }
+    }
+    let job = state.jobs.create();
+    current.region_job_id = Some(job.id.clone());
+    current.region_output.clear();
+    drop(current);
+    let job_id = job.id.clone();
+    tokio::spawn(async move {
+        if let Err(error) = run_region_init(&state, &job_id).await {
+            let message = error.to_string();
+            add_region_output(&state, format!("初始化失败：{message}"));
+            state.jobs.finish_err(&job_id, &message);
+        }
+    });
+    Ok(Json(json!({"jobId":job.id})))
+}
+
+fn add_region_output(state: &AppState, line: String) {
+    let mut current = state.data_init.lock().expect("data init state");
+    current.region_output.push(line);
+    if current.region_output.len() > 100 {
+        current.region_output.remove(0);
+    }
+}
+
+async fn run_region_init(state: &AppState, job_id: &str) -> Result<(), AppError> {
+    state
+        .jobs
+        .set(job_id, "checking", "检查行政区划数据包和 cis-postgis", 0, 100);
+    let mut child = Command::new("python3")
+        .args(["-c", REGION_SCRIPT, "run"])
+        .arg(crate::repo::repo_root(&state.paths).join(REGION_PACKAGE))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| AppError::internal(format!("启动行政区划初始化脚本失败：{error}")))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::internal("缺少初始化脚本输出"))?;
+    let stderr = child.stderr.take().ok_or_else(|| AppError::internal("缺少初始化错误输出"))?;
+    let stderr_task = tokio::spawn(async move {
+        let mut text = String::new();
+        BufReader::new(stderr).read_to_string(&mut text).await.map(|_| text)
+    });
+    let mut lines = BufReader::new(stdout).lines();
+    let mut summary = String::new();
+    while let Some(line) = lines.next_line().await? {
+        if let Some(rest) = line.strip_prefix("PROGRESS\t") {
+            if let Some((percent, message)) = rest.split_once('\t') {
+                if let Ok(percent) = percent.parse::<u64>() {
+                    state.jobs.set(job_id, "importing", message, percent, 100);
+                    add_region_output(state, message.to_string());
+                }
+            }
+        } else if let Some(message) = line.strip_prefix("RESULT\t") {
+            summary = message.to_string();
+            add_region_output(state, summary.clone());
+        } else {
+            add_region_output(state, line);
+        }
+    }
+    let stderr = stderr_task.await.map_err(|error| AppError::internal(error.to_string()))??;
     let exit = child.wait().await?;
     if !exit.success() {
         return Err(AppError::bad(stderr.trim().to_string()));
