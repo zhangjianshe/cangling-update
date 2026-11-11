@@ -1210,6 +1210,16 @@
     .password-form .host-credentials-row { align-items: flex-start; }
     .password-form .host-credentials-row > .field { margin-bottom: 16px; }
     .password-form .flash { margin-top: 16px; }
+    .modal.password-modal:has(.hostname-form) .modal-body { padding: 16px 24px; }
+    .hostname-current { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+    .hostname-current strong { margin-left: 8px; color: var(--text); overflow-wrap: anywhere; }
+    .hostname-help, .hostname-error { margin: 8px 0 0; font-size: 12px; line-height: 1.6; }
+    .hostname-help { color: var(--muted); }
+    .hostname-error { color: var(--danger, #dc2626); }
+    .hostname-form input[aria-invalid="true"] { border-color: var(--danger, #dc2626); }
+    .hostname-note { margin-top: 20px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 13px; }
+    .hostname-note p { margin: 6px 0 0; color: var(--muted); line-height: 1.6; }
+
     .modal-head {
       display: flex; align-items: center; justify-content: space-between; gap: 12px;
       padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
@@ -2887,40 +2897,84 @@
       });
     }
 
+    function hostnameValidationMessage(name) {
+      if (!name) return "请输入新的主机名称";
+      if (name.length > 253) return "主机名称总长度不能超过 253 个字符";
+      if (!name.split(".").every(label => label.length <= 63 && /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(label))) {
+        return "每段需为 1–63 个字母、数字或短横线，且不能以短横线开头或结尾";
+      }
+      return "";
+    }
+
     function openLocalHostnameForm(host) {
       closeDialog();
-      $("#dialog-title").textContent = "修改 master 主机名";
-      setDialogAction("保存", saveLocalHostname);
-      $("#dialog-body").innerHTML = `<div class="password-form">
-        <div class="field"><label>Master 主机名</label><input id="local-hostname" type="text" value="${esc(host.name || "")}" placeholder="例如：master-01" /></div>
-        <p class="hint hint-soft">保存后将通过 hostnamectl 立即修改操作系统主机名，不会修改 IP 地址。</p>
-        <div id="host-form-flash" hidden></div>
-      </div>`;
+      $("#dialog-modal").classList.add("password-modal");
+      $("#dialog-title").textContent = "修改主机名称";
+      setDialogAction("保存修改", saveLocalHostname);
+      $("#dialog-body").innerHTML = `<form class="password-form hostname-form" id="hostname-form" novalidate>
+        <p class="hostname-current">当前名称 <strong>${esc(host.name || "—")}</strong></p>
+        <div class="field">
+          <label for="local-hostname">新主机名称</label>
+          <input id="local-hostname" type="text" value="${esc(host.name || "")}" placeholder="例如：master-01" maxlength="253" autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="hostname-help hostname-error" />
+          <p class="hostname-help" id="hostname-help">支持字母、数字和短横线，可用点分隔；每段最多 63 个字符。</p>
+          <p class="hostname-error" id="hostname-error" aria-live="polite" hidden></p>
+        </div>
+        <div class="hostname-note"><strong>修改后立即生效</strong><p>此操作将更新本机的系统主机名称，IP 地址保持不变。依赖旧主机名的访问地址或服务配置需同步更新。</p></div>
+        <div id="host-form-flash" role="alert" hidden></div>
+      </form>`;
+      const input = $("#local-hostname");
+      const button = $("#dialog-extra");
+      input.dataset.original = (host.name || "").trim();
+      const validate = () => {
+        const message = hostnameValidationMessage(input.value.trim());
+        const error = $("#hostname-error");
+        error.textContent = message;
+        error.hidden = !message;
+        input.setAttribute("aria-invalid", String(!!message));
+        button.disabled = !!message || input.value.trim() === input.dataset.original;
+      };
+      input.oninput = validate;
+      $("#hostname-form").onsubmit = event => {
+        event.preventDefault();
+        if (!button.disabled) saveLocalHostname();
+      };
+      validate();
       $("#dialog").hidden = false;
-      $("#local-hostname").focus();
-      $("#local-hostname").select();
+      input.focus();
+      input.select();
     }
 
     async function saveLocalHostname() {
       const button = $("#dialog-extra");
+      const input = $("#local-hostname");
+      if (!input || button.disabled) return;
       const box = $("#host-form-flash");
-      const name = $("#local-hostname").value.trim();
+      const name = input.value.trim();
+      if (hostnameValidationMessage(name) || name === input.dataset.original) return;
       button.disabled = true;
+      button.textContent = "正在保存…";
+      input.disabled = true;
+      box.hidden = true;
       try {
         await api("/api/hosts/local/hostname", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),
         });
-        closeDialog();
-        flash("ok", `Master 主机名已修改为“${name}”`);
-        await loadCluster();
       } catch (error) {
+        if ($("#local-hostname") !== input) return;
         box.className = "flash err";
         box.textContent = error.message;
         box.hidden = false;
+        button.textContent = "保存修改";
         button.disabled = false;
+        input.disabled = false;
+        input.focus();
+        return;
       }
+      if ($("#local-hostname") === input) closeDialog();
+      flash("ok", `主机名称已修改为“${name}”`);
+      try { await loadCluster(); } catch (error) { flash("err", `主机名称已修改，刷新主机列表失败：${error.message}`); }
     }
 
     function openHostForm(host = null) {
