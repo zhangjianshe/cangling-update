@@ -46,6 +46,9 @@ function harness(items) {
   unmounted.spec.template.spec.containers[0].volumeMounts = [];
   const h = harness([direct, subpath, unrelated, wrongRoot, unmounted]);
   assert.deepEqual(Array.from(h.context.canglingJarDeploymentsFor(jar), item => item.metadata.name), ['renamed-base', 'second-base']);
+  const button = h.context.canglingJarRestartButton({ name: jar });
+  assert.match(button, /class="cangling-jar-restart"/);
+  assert.match(button, /<\/button><span class="hint">renamed-base、second-base<\/span>/);
   await h.context.restartCanglingJarDeployments(jar);
   assert.equal(h.prompts.length, 1);
   assert.match(h.prompts[0], /custom\/renamed-base/);

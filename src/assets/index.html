@@ -336,6 +336,8 @@
     .cangling-runtime-table .runtime-reason { min-width: 260px; }
     .cangling-runtime-table .runtime-reason .hint { margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
     .cangling-runtime-table .runtime-actions { width: 104px; text-align: right; white-space: nowrap; }
+    .cangling-jar-restart { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .cangling-jar-restart .hint { margin: 0; }
     .cangling-runtime-table .runtime-actions .btn { min-width: 88px; padding: 5px 10px; white-space: nowrap; }
     .cangling-container-table { min-width: 1380px; }
     .cangling-container-table .container-actions { width: 250px; text-align: right; white-space: nowrap; }
@@ -3819,7 +3821,7 @@
       const names = deployments.map(item => item.metadata.name).join("、");
       const pending = canglingJarRestarts.has(file.name);
       const reason = canglingJarRestartReason(file.name, deployments);
-      return `<button type="button" class="btn small" data-cangling-jar-restart="${esc(file.name)}" title="${esc(reason || "滚动重启 " + names)}" ${pending || reason ? "disabled" : ""}>${pending ? "重启中…" : "重启"}</button><div class="hint">${esc(names || reason)}</div>`;
+      return `<span class="cangling-jar-restart"><button type="button" class="btn small" data-cangling-jar-restart="${esc(file.name)}" title="${esc(reason || "滚动重启 " + names)}" ${pending || reason ? "disabled" : ""}>${pending ? "重启中…" : "重启"}</button><span class="hint">${esc(names || reason)}</span></span>`;
     }
 
     async function loadCanglingJarDeployments() {
