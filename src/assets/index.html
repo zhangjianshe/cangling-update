@@ -3114,12 +3114,54 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>K3s 资源</h2></div>
-          <div id="k3s-summary"></div>
+          <div class="row"><div id="k3s-summary"></div><button type="button" class="btn" id="k3s-copy-config" title="复制当前集群 kubeconfig，包含认证信息">拷贝连接信息</button></div>
         </div>
         <div id="flash" hidden></div>
         <div id="k3s-root"><div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取集群…</div></div></div>`;
+      $("#k3s-copy-config").onclick = copyK3sConnection;
       await loadK3s(true);
       k3sPoll.timer = setInterval(() => loadK3s(false), 5000);
+    }
+
+    async function copyK3sConnection() {
+      const button = $("#k3s-copy-config");
+      if (!button || button.disabled) return;
+      button.disabled = true;
+      button.textContent = "正在复制…";
+      try {
+        const result = await api("/api/k3s/kubeconfig");
+        if (!button.isConnected) return;
+        if (!result.text || !result.text.trim()) throw new Error("当前没有可复制的连接配置");
+        let copied = false;
+        if (navigator.clipboard && window.isSecureContext) {
+          try { await navigator.clipboard.writeText(result.text); copied = true; } catch (_) {}
+        }
+        if (!copied) {
+          const input = document.createElement("textarea");
+          input.value = result.text;
+          input.setAttribute("readonly", "");
+          input.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;";
+          document.body.appendChild(input);
+          try { input.focus(); input.select(); copied = document.execCommand("copy"); }
+          finally { input.remove(); if (button.isConnected) button.focus(); }
+        }
+        if (copied) flash("ok", "K3s 连接信息已复制到剪贴板");
+        else {
+          closeDialog();
+          $("#dialog-modal").classList.add("form-modal");
+          $("#dialog-title").textContent = "拷贝 K3s 连接信息";
+          $("#dialog-body").innerHTML = '<div style="padding:16px 24px"><p class="hint">浏览器未允许自动复制，请按 Ctrl+C（Mac 使用 ⌘C）复制已选中的配置。</p><textarea id="k3s-config-copy-text" readonly style="width:100%;height:320px;font-family:monospace" aria-label="K3s 连接配置"></textarea></div>';
+          $("#dialog").hidden = false;
+          const input = $("#k3s-config-copy-text");
+          input.value = result.text;
+          input.focus(); input.select();
+        }
+      } catch (error) {
+        if (button.isConnected) flash("err", "拷贝连接信息失败：" + error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "拷贝连接信息";
+      }
     }
 
     async function renderCanglingApps() {
@@ -3383,8 +3425,9 @@
     }
 
     function canglingKeyValueRow(kind, name = "", value = "", secret = false) {
+      const hint = kind === "environment" && name === "KAFKA_RELAY_ENABLED" ? "中继kafka" : "";
       return `<tr data-cangling-kv-row>
-        <td class="cangling-kv-key"><input data-cangling-kv-key type="text" value="${esc(name)}" placeholder="VARIABLE_NAME" spellcheck="false" /></td>
+        <td class="cangling-kv-key"><input data-cangling-kv-key type="text" value="${esc(name)}" placeholder="VARIABLE_NAME" spellcheck="false" />${hint ? `<div class="hint" style="margin-top:4px;font-size:12px">${esc(hint)}</div>` : ""}</td>
         <td><input data-cangling-kv-value type="text" value="${esc(value)}" placeholder="变量值" autocomplete="off" spellcheck="false" /></td>
         <td class="cangling-kv-actions${secret ? " with-random" : ""}"><div class="cangling-kv-actions-inner">${secret ? `<button type="button" class="btn small" data-cangling-kv-random aria-label="为 ${esc(name || "密钥")} 生成随机值">随机生成</button>` : ""}<button type="button" class="btn small" data-cangling-kv-delete aria-label="删除${kind === "secrets" ? "密钥" : "环境变量"}">删除</button></div></td>
       </tr>`;
@@ -3400,8 +3443,8 @@
     const CANGLING_ENVIRONMENT_GROUPS = [
       { id: "database", title: "数据库", hint: "PostgreSQL / PostGIS 连接与 Schema", names: ["JDBC_DRIVER_NAME", "JDBC_URL_PREFIX", "JDBC_DEFAULT_DB", "JDBC_SCHEMA", "POSTGIS_USER", "POSTGIS_MVT_USER"] },
       { id: "messaging", title: "消息服务", hint: "Broker、Kafka 及 MQTT 端口", prefixes: ["CL_BROKER_"], names: ["HOST_KAFKA", "KAFKA_PORT"] },
-      { id: "services", title: "服务地址", hint: "CIS、地图、GeoServer 与前端访问地址", names: ["AI_WEB", "AI_MAP", "HOST_GEOSERVER_URL", "GEOSERVER_FRONT", "MAP_FRONT", "CL_SERVER_URL", "SERVER_URL"] },
-      { id: "runtime", title: "CIS 运行参数", hint: "命名空间、主题、功能开关与部署自动值", names: ["TZ", "HOST", "AI_K8S_NAMESPACE", "AI_THEME", "IM_THEME", "AI_IMAGE_PREFIX", "ENABLE_DOC", "CIS_MONGO_MIGRATION_ENABLED", "WEB_PORT"] },
+      { id: "services", title: "服务地址", hint: "CIS、地图、GeoServer 与前端访问地址", names: ["AI_MAP", "HOST_GEOSERVER_URL", "MAP_FRONT", "CL_SERVER_URL", "SERVER_URL"] },
+      { id: "runtime", title: "CIS 运行参数", hint: "命名空间、主题、功能开关与部署自动值", names: ["TZ", "HOST", "AI_K8S_NAMESPACE", "AI_THEME", "IM_THEME", "ENABLE_DOC", "CIS_MONGO_MIGRATION_ENABLED", "KAFKA_RELAY_ENABLED", "WEB_PORT"] },
       { id: "storage", title: "存储路径", hint: "共享、本地缓存与应用数据目录", names: ["DATA_PATH", "VOLUME_DEFAULT_PATH", "IB_CACHE_PATH", "AI_IM_PATH", "CL_BASE_PATH"] },
       { id: "tile", title: "地图与瓦片", hint: "cangling-map 与 cangling-tile 配置", names: ["TILE_CACHE_URL"], prefixes: ["CANGLING_TILE_"] },
     ];
@@ -5688,14 +5731,31 @@
         dialog.onResize = resize;
         window.addEventListener("resize", resize);
         setTimeout(resize, 0);
-        term.writeln("\x1b[2m正在读取 Pod 日志…\x1b[0m");
-        const result = await api("/api/k3s/pods/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(pod) + "/logs?tail=500&container=" + encodeURIComponent(container));
-        if (token !== dialog.k3sLogToken || dialog.term !== term) return;
-        term.reset();
-        const text = result.text || "\x1b[2m暂无日志\x1b[0m";
-        term.write(text);
-        if (!text.endsWith("\n")) term.write("\r\n");
-        term.scrollToBottom();
+        term.writeln("\x1b[2m正在连接实时日志…\x1b[0m");
+        const path = "/api/k3s/pods/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(pod) + "/logs/stream?" + new URLSearchParams({ tail: "500", container });
+        const ws = new WebSocket(appWebSocket(path));
+        ws.binaryType = "arraybuffer";
+        dialog.ws = ws;
+        const active = () => token === dialog.k3sLogToken && dialog.term === term && dialog.ws === ws;
+        ws.onopen = () => {
+          if (!active()) { ws.close(); return; }
+          term.reset();
+          term.writeln("\x1b[2m实时日志已连接 · 最近 500 行及后续输出\x1b[0m");
+        };
+        ws.onmessage = (event) => {
+          if (!active()) return;
+          const follow = term.buffer.active.viewportY >= term.buffer.active.baseY;
+          const data = typeof event.data === "string" ? event.data : new Uint8Array(event.data);
+          term.write(data, () => { if (active() && follow) term.scrollToBottom(); });
+        };
+        ws.onerror = () => {
+          if (active()) term.writeln("\r\n\x1b[31m日志连接失败，请检查网络或重新打开日志窗口。\x1b[0m");
+        };
+        ws.onclose = (event) => {
+          if (active()) term.writeln(event.code === 1000
+            ? "\r\n\x1b[2m日志流已结束；重新打开可连接当前容器。\x1b[0m"
+            : "\r\n\x1b[33m日志连接已断开；重新打开可再次连接。\x1b[0m");
+        };
       } catch (error) {
         if (token !== dialog.k3sLogToken || !content.isConnected) return;
         if (dialog.term) dialog.term.writeln(`\r\n\x1b[31m${error.message}\x1b[0m`);
@@ -9964,6 +10024,10 @@
 
     function disposeDialogTerminal() {
       dialog.k3sLogToken += 1;
+      if (dialog.ws) {
+        try { dialog.ws.close(); } catch {}
+        dialog.ws = null;
+      }
       if (dialog.onResize) {
         window.removeEventListener("resize", dialog.onResize);
         dialog.onResize = null;

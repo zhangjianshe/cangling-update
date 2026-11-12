@@ -45,12 +45,9 @@ data:
   KAFKA_PORT: "12001"
   POSTGIS_USER: cangling
   WEB_PORT: "7600"
-  AI_WEB: http://192.168.3.121:7600
   HOST_GEOSERVER_URL: http://cangling-map:3000
   AI_MAP: http://cis-map:8079/
   MAP_FRONT: ""
-  AI_IMAGE_PREFIX: ""
-  GEOSERVER_FRONT: http://192.168.3.121:7600/geoserver
   AI_K8S_NAMESPACE: np4
   AI_THEME: ib-theme
   IB_CACHE_PATH: /opt/cangling/local/ibcache
@@ -66,6 +63,7 @@ data:
   CANGLING_TILE_MEMORY_CACHE_BYTES: "536870912"
   CANGLING_TILE_ROOT: /app/tiledata
   CIS_MONGO_MIGRATION_ENABLED: "false"
+  KAFKA_RELAY_ENABLED: "false" # 中继kafka
 ---
 apiVersion: v1
 kind: Secret

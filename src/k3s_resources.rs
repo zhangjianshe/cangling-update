@@ -2,7 +2,7 @@
 //! Commands are built from validated arguments and never passed through a shell.
 
 use crate::error::AppError;
-use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -147,6 +148,7 @@ pub struct TextResult {
 pub fn routes() -> Router<crate::state::AppState> {
     Router::new()
         .route("/api/k3s/status", get(cluster_status))
+        .route("/api/k3s/kubeconfig", get(copy_kubeconfig))
         .route("/api/k3s/namespaces", get(namespaces))
         .route("/api/k3s/resources", get(resources))
         .route("/api/k3s/nodes/{name}/labels", put(update_node_labels))
@@ -163,6 +165,10 @@ pub fn routes() -> Router<crate::state::AppState> {
             get(resource_events),
         )
         .route("/api/k3s/pods/{namespace}/{name}/logs", get(pod_logs))
+        .route(
+            "/api/k3s/pods/{namespace}/{name}/logs/stream",
+            get(pod_log_stream),
+        )
         .route("/api/k3s/pods/{namespace}/{name}/exec", get(pod_exec))
         .route(
             "/api/k3s/workloads/{kind}/{namespace}/{name}/restart",
@@ -173,6 +179,31 @@ pub fn routes() -> Router<crate::state::AppState> {
             put(workload_scale),
         )
         .route("/api/k3s/pods/{namespace}/{name}", delete(delete_pod))
+}
+
+fn kubeconfig_arguments() -> Vec<String> {
+    [
+        "config",
+        "view",
+        "--raw",
+        "--minify",
+        "--flatten",
+        "--output=yaml",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+async fn copy_kubeconfig() -> Result<impl axum::response::IntoResponse, AppError> {
+    let text = kubectl(kubeconfig_arguments(), COMMAND_TIMEOUT).await?;
+    if text.trim().is_empty() {
+        return Err(AppError::bad("当前没有可复制的 kubeconfig"));
+    }
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(TextResult { text }),
+    ))
 }
 
 async fn pod_exec(
@@ -499,26 +530,144 @@ async fn resource_events(
     Ok(Json(kubectl_json(args).await?))
 }
 
-async fn pod_logs(
-    Path((namespace, name)): Path<(String, String)>,
-    Query(query): Query<LogsQuery>,
-) -> Result<Json<TextResult>, AppError> {
+fn log_arguments(
+    namespace: String,
+    name: String,
+    query: LogsQuery,
+    follow: bool,
+) -> Result<Vec<String>, AppError> {
     validate_name(&namespace, "命名空间")?;
     validate_name(&name, "Pod 名称")?;
-    let tail = query.tail.unwrap_or(500).min(MAX_LOG_TAIL);
     let mut args = vec![
         "logs".into(),
         name,
         "--namespace".into(),
         namespace,
         "--tail".into(),
-        tail.to_string(),
+        query.tail.unwrap_or(500).min(MAX_LOG_TAIL).to_string(),
         "--timestamps".into(),
     ];
-    if let Some(container) = query.container.filter(|value| !value.is_empty()) {
+    if let Some(container) = query.container.filter(|c| !c.is_empty()) {
         validate_name(&container, "容器名称")?;
         args.extend(["--container".into(), container]);
     }
+    if follow {
+        args.push("--follow".into());
+    }
+    Ok(args)
+}
+
+async fn pod_log_stream(
+    Path((namespace, name)): Path<(String, String)>,
+    Query(query): Query<LogsQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<axum::response::Response, AppError> {
+    let args = log_arguments(namespace, name, query, true)?;
+    let binary =
+        kubectl_binary().ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl"))?;
+    Ok(ws.on_upgrade(move |socket| stream_pod_logs(socket, binary, args)))
+}
+
+async fn log_send(socket: &mut WebSocket, message: Message) -> bool {
+    matches!(
+        timeout(Duration::from_secs(10), socket.send(message)).await,
+        Ok(Ok(()))
+    )
+}
+
+async fn stream_pod_logs(mut socket: WebSocket, binary: KubectlBinary, args: Vec<String>) {
+    let program = match &binary {
+        KubectlBinary::K3s(path) | KubectlBinary::Standalone(path) => path,
+    };
+    let child = Command::new(program)
+        .args(kubectl_arguments(&binary, args))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            log_send(
+                &mut socket,
+                Message::Text(format!("无法启动日志进程：{error}\r\n").into()),
+            )
+            .await;
+            return;
+        }
+    };
+    let mut stdout = child.stdout.take().expect("piped log stdout");
+    let mut stderr = child.stderr.take().expect("piped log stderr");
+    let (mut out_open, mut err_open) = (true, true);
+    let (mut out_buf, mut err_buf) = (vec![0u8; 16384], vec![0u8; 16384]);
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+    let mut disconnected = false;
+    let mut last_pong = std::time::Instant::now();
+    while out_open || err_open {
+        tokio::select! {
+            incoming = socket.recv() => {
+                match incoming {
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_))) => { disconnected = true; break; }
+                    Some(Ok(Message::Pong(_))) => { last_pong = std::time::Instant::now(); }
+                    Some(Ok(Message::Ping(data))) => {
+                        if !log_send(&mut socket, Message::Pong(data)).await { disconnected = true; break; }
+                    }
+                    _ => {}
+                }
+            }
+            result = stdout.read(&mut out_buf), if out_open => {
+                match result {
+                    Ok(0) | Err(_) => out_open = false,
+                    Ok(n) => if !log_send(&mut socket, Message::Binary(out_buf[..n].to_vec().into())).await { disconnected = true; break; }
+                }
+            }
+            result = stderr.read(&mut err_buf), if err_open => {
+                match result {
+                    Ok(0) | Err(_) => err_open = false,
+                    Ok(n) => if !log_send(&mut socket, Message::Binary(err_buf[..n].to_vec().into())).await { disconnected = true; break; }
+                }
+            }
+            _ = heartbeat.tick() => {
+                if last_pong.elapsed() > Duration::from_secs(60) { disconnected = true; break; }
+                if !log_send(&mut socket, Message::Ping(Vec::new().into())).await { disconnected = true; break; }
+            }
+        }
+    }
+    if disconnected {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+    } else {
+        match timeout(Duration::from_secs(2), child.wait()).await {
+            Ok(Ok(status)) if !status.success() => {
+                log_send(
+                    &mut socket,
+                    Message::Text(format!("\r\n日志进程退出：{status}\r\n").into()),
+                )
+                .await;
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+            }
+            _ => {}
+        }
+        log_send(
+            &mut socket,
+            Message::Close(Some(CloseFrame {
+                code: 1000,
+                reason: "日志流结束".into(),
+            })),
+        )
+        .await;
+    }
+}
+
+async fn pod_logs(
+    Path((namespace, name)): Path<(String, String)>,
+    Query(query): Query<LogsQuery>,
+) -> Result<Json<TextResult>, AppError> {
+    let args = log_arguments(namespace, name, query, false)?;
     Ok(Json(TextResult {
         text: kubectl(args, LOG_TIMEOUT).await?,
     }))
@@ -613,6 +762,13 @@ async fn delete_pod(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kubeconfig_export_is_self_contained_and_requires_authentication() {
+        assert_eq!(kubeconfig_arguments(), vec!["config", "view", "--raw", "--minify", "--flatten", "--output=yaml"]);
+        assert!(!crate::auth::is_public(&axum::http::Method::GET, "/api/k3s/kubeconfig"));
+    }
+
 
     #[test]
     fn resource_allowlist_distinguishes_scope() {
@@ -733,5 +889,104 @@ mod tests {
         assert!(validate_scale_target("cangling-broker", 0).is_err());
         assert!(validate_scale_target("cangling-broker", 2).is_err());
         assert!(validate_scale_target("cangling-map", 3).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod log_stream_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn log_stream_arguments_are_validated_and_tail_is_bounded() {
+        let args = log_arguments(
+            "cangling".into(),
+            "pod-1".into(),
+            LogsQuery {
+                container: Some("postgres".into()),
+                tail: Some(u32::MAX),
+            },
+            true,
+        )
+        .unwrap();
+        assert!(args.ends_with(&["--follow".into()]));
+        assert!(args.windows(2).any(|p| p == ["--tail", "5000"]));
+        assert!(args.windows(2).any(|p| p == ["--container", "postgres"]));
+        assert!(log_arguments(
+            "cangling".into(),
+            "../pod".into(),
+            LogsQuery {
+                container: None,
+                tail: None
+            },
+            true
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn logs_stream_incrementally_and_disconnect_reaps_process() {
+        struct TempDir(PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir =
+            TempDir(std::env::temp_dir().join(format!("log-stream-test-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let program = dir.0.join("fake-kubectl");
+        std::fs::write(&program, "#!/usr/bin/env python3\nimport os,time,pathlib\npathlib.Path(__file__+'.pid').write_text(str(os.getpid()))\nprint('第一条日志',flush=True)\ntime.sleep(0.1)\nprint('second log',flush=True)\ntime.sleep(600)\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let app = Router::new().route(
+            "/logs",
+            get(move |ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(move |socket| {
+                    stream_pod_logs(socket, KubectlBinary::Standalone(program), vec![])
+                })
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/logs"))
+            .await
+            .unwrap();
+        let mut received = Vec::new();
+        timeout(Duration::from_secs(10), async {
+            loop {
+                match client.next().await.unwrap().unwrap() {
+                    tokio_tungstenite::tungstenite::Message::Binary(data) => {
+                        received.extend_from_slice(&data)
+                    }
+                    tokio_tungstenite::tungstenite::Message::Ping(data) => {
+                        client
+                            .send(tokio_tungstenite::tungstenite::Message::Pong(data))
+                            .await
+                            .unwrap();
+                    }
+                    _ => {}
+                }
+                if String::from_utf8_lossy(&received).contains("second log") {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(String::from_utf8(received).unwrap().contains("第一条日志"));
+        let pid = std::fs::read_to_string(dir.0.join("fake-kubectl.pid")).unwrap();
+        client.close(None).await.unwrap();
+        timeout(Duration::from_secs(5), async {
+            while PathBuf::from(format!("/proc/{pid}")).exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("log process was not reaped");
+        server.abort();
     }
 }

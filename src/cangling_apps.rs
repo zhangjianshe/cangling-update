@@ -314,8 +314,15 @@ fn migrate_builtin_application_ports(config: &mut CanglingConfig) {
 }
 
 fn migrate_environment_variables(config: &mut CanglingConfig) {
+    config
+        .environment
+        .entry("KAFKA_RELAY_ENABLED".into())
+        .or_insert_with(|| "false".into());
     for name in [
         "DOMAIN_NAME",
+        "AI_IMAGE_PREFIX",
+        "AI_WEB",
+        "GEOSERVER_FRONT",
         "LDAP_PORT",
         "K8S_PORT",
         "MAP_PORT",
@@ -1952,12 +1959,7 @@ fn patch_environment(
         ("TILE_CACHE_URL", format!("http://cangling-tile:{tile}")),
         ("HOST_GEOSERVER_URL", format!("http://cangling-map:{map}")),
         ("AI_MAP", format!("http://cis-map:{cis_map}/")),
-        ("AI_WEB", format!("http://{}:{web}", config.host_ip)),
         ("CL_SERVER_URL", format!("http://{}:{web}/", config.host_ip)),
-        (
-            "GEOSERVER_FRONT",
-            format!("http://{}:{web}/geoserver", config.host_ip),
-        ),
     ] {
         if environment.get(name) == defaults.get(name) {
             environment.insert(name.into(), value);
@@ -2389,7 +2391,15 @@ mod tests {
             .insert("TILE_CACHE_ROOT".into(), "/legacy/tiles".into());
         config.environment.remove("CANGLING_TILE_ROOT");
 
+        for name in ["AI_IMAGE_PREFIX", "AI_WEB", "GEOSERVER_FRONT"] {
+            config
+                .environment
+                .insert(name.into(), "http://legacy.invalid".into());
+        }
         migrate_environment_variables(&mut config);
+        for name in ["AI_IMAGE_PREFIX", "AI_WEB", "GEOSERVER_FRONT"] {
+            assert!(!config.environment.contains_key(name));
+        }
 
         assert!(!config.environment.contains_key("DOMAIN_NAME"));
         assert!(!config.environment.contains_key("TILE_CACHE_ROOT"));
@@ -2648,6 +2658,13 @@ mod tests {
         assert!(!yaml.contains("docker.1ms.run/kartoza/postgis"));
         assert!(yaml.contains("/data/shared"));
         assert!(yaml.contains("CIS_MONGO_MIGRATION_ENABLED: 'false'"));
+        assert!(yaml.contains("KAFKA_RELAY_ENABLED: 'false'"));
+        for obsolete in ["AI_IMAGE_PREFIX:", "AI_WEB:", "GEOSERVER_FRONT:"] {
+            assert!(
+                !yaml.contains(obsolete),
+                "obsolete variable reintroduced: {obsolete}"
+            );
+        }
         assert!(!yaml.contains("cis-mongo"));
         assert!(!yaml.to_ascii_lowercase().contains("mongodb"));
         assert!(!warnings.is_empty());
