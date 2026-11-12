@@ -314,6 +314,16 @@ fn migrate_builtin_application_ports(config: &mut CanglingConfig) {
 }
 
 fn migrate_environment_variables(config: &mut CanglingConfig) {
+    if config.environment.get("CL_BASE_PATH").is_some_and(|value| {
+        value == &format!("{TEMPLATE_SHARED_ROOT}/cldata")
+            || value == &format!("{}/cldata", config.shared_root)
+    }) {
+        config.environment.insert(
+            "CL_BASE_PATH".into(),
+            format!("{}/np4/cldata", config.shared_root),
+        );
+    }
+
     config
         .environment
         .entry("KAFKA_RELAY_ENABLED".into())
@@ -1952,7 +1962,7 @@ fn patch_environment(
         ("HOST_KAFKA", config.host_ip.clone()),
         ("WEB_PORT", web.to_string()),
         ("DATA_PATH", config.shared_root.clone()),
-        ("CL_BASE_PATH", format!("{}/cldata", config.shared_root)),
+        ("CL_BASE_PATH", format!("{}/np4/cldata", config.shared_root)),
         ("IB_CACHE_PATH", format!("{}/ibcache", config.local_root)),
         ("CL_BROKER_PORT", broker.to_string()),
         ("CL_BROKER_WEBPORT", broker_web.to_string()),
@@ -2379,6 +2389,58 @@ fn rebase_template_images(value: &mut Value, prefix: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_business_directories_are_nested_under_np4() {
+        let config = default_config();
+        let (yaml, _) = render_manifest(&config).unwrap();
+        let documents: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
+            .map(|doc| Value::deserialize(doc).unwrap())
+            .collect();
+        let server = documents
+            .iter()
+            .find(|doc| {
+                metadata_name(doc) == Some("cis-server")
+                    && value_str(doc, &["kind"]) == Some("Deployment")
+            })
+            .unwrap();
+        let mounts = server["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+            .as_sequence()
+            .unwrap();
+        assert!(!mounts
+            .iter()
+            .any(|mount| value_str(mount, &["name"]) == Some("modules")));
+        assert!(!manifest_volumes(server)
+            .iter()
+            .any(|volume| value_str(volume, &["name"]) == Some("modules")));
+        let np4 = mounts
+            .iter()
+            .find(|mount| value_str(mount, &["name"]) == Some("np4"))
+            .unwrap();
+        assert_eq!(
+            value_str(np4, &["mountPath"]),
+            Some("/opt/cl/share/cangling/np4")
+        );
+        for name in ["algo_tools", "cldata", "np4-resource-images"] {
+            assert!(yaml.contains(&format!("/np4/{name}")));
+            assert!(!yaml.contains(&format!("/opt/cl/share/cangling/{name}")));
+        }
+        let mut saved = config;
+        saved.environment.insert(
+            "CL_BASE_PATH".into(),
+            format!("{}/cldata", saved.shared_root),
+        );
+        migrate_environment_variables(&mut saved);
+        assert_eq!(
+            saved.environment["CL_BASE_PATH"],
+            format!("{}/np4/cldata", saved.shared_root)
+        );
+        saved
+            .environment
+            .insert("CL_BASE_PATH".into(), "/custom/base".into());
+        migrate_environment_variables(&mut saved);
+        assert_eq!(saved.environment["CL_BASE_PATH"], "/custom/base");
+    }
 
     #[test]
     fn environment_migration_removes_unused_keys_and_renames_tile_settings() {

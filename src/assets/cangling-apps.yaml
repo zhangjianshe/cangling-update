@@ -54,7 +54,7 @@ data:
   IM_THEME: base
   SERVER_URL: https://app.cangling.cn/
   AI_IM_PATH: /mnt/cangling/storage/imdata
-  CL_BASE_PATH: /mnt/cangling/cangling-share/storage/cldata
+  CL_BASE_PATH: /mnt/cangling/cangling-share/storage/np4/cldata
   CL_SERVER_URL: http://192.168.3.121:7600/
   ENABLE_DOC: "false"
   POSTGIS_MVT_USER: cangling
@@ -194,8 +194,7 @@ spec:
           volumeMounts: &javaMounts
             - {name: passwd, mountPath: /etc/passwd, readOnly: true}
             - {name: ibcache, mountPath: /var/ibcache}
-            - {name: np4, mountPath: /mnt/prod/np4}
-            - {name: modules, mountPath: /app/module}
+            - {name: np4, mountPath: /mnt/cangling/cangling-share/storage/np4}
             - {name: backup, mountPath: /ibbackup}
             - {name: cldata, mountPath: /app/imdata}
             - {name: jar, mountPath: /app/app.jar, readOnly: true}
@@ -203,9 +202,8 @@ spec:
         - {name: passwd, hostPath: {path: /etc/passwd, type: File}}
         - {name: ibcache, hostPath: {path: /opt/cangling/local/ibcache, type: DirectoryOrCreate}}
         - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: DirectoryOrCreate}}
-        - {name: modules, hostPath: {path: /mnt/cangling/cangling-share/storage/algo_tools, type: DirectoryOrCreate}}
         - {name: backup, hostPath: {path: /opt/cangling/local/ibbackup, type: DirectoryOrCreate}}
-        - {name: cldata, hostPath: {path: /mnt/cangling/cangling-share/storage/cldata, type: DirectoryOrCreate}}
+        - {name: cldata, hostPath: {path: /mnt/cangling/cangling-share/storage/np4/cldata, type: DirectoryOrCreate}}
         - {name: jar, hostPath: {path: /opt/cangling-np4/jars/cis-server-1.0.0.jar, type: File}}
 ---
 apiVersion: v1
@@ -243,7 +241,7 @@ spec:
       volumes:
         - {name: passwd, hostPath: {path: /etc/passwd, type: File}}
         - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: DirectoryOrCreate}}
-        - {name: modules, hostPath: {path: /mnt/cangling/cangling-share/storage/algo_tools, type: DirectoryOrCreate}}
+        - {name: modules, hostPath: {path: /mnt/cangling/cangling-share/storage/np4/algo_tools, type: DirectoryOrCreate}}
         - {name: ibcache, hostPath: {path: /opt/cangling/local/ibcache, type: DirectoryOrCreate}}
         - {name: jar, hostPath: {path: /opt/cangling-np4/jars/cis-map-1.0.0.jar, type: File}}
 ---
@@ -277,7 +275,7 @@ spec:
             - {name: localtime, mountPath: /etc/localtime, readOnly: true}
             - {name: jar, mountPath: /app/app.jar, readOnly: true}
       volumes:
-        - {name: cldata, hostPath: {path: /mnt/cangling/cangling-share/storage/cldata, type: DirectoryOrCreate}}
+        - {name: cldata, hostPath: {path: /mnt/cangling/cangling-share/storage/np4/cldata, type: DirectoryOrCreate}}
         - {name: logs, hostPath: {path: /opt/cangling/local/base-logs, type: DirectoryOrCreate}}
         - {name: np4, hostPath: {path: /mnt/cangling/cangling-share/storage/np4, type: DirectoryOrCreate}}
         - {name: localtime, hostPath: {path: /etc/localtime, type: File}}
@@ -397,7 +395,7 @@ spec:
       volumes:
         - {name: config, configMap: {name: cangling-nginx}}
         - {name: html, hostPath: {path: /opt/cangling-nginx/html, type: DirectoryOrCreate}}
-        - {name: images, hostPath: {path: /mnt/cangling/cangling-share/storage/np4-resource-images, type: DirectoryOrCreate}}
+        - {name: images, hostPath: {path: /mnt/cangling/cangling-share/storage/np4/np4-resource-images, type: DirectoryOrCreate}}
         - {name: logs, hostPath: {path: /opt/cangling/local/nginx-log, type: DirectoryOrCreate}}
 ---
 apiVersion: apps/v1

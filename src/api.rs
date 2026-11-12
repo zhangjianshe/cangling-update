@@ -748,7 +748,7 @@ fn create_np4_data_dirs(dest: &FsPath) -> anyhow::Result<Vec<PathBuf>> {
         anyhow::bail!("DATA_PATH 必须是绝对路径：{}", data_path.display());
     }
 
-    let dirs: Vec<_> = ["np4", "np4-resource-images", "algo_tools"]
+    let dirs: Vec<_> = ["np4", "np4/np4-resource-images", "np4/algo_tools", "np4/cldata"]
         .into_iter()
         .map(|name| data_path.join(name))
         .collect();
@@ -5900,8 +5900,9 @@ mod tests {
             dirs,
             vec![
                 data.join("np4"),
-                data.join("np4-resource-images"),
-                data.join("algo_tools")
+                data.join("np4/np4-resource-images"),
+                data.join("np4/algo_tools"),
+                data.join("np4/cldata")
             ]
         );
         assert!(dirs.iter().all(|dir| dir.is_dir()));

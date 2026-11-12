@@ -508,6 +508,10 @@
     }
     .cangling-kv-table input:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); outline: none; }
     .cangling-kv-key { width: 36%; }
+    .cangling-env-table th:first-child, .cangling-env-table .cangling-kv-key { width: 30%; }
+    .cangling-env-table th:nth-child(2) { width: 34%; }
+    .cangling-env-table .cangling-kv-description { white-space: normal; overflow-wrap: anywhere; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
     .cangling-kv-actions { width: 84px; text-align: right !important; white-space: nowrap; }
     .cangling-kv-actions.with-random { width: 176px; }
     .cangling-kv-actions-inner { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
@@ -3242,7 +3246,7 @@
     }
 
     const CANGLING_AUTO_STORAGE_PATHS = {
-      sharedStorage: ["np4", "algo_tools", "cldata", "np4-resource-images"],
+      sharedStorage: ["np4"],
       coreStorage: ["postgis/17", "broker", "tile-config"],
       localStorage: ["cangling-map/data", "cangling-map/cache", "cangling-map/geodata", "tiledata", "nginx-log", "ibcache", "ibbackup", "base-logs"],
     };
@@ -3424,11 +3428,53 @@
       });
     }
 
+    const CANGLING_ENVIRONMENT_DESCRIPTIONS = {
+      "TZ": "应用时区",
+      "HOST": "统一入口主机地址",
+      "DATA_PATH": "共享业务数据目录",
+      "VOLUME_DEFAULT_PATH": "业务卷默认存储目录",
+      "HOST_KAFKA": "Kafka 服务地址",
+      "KAFKA_PORT": "Kafka 服务端口",
+      "JDBC_DRIVER_NAME": "数据库 JDBC 驱动类",
+      "JDBC_URL_PREFIX": "数据库 JDBC URL 前缀",
+      "JDBC_DEFAULT_DB": "默认连接数据库",
+      "JDBC_SCHEMA": "数据库 Schema 搜索路径",
+      "CL_BROKER_HOST": "Broker 服务地址",
+      "CL_BROKER_PORT": "Broker 通信端口",
+      "CL_BROKER_WEBPORT": "Broker Web 服务端口",
+      "CL_BROKER_MQTT_WSPORT": "Broker MQTT WebSocket 端口",
+      "POSTGIS_USER": "PostGIS 数据库用户名",
+      "WEB_PORT": "统一入口 Web 端口",
+      "HOST_GEOSERVER_URL": "地图服务内部访问地址",
+      "AI_MAP": "CIS 地图服务内部地址",
+      "MAP_FRONT": "前端地图服务访问地址",
+      "AI_K8S_NAMESPACE": "算法任务所在 K3s 命名空间",
+      "AI_THEME": "算法消息主题",
+      "IB_CACHE_PATH": "CIS 本地缓存目录",
+      "IM_THEME": "即时通信消息主题",
+      "SERVER_URL": "应用服务访问地址",
+      "AI_IM_PATH": "即时通信数据目录",
+      "CL_BASE_PATH": "基础服务共享数据目录",
+      "CL_SERVER_URL": "基础服务访问地址",
+      "ENABLE_DOC": "是否启用接口文档",
+      "POSTGIS_MVT_USER": "矢量瓦片数据库用户名",
+      "TILE_CACHE_URL": "瓦片服务访问地址",
+      "CANGLING_TILE_CONFIG_DIR": "瓦片服务配置目录",
+      "CANGLING_TILE_MEMORY_CACHE_BYTES": "瓦片内存缓存上限（字节）",
+      "CANGLING_TILE_ROOT": "瓦片数据根目录",
+      "CIS_MONGO_MIGRATION_ENABLED": "是否启用历史 MongoDB 数据迁移",
+      "KAFKA_RELAY_ENABLED": "中继kafka"
+};
+
+    function canglingEnvironmentDescription(name) {
+      return Object.prototype.hasOwnProperty.call(CANGLING_ENVIRONMENT_DESCRIPTIONS, name) ? CANGLING_ENVIRONMENT_DESCRIPTIONS[name] : "—";
+    }
+
     function canglingKeyValueRow(kind, name = "", value = "", secret = false) {
-      const hint = kind === "environment" && name === "KAFKA_RELAY_ENABLED" ? "中继kafka" : "";
       return `<tr data-cangling-kv-row>
-        <td class="cangling-kv-key"><input data-cangling-kv-key type="text" value="${esc(name)}" placeholder="VARIABLE_NAME" spellcheck="false" />${hint ? `<div class="hint" style="margin-top:4px;font-size:12px">${esc(hint)}</div>` : ""}</td>
+        <td class="cangling-kv-key"><input data-cangling-kv-key type="text" value="${esc(name)}" placeholder="VARIABLE_NAME" spellcheck="false" /></td>
         <td><input data-cangling-kv-value type="text" value="${esc(value)}" placeholder="变量值" autocomplete="off" spellcheck="false" /></td>
+        ${kind === "environment" ? `<td class="cangling-kv-description" data-cangling-kv-description>${esc(canglingEnvironmentDescription(name))}</td>` : ""}
         <td class="cangling-kv-actions${secret ? " with-random" : ""}"><div class="cangling-kv-actions-inner">${secret ? `<button type="button" class="btn small" data-cangling-kv-random aria-label="为 ${esc(name || "密钥")} 生成随机值">随机生成</button>` : ""}<button type="button" class="btn small" data-cangling-kv-delete aria-label="删除${kind === "secrets" ? "密钥" : "环境变量"}">删除</button></div></td>
       </tr>`;
     }
@@ -3437,7 +3483,7 @@
       const entries = Object.entries(values || {}).sort(([left], [right]) => left.localeCompare(right));
       return entries.length
         ? entries.map(([name, value]) => canglingKeyValueRow(kind, name, value, secret)).join("")
-        : `<tr data-cangling-kv-empty><td colspan="3" class="cangling-kv-empty">暂无配置</td></tr>`;
+        : `<tr data-cangling-kv-empty><td colspan="${kind === "environment" ? 4 : 3}" class="cangling-kv-empty">暂无配置</td></tr>`;
     }
 
     const CANGLING_ENVIRONMENT_GROUPS = [
@@ -3467,11 +3513,17 @@
       return [...groups, custom].map((group) => `
         <section class="cangling-environment-group">
           <div class="cangling-environment-group-head"><h4>${esc(group.title)}</h4><p>${esc(group.hint)}</p></div>
-          <div class="cangling-table-wrap cangling-kv-wrap"><table class="cangling-kv-table"><thead><tr><th>变量名</th><th>值</th><th></th></tr></thead><tbody id="cangling-environment-${group.id}-rows">${group.entries.length ? group.entries.map(([name, value]) => canglingKeyValueRow("environment", name, value, false)).join("") : '<tr data-cangling-kv-empty><td colspan="3" class="cangling-kv-empty">暂无配置</td></tr>'}</tbody></table></div>
+          <div class="cangling-table-wrap cangling-kv-wrap"><table class="cangling-kv-table cangling-env-table"><thead><tr><th>变量名</th><th>值</th><th>说明</th><th class="cangling-kv-actions"></th></tr></thead><tbody id="cangling-environment-${group.id}-rows">${group.entries.length ? group.entries.map(([name, value]) => canglingKeyValueRow("environment", name, value, false)).join("") : '<tr data-cangling-kv-empty><td colspan="4" class="cangling-kv-empty">暂无配置</td></tr>'}</tbody></table></div>
         </section>`).join("");
     }
 
     function bindCanglingKeyValueActions() {
+      document.querySelectorAll("[data-cangling-kv-key]").forEach(input => {
+        input.oninput = () => {
+          const description = input.closest("tr").querySelector("[data-cangling-kv-description]");
+          if (description) description.textContent = canglingEnvironmentDescription(input.value.trim());
+        };
+      });
       document.querySelectorAll("[data-cangling-kv-random]").forEach((button) => {
         button.onclick = () => {
           const row = button.closest("[data-cangling-kv-row]");
@@ -3489,7 +3541,7 @@
           const body = row && row.parentElement;
           if (row) row.remove();
           if (body && !body.querySelector("[data-cangling-kv-row]")) {
-            body.innerHTML = `<tr data-cangling-kv-empty><td colspan="3" class="cangling-kv-empty">暂无配置</td></tr>`;
+            body.innerHTML = `<tr data-cangling-kv-empty><td colspan="${body.id.startsWith("cangling-environment-") ? 4 : 3}" class="cangling-kv-empty">暂无配置</td></tr>`;
           }
         };
       });
