@@ -7496,7 +7496,9 @@
       if (fill && !unknown) fill.style.width = (job.percent || 0) + "%";
       if (sub) {
         const msg = job.message || "";
-        if (state.busy === "zot-environment") {
+        if (["jar-download", "jar-verify", "jar-sync"].includes(job.phase)) {
+          sub.textContent = job.total ? "整体进度 " + (job.percent || 0) + "%" : "";
+        } else if (state.busy === "zot-environment") {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 步") : "";
         } else if (job.phase === "import") {
           sub.textContent = job.total ? (job.current + " / " + job.total + " 个节点") : "";
