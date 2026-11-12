@@ -295,7 +295,9 @@ fn migrate_builtin_image_versions(config: &mut CanglingConfig) {
     for app in &mut config.applications {
         app.image = match app.image.as_str() {
             "cangling-broker:0.1.60" => "cangling-broker:0.1.73".into(),
-            "cangling-map:0.1.11" | "cangling-map:0.1.21" => "cangling-map:0.1.22".into(),
+            "cangling-map:0.1.11" | "cangling-map:0.1.21" | "cangling-map:0.1.22" => {
+                "cangling-map:0.1.23".into()
+            }
             _ => continue,
         };
     }
@@ -1240,7 +1242,7 @@ fn default_config() -> CanglingConfig {
             "地图服务",
             ApplicationGroup::Multi,
             WorkloadKind::Deployment,
-            "cangling-map:0.1.22",
+            "cangling-map:0.1.23",
             &[3000],
             "/opt/cangling/local/cangling-map",
         ),
@@ -2624,7 +2626,7 @@ mod tests {
             .unwrap();
         assert_eq!(map.group, ApplicationGroup::Multi);
         assert_eq!(map.replicas, 1);
-        assert_eq!(map.image, "cangling-map:0.1.22");
+        assert_eq!(map.image, "cangling-map:0.1.23");
         let tile = config
             .applications
             .iter()

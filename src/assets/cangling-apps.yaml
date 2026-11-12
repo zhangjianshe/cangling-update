@@ -423,7 +423,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: cangling-map
-          image: hub.cangling.cn/cangling/cangling-map:0.1.22
+          image: hub.cangling.cn/cangling/cangling-map:0.1.23
           imagePullPolicy: IfNotPresent
           env:
             - {name: MAP_SERVER_ADDRESS, value: "0.0.0.0:3000"}
