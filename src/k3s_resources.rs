@@ -338,7 +338,7 @@ fn kubectl_arguments(binary: &KubectlBinary, args: Vec<String>) -> Vec<String> {
     }
 }
 
-async fn kubectl(args: Vec<String>, limit: Duration) -> Result<String, AppError> {
+pub(crate) async fn kubectl(args: Vec<String>, limit: Duration) -> Result<String, AppError> {
     let binary =
         kubectl_binary().ok_or_else(|| AppError::internal("当前主机未安装 k3s 或 kubectl"))?;
     let program = match &binary {

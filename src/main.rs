@@ -9,6 +9,7 @@ mod certificate_manager;
 mod cluster;
 mod db;
 mod dbadmin;
+mod k3s_db;
 mod dbbackup;
 mod docker;
 mod error;

@@ -179,7 +179,57 @@ fn has_internal_semicolon(sql: &str) -> bool {
     strip_trailing_semicolons(sql).contains(';')
 }
 
+const K3S_DB_ROOT: &str = "/__cangling_k3s_db__";
+
+fn validate_k3s_name(name: &str) -> Result<(), AppError> {
+    if name.is_empty()
+        || name.len() > 253
+        || !name.as_bytes()[0].is_ascii_alphanumeric()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+    {
+        return Err(AppError::bad("无效的 K3s 数据库目标名称"));
+    }
+    Ok(())
+}
+
+pub(crate) fn k3s_directory(namespace: &str, pod: &str) -> Result<std::path::PathBuf, AppError> {
+    validate_k3s_name(namespace)?;
+    validate_k3s_name(pod)?;
+    Ok(Path::new(K3S_DB_ROOT).join(namespace).join(pod))
+}
+
+async fn k3s_exec(dir: &Path, container: &str, args: Vec<String>) -> Result<String, AppError> {
+    let parts = dir
+        .strip_prefix(K3S_DB_ROOT)
+        .map_err(|_| AppError::bad("无效的 K3s 目标"))?
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err(AppError::bad("无效的 K3s 目标"));
+    }
+    for name in [&parts[0], &parts[1], container] {
+        validate_k3s_name(name)?;
+    }
+    let mut command = vec![
+        "exec".into(),
+        "--namespace".into(),
+        parts[0].clone(),
+        parts[1].clone(),
+        "--container".into(),
+        container.into(),
+        "--".into(),
+    ];
+    command.extend(args);
+    crate::k3s_resources::kubectl(command, QUERY_TIMEOUT).await
+}
+
 async fn printenv(docker: &Docker, dir: &Path, service: &str) -> Result<String, AppError> {
+    if dir.starts_with(K3S_DB_ROOT) {
+        return k3s_exec(dir, service, vec!["env".into()]).await;
+    }
     match docker
         .compose_exec_output(
             dir,
@@ -247,6 +297,19 @@ async fn try_psql(
     cmd.push("ON_ERROR_STOP=1".into());
     cmd.push("-tAc".into());
     cmd.push(sql.to_string());
+    if dir.starts_with(K3S_DB_ROOT) {
+        if conn.container_user.is_some() {
+            bail!("kubectl exec 不支持切换容器用户");
+        }
+        let mut args = vec!["env".into()];
+        if let Some(password) = conn.password.as_deref() {
+            args.push(format!("PGPASSWORD={password}"));
+        }
+        args.extend(cmd);
+        return k3s_exec(dir, service, args)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()));
+    }
     docker
         .compose_exec_output(
             dir,

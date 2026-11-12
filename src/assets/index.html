@@ -372,8 +372,20 @@
     }
     .cangling-page { max-width: 1680px; width: 100%; margin: 0 auto; }
     .cangling-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+    .cangling-page > .title-row { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(0, 1fr) auto; grid-template-areas: "heading feedback actions"; }
+    .cangling-page > .title-row > :first-child { grid-area: heading; min-width: 0; }
+    .cangling-page > .title-row > #flash { grid-area: feedback; min-width: 0; margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+    .cangling-page > .title-row > #flash[hidden] { display: none !important; }
+    .cangling-page > .title-row > .cangling-actions { grid-area: actions; }
+    @media (max-width: 1200px) {
+      .cangling-page > .title-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "heading heading" "feedback actions"; }
+    }
+    @media (max-width: 700px) {
+      .cangling-page > .title-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "heading" "feedback" "actions"; }
+    }
+
     .cangling-tabs {
-      display: flex; gap: 2px; margin: 14px 0 16px; padding: 0 4px;
+      display: flex; gap: 2px; margin: 14px 0 16px; padding: 0;
       overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--line); background: var(--bg-2);
     }
     .cangling-run-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
@@ -381,6 +393,8 @@
       position: relative; flex: 0 0 auto; padding: 11px 16px; border: 0;
       color: var(--muted); background: transparent; font: inherit; font-weight: 600; cursor: pointer;
     }
+    .cangling-tabs > .cangling-tab:first-child { padding-left: 0; }
+    .cangling-tabs > .cangling-tab:first-child.active::after { left: 0; }
     .cangling-tab:hover { color: var(--text); background: var(--bg-3); }
     .cangling-tab.active { color: var(--accent); }
     .cangling-tab.active::after {
@@ -389,10 +403,11 @@
     }
     .cangling-tab:focus-visible { outline: 2px solid var(--accent-emphasis); outline-offset: -2px; }
     .cangling-tab-panel { min-width: 0; }
+    .cangling-tabs[hidden] { display: none !important; }
     .cangling-tab-panel[hidden] { display: none; }
-    .cangling-tab-panel > .card { margin: 0; border: 0; box-shadow: none; }
+    .cangling-tab-panel > .card { margin: 0; padding-inline: 0; border: 0; box-shadow: none; }
     .cangling-deployment-stack { display: flex; flex-direction: column; gap: 14px; }
-    .cangling-deployment-stack .card { margin: 0; border: 0; box-shadow: none; }
+    .cangling-deployment-stack .card { margin: 0; padding-inline: 0; border: 0; box-shadow: none; }
     .cangling-global {
       display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px 16px;
     }
@@ -588,7 +603,11 @@
     .check { display: flex; align-items: center; gap: 6px; margin: 4px 0; color: var(--text); }
     main {
       min-width: 0; min-height: 0; overflow: auto; padding: 22px 26px 40px;
+      scrollbar-gutter: stable;
       display: flex; flex-direction: column;
+    }
+    @supports not (scrollbar-gutter: stable) {
+      main:not(.db-fill) { overflow-y: scroll; }
     }
     main.db-fill { overflow: hidden; padding-bottom: 16px; }
     main.db-fill #orphan-box { display: none; }
@@ -1654,7 +1673,7 @@
       return proto + "://" + location.host + appPath(path);
     }
 
-    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "jars", canglingRunTab: "runtime", canglingJars: [], canglingJarSelection: new Set(), canglingRuntime: null, canglingJarDirectory: "/opt/cangling/jar-deploy/incoming", canglingJarDistributionDirectory: "/opt/cangling/jars", canglingHostAuto: true, canglingHostSync: 0, canglingImageImportWatch: 0 };
+    const state = { meta: null, projects: [], current: null, versions: [], compose: null, files: [], np4RepoFiles: [], tempFiles: [], busy: null, user: null, needsSetup: false, projectTab: "containers", storages: [], clusterNodes: [], managedHosts: [], hostinfoNote: "", clusterOverviewOpen: false, k3sKind: "nodes", k3sNamespace: "_all", k3sResource: "", k3sStatus: null, k3sNamespaces: [], k3sItems: [], canglingConfig: null, canglingYaml: "", canglingTab: "cluster", canglingDeployTab: "cluster", canglingRunTab: "containers", canglingJars: [], canglingJarSelection: new Set(), canglingRuntime: null, canglingJarDirectory: "/opt/cangling/jar-deploy/incoming", canglingJarDistributionDirectory: "/opt/cangling/jars", canglingHostAuto: true, canglingHostSync: 0, canglingImageImportWatch: 0 };
     const PROJECT_TABS = [
       {
         id: "import",
@@ -1701,6 +1720,8 @@
     const clusterPoll = { timer: null, inflight: false };
     const k3sPoll = { timer: null, inflight: false };
     const canglingRuntimePoll = { timer: null, inflight: false };
+    let canglingJarJobWatch = "";
+    const canglingDeploymentRestarts = new Set();
     const canglingDataInitPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
     const jarUpgradePoll = { timer: null, jobId: null };
@@ -2322,7 +2343,7 @@
     function sectionFromHash(hash) {
       if (hash === "#/cluster") return "cluster";
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return "k3s";
-      if (hash === "#/cangling") return "cangling";
+      if (hash === "#/cangling" || hash.startsWith("#/k3s-db/")) return "cangling";
       if (hash === "#/images") return "images";
       if (hash === "#/certificates") return "certificates";
       if (hash === "#/install-resources") return "install-resources";
@@ -2361,6 +2382,11 @@
       setMetaPanelOpen(false);
       syncSectionChrome();
       const hash = location.hash || "#/";
+      if (hash.startsWith("#/k3s-db/")) {
+        const parts = hash.slice("#/k3s-db/".length).split("/");
+        if (parts.length === 3) return renderK3sDatabase(parts.map(decodeURIComponent));
+      }
+      dbAdmin.k3s = null;
       if (hash === "#/new") return renderNew();
       if (hash === "#/cluster") return renderCluster();
       if (hash === "#/k3s" || hash === "#/cluster/k3s") return renderK3s();
@@ -3108,17 +3134,32 @@
         <div id="flash" hidden></div>
         <div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取部署模板…</div></div>
       </div>`;
+      const loadingView = main.firstElementChild;
       try {
         const [config, storages, nodes] = await Promise.all([
           state.canglingConfig || api("/api/cangling/apps/config"),
           api("/api/storages").catch(() => state.storages || []),
           api("/api/cluster/nodes").catch(() => state.clusterNodes || []),
         ]);
+        if (location.hash !== "#/cangling" || main.firstElementChild !== loadingView) return;
+        let runtime = null;
+        let detectionError = "";
+        try {
+          runtime = await api("/api/cangling/apps/runtime?namespace=" + encodeURIComponent(config.namespace || "cangling"));
+        } catch (error) { detectionError = error.message; }
+        if (location.hash !== "#/cangling" || main.firstElementChild !== loadingView) return;
+        const deployed = !!(runtime && (runtime.deployments || []).length);
+        state.canglingRuntime = runtime;
+        state.canglingTab = deployed ? "run" : "cluster";
+        state.canglingRunTab = "containers";
+        if (!deployed) state.canglingDeployTab = "cluster";
         state.canglingConfig = config;
         state.storages = storages || [];
         state.clusterNodes = nodes || [];
         renderCanglingAppsForm();
+        if (detectionError) flash("err", "暂时无法确认部署状态，已打开应用部署：" + detectionError);
       } catch (e) {
+        if (location.hash !== "#/cangling" || main.firstElementChild !== loadingView) return;
         main.innerHTML = `<div class="cangling-page"><div class="title-row"><div><h2>苍灵应用</h2></div></div><div class="card"><h3>无法读取部署模板</h3><p class="hint">${esc(e.message)}</p><button type="button" class="btn" id="cangling-retry">重试</button></div></div>`;
         const retry = $("#cangling-retry");
         if (retry) retry.onclick = () => { state.canglingConfig = null; renderCanglingApps(); };
@@ -3667,12 +3708,12 @@
 
     function updateCanglingJarDeleteState() {
       const button = $("#cangling-jar-delete");
-      if (button) button.disabled = state.canglingJarSelection.size === 0;
+      if (button) button.disabled = !!canglingJarJobWatch || state.canglingJarSelection.size === 0;
     }
 
     async function loadCanglingJars() {
       const rows = $("#cangling-jar-rows");
-      if (!rows || state.canglingTab !== "jars") return;
+      if (!rows || state.canglingTab !== "run" || state.canglingRunTab !== "jars") return;
       rows.innerHTML = `<tr><td colspan="4" class="empty db-loading"><span class="spin"></span>正在读取 JAR 包…</td></tr>`;
       try {
         const result = await api("/api/cangling/apps/jars");
@@ -3680,6 +3721,8 @@
         state.canglingJarDirectory = result.directory || "/opt/cangling/jar-deploy/incoming";
         state.canglingJarDistributionDirectory = result.distributionDirectory || "/opt/cangling/jars";
         renderCanglingJars();
+        const online = await api("/api/cangling/apps/jars/online");
+        if (online && !online.done && !canglingJarJobWatch) await waitCanglingJarJob(online.id);
       } catch (error) {
         rows.innerHTML = `<tr><td colspan="4" class="empty bad">${esc(error.message)}</td></tr>`;
       }
@@ -3706,7 +3749,27 @@
       }
     }
 
+    async function fetchCanglingJarsOnline() {
+      if (canglingJarJobWatch) return;
+      const button = $("#cangling-jar-online");
+      button.disabled = true;
+      try {
+        const job = await api("/api/cangling/apps/jars/online", { method: "POST" });
+        await waitCanglingJarJob(job.id);
+      } catch (error) {
+        if (!error.canglingJarProgressShown) await showCanglingJarProgressError(error.message);
+        flash("err", "在线获取 JAR 失败：" + error.message);
+      } finally { button.disabled = false; }
+    }
+
     async function waitCanglingJarJob(id, successPrefix = "") {
+      if (canglingJarJobWatch === id) return;
+      if (canglingJarJobWatch) throw new Error("已有 JAR 任务正在运行");
+      canglingJarJobWatch = id;
+      const online = $("#cangling-jar-online");
+      const remove = $("#cangling-jar-delete");
+      if (online) online.disabled = true;
+      if (remove) remove.disabled = true;
       const sync = $("#cangling-jar-sync");
       const upload = $("#cangling-jar-select");
       if (sync) sync.disabled = true;
@@ -3716,6 +3779,7 @@
       try {
         while (true) {
           const job = await api("/api/jobs/" + id);
+          setCanglingJarProgressPhase(job.phase === "jar-download" ? "upload" : job.phase === "jar-verify" ? "check" : "sync");
           renderProgress("cangling-jar-prog", job);
           if (job.done) {
             if (job.error) throw new Error(job.error);
@@ -3729,6 +3793,9 @@
         error.canglingJarProgressShown = true;
         throw error;
       } finally {
+        canglingJarJobWatch = "";
+        if (online) online.disabled = false;
+        updateCanglingJarDeleteState();
         if (sync) sync.disabled = false;
         if (upload) upload.disabled = false;
         showProgress("cangling-jar-prog", false);
@@ -3911,14 +3978,18 @@
         return;
       }
       const deployments = data.deployments || [];
-      const deploymentRows = deployments.map((item) => {
+      const deploymentRows = deployments.map((item, index) => {
         const metadata = item.metadata || {}, spec = item.spec || {}, status = item.status || {};
         const desired = spec.replicas == null ? 1 : spec.replicas;
         const ready = status.readyReplicas || 0;
         const available = status.availableReplicas || 0;
         const ok = desired > 0 && ready >= desired;
         const condition = (status.conditions || []).slice().reverse().find((entry) => entry.status === "False" || entry.type === "Progressing") || {};
-        return `<tr><td class="runtime-status"><span class="dot ${ok ? "online" : "offline"}"></span>${ok ? "已就绪" : "未就绪"}</td><td class="k3s-resource-name runtime-name">${esc(metadata.name || "—")}</td><td class="runtime-count">${ready}/${desired}</td><td class="runtime-count">${available}</td><td class="runtime-reason">${esc(condition.reason || (ok ? "运行正常" : "等待 Pod 就绪"))}</td><td class="runtime-time">${esc(fmtDateTime(metadata.creationTimestamp))}</td></tr>`;
+        const namespace = metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling";
+        const pending = canglingDeploymentRestarts.has(namespace + "/" + metadata.name);
+        const blocked = !metadata.name || desired === 0 || spec.paused || metadata.deletionTimestamp;
+        const restartHint = desired === 0 ? "副本数为 0，请先扩容后再重启" : spec.paused ? "部署已暂停，请先恢复后再重启" : metadata.deletionTimestamp ? "工作负载正在删除" : "滚动重启该工作负载的全部 Pod";
+        return `<tr><td class="runtime-status"><span class="dot ${ok ? "online" : "offline"}"></span>${ok ? "已就绪" : "未就绪"}</td><td class="k3s-resource-name runtime-name">${esc(metadata.name || "—")}</td><td class="runtime-count">${ready}/${desired}</td><td class="runtime-count">${available}</td><td class="runtime-reason">${esc(condition.reason || (ok ? "运行正常" : "等待 Pod 就绪"))}</td><td class="runtime-time">${esc(fmtDateTime(metadata.creationTimestamp))}</td><td class="runtime-actions"><button type="button" class="btn" data-cangling-deployment-restart="${index}" title="${esc(restartHint)}" ${pending || blocked ? "disabled" : ""}>${pending ? "处理中…" : "重启"}</button></td></tr>`;
       }).join("");
       root.innerHTML = `
         <div class="k3s-summary">
@@ -3926,7 +3997,32 @@
           <div class="k3s-stat"><span>更新时间</span><strong>${esc(fmtDateTime(data.checkedAt))}</strong></div>
         </div>
         <div class="cangling-section-head"><h3>工作负载</h3><p class="hint">Deployment 的期望、就绪及可用副本</p></div>
-        <div class="cangling-table-wrap"><table class="cluster-table cangling-runtime-table"><thead><tr><th class="runtime-status">状态</th><th class="runtime-name">名称</th><th class="runtime-count">就绪/期望</th><th class="runtime-count">可用</th><th class="runtime-reason">说明</th><th class="runtime-time">创建时间</th></tr></thead><tbody>${deploymentRows || '<tr><td colspan="6" class="empty">当前命名空间没有 Deployment</td></tr>'}</tbody></table></div>`;
+        <div class="cangling-table-wrap"><table class="cluster-table cangling-runtime-table"><thead><tr><th class="runtime-status">状态</th><th class="runtime-name">名称</th><th class="runtime-count">就绪/期望</th><th class="runtime-count">可用</th><th class="runtime-reason">说明</th><th class="runtime-time">创建时间</th><th class="runtime-actions">操作</th></tr></thead><tbody>${deploymentRows || '<tr><td colspan="7" class="empty">当前命名空间没有 Deployment</td></tr>'}</tbody></table></div>`;
+      root.querySelectorAll("[data-cangling-deployment-restart]").forEach((button) => {
+        button.onclick = () => restartCanglingDeployment(deployments[Number(button.dataset.canglingDeploymentRestart)]);
+      });
+    }
+
+    async function restartCanglingDeployment(item) {
+      const metadata = item && item.metadata || {};
+      const spec = item && item.spec || {};
+      const namespace = metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling";
+      const name = metadata.name;
+      const key = namespace + "/" + name;
+      if (!name || spec.replicas === 0 || spec.paused || metadata.deletionTimestamp || canglingDeploymentRestarts.has(key)) return;
+      canglingDeploymentRestarts.add(key);
+      renderCanglingRuntime();
+      try {
+        if (!(await confirmDialog(`确定滚动重启工作负载 ${namespace}/${name}？将按部署策略重新创建该工作负载的全部 Pod，单副本服务可能短暂不可用。`, { danger: true, confirmText: "重启" }))) return;
+        await api("/api/k3s/workloads/deployments/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(name) + "/restart", { method: "POST" });
+        flash("ok", `已请求滚动重启 ${name}，就绪状态将自动刷新`);
+        await loadCanglingRuntime(true);
+      } catch (error) {
+        flash("err", `重启工作负载 ${name} 失败：${error.message}`);
+      } finally {
+        canglingDeploymentRestarts.delete(key);
+        renderCanglingRuntime();
+      }
     }
 
     function renderCanglingDiagnosis() {
@@ -3934,7 +4030,7 @@
       if (!root) return;
       const data = state.canglingRuntime;
       if (!data) {
-        root.innerHTML = `<div class="empty db-loading"><span class="spin"></span>正在读取 Pod 诊断…</div>`;
+        root.innerHTML = `<div class="empty db-loading"><span class="spin"></span>正在读取事件…</div>`;
         return;
       }
       const pods = data.pods || [];
@@ -3966,7 +4062,7 @@
     }
 
     async function loadCanglingRuntime(quiet = false) {
-      if (canglingRuntimePoll.inflight || state.canglingTab !== "run" || state.canglingRunTab === "data-init") return;
+      if (canglingRuntimePoll.inflight || state.canglingTab !== "run" || ["jars", "data-init"].includes(state.canglingRunTab)) return;
       canglingRuntimePoll.inflight = true;
       const activeRunTab = state.canglingRunTab;
       const root = $("#cangling-" + activeRunTab + "-root");
@@ -4052,7 +4148,25 @@
       const root = $("#cangling-containers-root");
       if (!root) return;
       const rows = canglingContainerRows();
-      root.innerHTML = `<div class="cangling-table-wrap"><table class="cluster-table cangling-container-table"><thead><tr><th>状态</th><th>容器名称</th><th>Pod</th><th>节点</th><th>镜像</th><th>重启</th><th class="container-actions">操作</th></tr></thead><tbody>${rows.map((item, index) => `<tr><td><span class="dot ${item.ready ? "online" : "offline"}"></span>${esc(item.state)}</td><td class="k3s-resource-name">${esc(item.name)}</td><td>${esc(item.pod)}</td><td>${esc(item.node)}</td><td class="cangling-container-image" title="${esc(item.image)}">${esc(item.image)}</td><td>${item.restarts}</td><td class="container-actions"><button type="button" class="btn" data-cangling-container-enter="${index}">进入容器</button><button type="button" class="btn" data-cangling-container-logs="${index}">查看日志</button><button type="button" class="btn danger" data-cangling-container-restart="${index}">重启</button></td></tr>`).join("") || '<tr><td colspan="7" class="empty">cangling 命名空间中没有容器</td></tr>'}</tbody></table></div>`;
+      root.innerHTML = `<div class="cangling-table-wrap"><table class="cluster-table cangling-container-table"><thead><tr><th>状态</th><th>容器名称</th><th>Pod</th><th>节点</th><th>镜像</th><th>重启</th><th class="container-actions">操作</th></tr></thead><tbody>${rows.map((item, index) => `<tr><td><span class="dot ${item.ready ? "online" : "offline"}"></span>${esc(item.state)}</td><td class="k3s-resource-name">${esc(item.name)}</td><td>${esc(item.pod)}</td><td>${esc(item.node)}</td><td class="cangling-container-image" title="${esc(item.image)}">${esc(item.image)}</td><td>${item.restarts}</td><td class="container-actions">${/postgres|postgis|polardb/i.test(item.image + " " + item.name) ? `<button type="button" class="btn" data-cangling-container-db="${index}">数据库管理</button>` : ""}<button type="button" class="btn" data-cangling-container-enter="${index}">进入容器</button><button type="button" class="btn" data-cangling-container-logs="${index}">查看日志</button><button type="button" class="btn danger" data-cangling-container-restart="${index}">重启</button></td></tr>`).join("") || '<tr><td colspan="7" class="empty">cangling 命名空间中没有容器</td></tr>'}</tbody></table></div>`;
+      root.querySelectorAll("[data-cangling-container-db]").forEach(button => button.onclick = async () => {
+        const item = rows[Number(button.dataset.canglingContainerDb)];
+        button.disabled = true;
+        button.textContent = "连接检测中…";
+        const originHash = location.hash;
+        try {
+          const base = "/api/k3s/db/" + encodeURIComponent(item.namespace) + "/" + encodeURIComponent(item.pod);
+          const meta = await api(base + "/meta?" + new URLSearchParams({service: item.name, engine: "postgres"}));
+          if (!(meta.engines || []).includes("postgres")) throw new Error("该容器未检测到可用的 PostgreSQL 连接");
+          if (location.hash !== originHash) return;
+          location.hash = "#/k3s-db/" + [item.namespace, item.pod, item.name].map(encodeURIComponent).join("/");
+        } catch (error) {
+          flash("err", "连接数据库失败：" + error.message);
+        } finally {
+          button.disabled = false;
+          button.textContent = "数据库管理";
+        }
+      });
       root.querySelectorAll("[data-cangling-container-enter]").forEach((button) => button.onclick = () => openCanglingContainerTerminal(rows[Number(button.dataset.canglingContainerEnter)]));
       root.querySelectorAll("[data-cangling-container-logs]").forEach((button) => button.onclick = () => openCanglingContainerLogs(rows[Number(button.dataset.canglingContainerLogs)]));
       root.querySelectorAll("[data-cangling-container-restart]").forEach((button) => button.onclick = () => restartCanglingContainer(rows[Number(button.dataset.canglingContainerRestart)]));
@@ -4221,9 +4335,16 @@
     }
 
     function selectCanglingTab(tab) {
-      const tabs = ["jars", "cluster", "environment", "secrets", "deployment", "yaml", "run"];
-      const selected = tabs.includes(tab) ? tab : "jars";
+      const tabs = ["cluster", "environment", "secrets", "deployment", "yaml", "run"];
+      const selected = tabs.includes(tab) ? tab : "cluster";
       state.canglingTab = selected;
+      if (selected !== "run") state.canglingDeployTab = selected;
+      $("#cangling-deploy-nav").hidden = selected === "run";
+      document.querySelectorAll("[data-cangling-mode]").forEach(button => {
+        const active = button.dataset.canglingMode === (selected === "run" ? "status" : "deploy");
+        button.classList.toggle("primary", active);
+        button.setAttribute("aria-pressed", String(active));
+      });
       document.querySelectorAll("[data-cangling-tab]").forEach((button) => {
         const active = button.dataset.canglingTab === selected;
         button.classList.toggle("active", active);
@@ -4233,7 +4354,6 @@
       document.querySelectorAll("[data-cangling-tab-panel]").forEach((panel) => {
         panel.hidden = panel.dataset.canglingTabPanel !== selected;
       });
-      if (selected === "jars") loadCanglingJars();
       if (selected === "secrets") mountCanglingNginxEditor();
       stopCanglingRuntimePoll();
       if (selected !== "run" && canglingDataInitPoll.timer) {
@@ -4248,22 +4368,24 @@
     }
 
     function selectCanglingRunTab(tab) {
-      const tabs = ["runtime", "diagnosis", "containers", "services", "configs", "data-init"];
-      state.canglingRunTab = tabs.includes(tab) ? tab : "runtime";
+      const tabs = ["jars", "data-init", "runtime", "diagnosis", "containers", "services", "configs"];
+      state.canglingRunTab = tabs.includes(tab) ? tab : "containers";
       if (state.canglingRunTab !== "data-init" && canglingDataInitPoll.timer) {
         clearInterval(canglingDataInitPoll.timer);
         canglingDataInitPoll.timer = null;
       }
       document.querySelectorAll("[data-cangling-run-tab]").forEach((button) => {
         const active = button.dataset.canglingRunTab === state.canglingRunTab;
-        button.classList.toggle("primary", active);
-        button.setAttribute("aria-pressed", active ? "true" : "false");
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
       });
       document.querySelectorAll("[data-cangling-run-panel]").forEach((panel) => {
         panel.hidden = panel.dataset.canglingRunPanel !== state.canglingRunTab;
       });
       if (state.canglingTab === "run") {
-        if (state.canglingRunTab === "data-init") loadCanglingDataInit();
+        if (state.canglingRunTab === "jars") loadCanglingJars();
+        else if (state.canglingRunTab === "data-init") loadCanglingDataInit();
         else loadCanglingRuntime(false);
       }
     }
@@ -4504,26 +4626,16 @@
       main.innerHTML = `<div class="cangling-page">
         <div class="title-row">
           <div><h2>苍灵应用</h2><div class="path">配置单实例、多实例与系统入口，生成可审查的 K3s 部署清单</div></div>
-          <div class="cangling-actions"><button type="button" class="btn" id="cangling-import-images">导入镜像</button><button type="button" class="btn" id="cangling-reset">恢复默认值</button></div>
+          <div id="flash" role="status" aria-live="polite" hidden></div>
+          <div class="cangling-actions"><div class="row" role="group" aria-label="苍灵应用导航"><button type="button" class="btn" data-cangling-mode="deploy">应用部署</button><button type="button" class="btn" data-cangling-mode="status">运行与升级</button></div><button type="button" class="btn" id="cangling-import-images">导入镜像</button></div>
         </div>
-        <div id="flash" hidden></div>
-        <div class="cangling-tabs" role="tablist" aria-label="苍灵应用配置">
-          <button type="button" class="cangling-tab" data-cangling-tab="jars" role="tab" aria-controls="cangling-panel-jars">JAR 包</button>
+        <div class="cangling-tabs" id="cangling-deploy-nav" role="tablist" aria-label="应用部署">
           <button type="button" class="cangling-tab" data-cangling-tab="cluster" role="tab" aria-controls="cangling-panel-cluster">集群与存储</button>
           <button type="button" class="cangling-tab" data-cangling-tab="environment" role="tab" aria-controls="cangling-panel-environment">环境变量</button>
           <button type="button" class="cangling-tab" data-cangling-tab="secrets" role="tab" aria-controls="cangling-panel-secrets">密钥</button>
           <button type="button" class="cangling-tab" data-cangling-tab="deployment" role="tab" aria-controls="cangling-panel-deployment">部署</button>
           <button type="button" class="cangling-tab" data-cangling-tab="yaml" role="tab" aria-controls="cangling-panel-yaml">YAML</button>
-          <button type="button" class="cangling-tab" data-cangling-tab="run" role="tab" aria-controls="cangling-panel-run">运行状态</button>
         </div>
-        <section class="cangling-tab-panel" id="cangling-panel-jars" data-cangling-tab-panel="jars" role="tabpanel">
-          <div class="card">
-            <div class="cangling-section-head"><div><h3>JAR 包</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新</button><button type="button" class="btn danger" id="cangling-jar-delete" disabled>删除所选</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
-            <div class="progress-wrap" id="cangling-jar-prog" hidden><div class="progress-meta"><span id="cangling-jar-prog-msg">准备中</span><span id="cangling-jar-prog-pct">0%</span></div><div class="progress" id="cangling-jar-prog-bar"><span></span></div><div class="progress-sub" id="cangling-jar-prog-sub"></div></div>
-            <p class="hint hint-soft">上传前分块计算 SHA-256，与服务器一致的文件会跳过上传；同步采用临时文件传输、校验和原子替换。正在运行的容器不会被中断，仍使用原来的只读挂载；重启或重新部署 Pod 后才会加载新 JAR。</p>
-            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th class="select-cell"><input type="checkbox" id="cangling-jar-select-all" aria-label="全选 JAR 包" /></th><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="4" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
-          </div>
-        </section>
         <section class="cangling-tab-panel" id="cangling-panel-cluster" data-cangling-tab-panel="cluster" role="tabpanel">
           <div class="card">
           <div class="cangling-section-head"><h3>集群与存储</h3><p class="hint">路径均为 K3s 节点上的绝对路径</p></div>
@@ -4588,14 +4700,23 @@
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-run" data-cangling-tab-panel="run" role="tabpanel" hidden>
-          <div class="cangling-run-nav" role="group" aria-label="苍灵应用运行信息">
-            <button type="button" class="btn" data-cangling-run-tab="runtime" aria-controls="cangling-panel-runtime">部署</button>
-            <button type="button" class="btn" data-cangling-run-tab="diagnosis" aria-controls="cangling-panel-diagnosis">Pod 诊断</button>
-            <button type="button" class="btn" data-cangling-run-tab="containers" aria-controls="cangling-panel-containers">容器</button>
-            <button type="button" class="btn" data-cangling-run-tab="services" aria-controls="cangling-panel-services">Service</button>
-            <button type="button" class="btn" data-cangling-run-tab="configs" aria-controls="cangling-panel-configs">配置</button>
-            <button type="button" class="btn" data-cangling-run-tab="data-init" aria-controls="cangling-panel-data-init">数据初始化</button>
+          <div class="cangling-tabs" role="tablist" aria-label="运行与升级">
+            <button type="button" class="cangling-tab" data-cangling-run-tab="jars" role="tab" aria-controls="cangling-panel-jars">Jar包更新</button>
+            <button type="button" class="cangling-tab" role="tab" data-cangling-run-tab="data-init" aria-controls="cangling-panel-data-init">数据初始化</button>
+            <button type="button" class="cangling-tab" role="tab" data-cangling-run-tab="runtime" aria-controls="cangling-panel-runtime">部署</button>
+            <button type="button" class="cangling-tab" role="tab" data-cangling-run-tab="diagnosis" aria-controls="cangling-panel-diagnosis">事件</button>
+            <button type="button" class="cangling-tab" role="tab" data-cangling-run-tab="containers" aria-controls="cangling-panel-containers">容器</button>
+            <button type="button" class="cangling-tab" role="tab" data-cangling-run-tab="services" aria-controls="cangling-panel-services">服务</button>
+            <button type="button" class="cangling-tab" role="tab" data-cangling-run-tab="configs" aria-controls="cangling-panel-configs">配置信息</button>
           </div>
+        <section class="cangling-tab-panel" id="cangling-panel-jars" data-cangling-run-panel="jars" role="tabpanel">
+          <div class="card">
+            <div class="cangling-section-head"><div><h3>Jar包更新</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新列表</button><button type="button" class="btn" id="cangling-jar-online" title="由服务器下载最新 JAR，并同步到所有节点">在线获取</button><button type="button" class="btn danger" id="cangling-jar-delete" disabled>删除所选</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
+            <div class="progress-wrap" id="cangling-jar-prog" hidden><div class="progress-meta"><span id="cangling-jar-prog-msg">准备中</span><span id="cangling-jar-prog-pct">0%</span></div><div class="progress" id="cangling-jar-prog-bar"><span></span></div><div class="progress-sub" id="cangling-jar-prog-sub"></div></div>
+            <p class="hint hint-soft">上传前分块计算 SHA-256，与服务器一致的文件会跳过上传；同步采用临时文件传输、校验和原子替换。正在运行的容器不会被中断，仍使用原来的只读挂载；重启或重新部署 Pod 后才会加载新 JAR。</p>
+            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th class="select-cell"><input type="checkbox" id="cangling-jar-select-all" aria-label="全选 JAR 包" /></th><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="4" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
+          </div>
+        </section>
         <section class="cangling-tab-panel" id="cangling-panel-runtime" data-cangling-run-panel="runtime" hidden>
           <div class="card">
             <div class="cangling-section-head"><div><h3>部署</h3><p class="hint">查看苍灵应用 Deployment 的期望、就绪及可用副本；页面每 5 秒自动刷新</p></div><button type="button" class="btn" id="cangling-runtime-refresh">刷新</button></div>
@@ -4604,8 +4725,8 @@
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-diagnosis" data-cangling-run-panel="diagnosis" hidden>
           <div class="card">
-            <div class="cangling-section-head"><div><h3>Pod 诊断</h3><p class="hint">查看等待原因、K3s 警告事件和容器重启次数；页面每 5 秒自动刷新</p></div><button type="button" class="btn" id="cangling-diagnosis-refresh">刷新</button></div>
-            <div id="cangling-diagnosis-root"><div class="empty db-loading"><span class="spin"></span>正在读取 Pod 诊断…</div></div>
+            <div class="cangling-section-head"><div><h3>事件</h3><p class="hint">查看等待原因、K3s 警告事件和容器重启次数；页面每 5 秒自动刷新</p></div><button type="button" class="btn" id="cangling-diagnosis-refresh">刷新</button></div>
+            <div id="cangling-diagnosis-root"><div class="empty db-loading"><span class="spin"></span>正在读取事件…</div></div>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-containers" data-cangling-run-panel="containers" hidden>
@@ -4615,10 +4736,10 @@
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-services" data-cangling-run-panel="services" hidden>
-          <div class="card"><div class="cangling-section-head"><div><h3>Service</h3><p class="hint">cangling 命名空间中的服务；点击名称查看端口和访问地址</p></div><button type="button" class="btn" id="cangling-services-refresh">刷新</button></div><div id="cangling-services-root"></div></div>
+          <div class="card"><div class="cangling-section-head"><div><h3>服务</h3><p class="hint">cangling 命名空间中的服务；点击名称查看端口和访问地址</p></div><button type="button" class="btn" id="cangling-services-refresh">刷新</button></div><div id="cangling-services-root"></div></div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-configs" data-cangling-run-panel="configs" hidden>
-          <div class="card"><div class="cangling-section-head"><div><h3>配置</h3><p class="hint">cangling 命名空间中的 ConfigMap 和 Secret；Secret 仅显示键名</p></div><button type="button" class="btn" id="cangling-configs-refresh">刷新</button></div><div id="cangling-configs-root"></div></div>
+          <div class="card"><div class="cangling-section-head"><div><h3>配置信息</h3><p class="hint">cangling 命名空间中的 ConfigMap 和 Secret；Secret 仅显示键名</p></div><button type="button" class="btn" id="cangling-configs-refresh">刷新</button></div><div id="cangling-configs-root"></div></div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-data-init" data-cangling-run-panel="data-init" hidden>
           <div class="card">
@@ -4647,9 +4768,12 @@
       $("#cangling-yaml-graph").onclick = toggleCanglingYamlGraph;
       $("#cangling-yaml-save").onclick = saveCanglingYaml;
       $("#cangling-yaml-apply").onclick = applyCanglingYaml;
-      $("#cangling-reset").onclick = resetCanglingConfig;
+      document.querySelectorAll("[data-cangling-mode]").forEach(button => {
+        button.onclick = () => selectCanglingTab(button.dataset.canglingMode === "status" ? "run" : state.canglingDeployTab || "cluster");
+      });
       $("#cangling-import-images").onclick = importCanglingAppImages;
       $("#cangling-jar-refresh").onclick = loadCanglingJars;
+      $("#cangling-jar-online").onclick = fetchCanglingJarsOnline;
       $("#cangling-jar-delete").onclick = deleteCanglingJars;
       $("#cangling-jar-select-all").onchange = (event) => {
         state.canglingJarSelection = event.target.checked
@@ -7680,24 +7804,7 @@
           </table>
         </div>
         <div class="card tab-panel" id="panel-db" data-panel="db" role="tabpanel" aria-labelledby="tab-db">
-          <p class="hint" style="margin-top:0">选择正在运行的容器，连接其中的 PostgreSQL，浏览 schema / 表 / 视图，或执行 SQL。当前仅支持 postgres。</p>
-          <div class="flash err" id="db-err" hidden></div>
-          <div class="db-toolbar">
-            <div class="field"><label>容器</label><div class="combo" id="db-service"></div></div>
-            <div class="field"><label>数据库类型</label><div class="combo" id="db-engine"></div></div>
-            <div class="field"><label>数据库</label><div class="combo" id="db-database"></div></div>
-            <div class="field"><label>Schema</label><div class="combo" id="db-schema"></div></div>
-            <div class="field db-filter-field"><label>表和视图</label><input id="db-filter" type="text" placeholder="过滤表 / 视图" autocomplete="off" spellcheck="false" /></div>
-            <div class="field"><label>&nbsp;</label><div class="db-backup-actions"><button type="button" class="btn" id="btn-db-backup">备份数据库</button><button type="button" class="btn" id="btn-db-backups">备份历史</button><button type="button" class="btn" id="btn-db-auto-backup">自动备份</button><button type="button" class="btn" id="btn-db-sql">执行 SQL</button></div></div>
-          </div>
-          <div class="db-split">
-            <div class="db-objects" id="db-objects"><div class="empty">请选择容器和 schema</div></div>
-            <div class="db-browse">
-              <div class="db-rowfilter" id="db-rowfilter" hidden></div>
-              <div class="db-data" id="db-data"><div class="empty">点击左侧表或视图查看数据</div></div>
-              <div class="db-pager" id="db-pager"><span class="hint">选择左侧表或视图后分页浏览</span></div>
-            </div>
-          </div>
+          ${dbPanelContent()}
         </div>
         <div id="orphan-box"></div>`;
 
@@ -8113,7 +8220,50 @@
       }
     }
 
+    function dbApiBase() {
+      const target = dbAdmin.k3s;
+      return target ? "/api/k3s/db/" + encodeURIComponent(target.namespace) + "/" + encodeURIComponent(target.pod)
+        : "/api/projects/" + state.current.id + "/db";
+    }
+
+    function dbContextAvailable() { return !!(dbAdmin.k3s || state.current); }
+
+    function dbPanelContent() {
+      return `          <p class="hint" style="margin-top:0">选择正在运行的容器，连接其中的 PostgreSQL，浏览 schema / 表 / 视图，或执行 SQL。当前仅支持 postgres。</p>
+          <div class="flash err" id="db-err" hidden></div>
+          <div class="db-toolbar">
+            <div class="field"><label>容器</label><div class="combo" id="db-service"></div></div>
+            <div class="field"><label>数据库类型</label><div class="combo" id="db-engine"></div></div>
+            <div class="field"><label>数据库</label><div class="combo" id="db-database"></div></div>
+            <div class="field"><label>Schema</label><div class="combo" id="db-schema"></div></div>
+            <div class="field db-filter-field"><label>表和视图</label><input id="db-filter" type="text" placeholder="过滤表 / 视图" autocomplete="off" spellcheck="false" /></div>
+            <div class="field"><label>&nbsp;</label><div class="db-backup-actions"><button type="button" class="btn" id="btn-db-backup">备份数据库</button><button type="button" class="btn" id="btn-db-backups">备份历史</button><button type="button" class="btn" id="btn-db-auto-backup">自动备份</button><button type="button" class="btn" id="btn-db-sql">执行 SQL</button></div></div>
+          </div>
+          <div class="db-split">
+            <div class="db-objects" id="db-objects"><div class="empty">请选择容器和 schema</div></div>
+            <div class="db-browse">
+              <div class="db-rowfilter" id="db-rowfilter" hidden></div>
+              <div class="db-data" id="db-data"><div class="empty">点击左侧表或视图查看数据</div></div>
+              <div class="db-pager" id="db-pager"><span class="hint">选择左侧表或视图后分页浏览</span></div>
+            </div>
+          </div>`;
+    }
+
+    function renderK3sDatabase(parts) {
+      const [namespace, pod, container] = parts;
+      dbAdmin.k3s = { namespace, pod, container };
+      state.current = null;
+      renderList();
+      const main = $("#main");
+      main.classList.add("db-fill");
+      main.innerHTML = `<div class="title-row"><div><h2>K3s 数据库管理</h2><div class="path">${esc(namespace)} / ${esc(pod)} / ${esc(container)}</div></div><a class="btn" href="#/cangling">返回苍灵应用</a></div><div id="flash" hidden></div><div class="card" id="panel-db">${dbPanelContent()}</div>`;
+      $("#panel-db > .hint").textContent = "通过 Pod 连接 PostgreSQL，浏览数据库、表和视图，修改记录或执行 SQL。";
+      ["btn-db-backup", "btn-db-backups", "btn-db-auto-backup"].forEach(id => $("#" + id).hidden = true);
+      dbOnService(container);
+    }
+
     function dbRunningServices() {
+      if (dbAdmin.k3s) return [{ name: dbAdmin.k3s.container }];
       return ((state.compose && state.compose.services) || []).filter((s) => /run/i.test(s.state || ""));
     }
 
@@ -8379,12 +8529,12 @@
       if (!dbAdmin.service) return;
       try {
         dbAdmin.busy = true;
-        const meta = await api("/api/projects/" + state.current.id + "/db/meta?" + dbQs());
+        const meta = await api(dbApiBase() + "/meta?" + dbQs());
         if (!(meta.engines || []).includes("postgres")) {
           dbShowErr("该容器未检测到 PostgreSQL / psql");
           return;
         }
-        const dbs = await api("/api/projects/" + state.current.id + "/db/databases?" + dbQs());
+        const dbs = await api(dbApiBase() + "/databases?" + dbQs());
         dbAdmin.databases = dbs.items || [];
         const def = meta.default_database && dbAdmin.databases.includes(meta.default_database)
           ? meta.default_database
@@ -8413,7 +8563,7 @@
       bindDbPanel();
       if (!dbAdmin.database) return;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/db/schemas?" + dbQs());
+        const data = await api(dbApiBase() + "/schemas?" + dbQs());
         dbAdmin.schemas = data.items || [];
         const def = dbAdmin.schemas.includes("public") ? "public" : (dbAdmin.schemas[0] || "");
         bindDbPanel();
@@ -8436,7 +8586,7 @@
       bindDbPanel();
       if (!dbAdmin.schema) return;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/db/objects?" + dbQs());
+        const data = await api(dbApiBase() + "/objects?" + dbQs());
         dbAdmin.objects = data.items || [];
         dbShowErr("");
       } catch (e) {
@@ -8497,11 +8647,11 @@
     }
 
     async function dbLoadRows() {
-      if (!dbAdmin.selected || !state.current) return;
+      if (!dbAdmin.selected || !dbContextAvailable()) return;
       const box = $("#db-data");
       if (box) box.innerHTML = `<div class="empty db-loading"><span class="spin"></span>加载中…</div>`;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/db/rows?" + dbQs({
+        const data = await api(dbApiBase() + "/rows?" + dbQs({
           name: dbAdmin.selected.name,
           offset: String(dbAdmin.offset),
           limit: String(dbAdmin.limit),
@@ -8701,7 +8851,7 @@
     }
 
     function openDbEditDialog() {
-      if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) {
+      if (!dbContextAvailable() || !dbAdmin.selected || dbAdmin.rowIndex == null) {
         dbShowErr("请先选择一行");
         return;
       }
@@ -8760,7 +8910,7 @@
     }
 
     async function dbDeleteRow() {
-      if (!state.current || !dbAdmin.selected || dbAdmin.selectedRows.size === 0) {
+      if (!dbContextAvailable() || !dbAdmin.selected || dbAdmin.selectedRows.size === 0) {
         dbShowErr("请先勾选要删除的行");
         return;
       }
@@ -8775,7 +8925,7 @@
       const btn = $("#db-del-row");
       if (btn) btn.disabled = true;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/db/row", {
+        const data = await api(dbApiBase() + "/row", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8805,7 +8955,7 @@
     }
 
     async function dbSaveRow() {
-      if (!state.current || !dbAdmin.selected || dbAdmin.rowIndex == null) return;
+      if (!dbContextAvailable() || !dbAdmin.selected || dbAdmin.rowIndex == null) return;
       const original = dbAdmin.rows[dbAdmin.rowIndex];
       const cols = dbAdmin.columns || [];
       const keys = dbSelectedRowKeys();
@@ -8820,7 +8970,7 @@
       const extra = $("#dialog-extra");
       if (extra) extra.disabled = true;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/db/row", {
+        const data = await api(dbApiBase() + "/row", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -8914,7 +9064,7 @@
       if (!dbRequireBackupTarget()) return;
       if (!(await confirmDialog(`确定备份数据库 ${dbAdmin.database}？备份过程中数据库可以继续运行。`))) return;
       try {
-        const job = await api("/api/projects/" + state.current.id + "/db/backups", {
+        const job = await api(dbApiBase() + "/backups", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(dbBackupRequestBody()),
@@ -8950,7 +9100,7 @@
       $("#dialog").hidden = false;
       try {
         const [schedule, storages] = await Promise.all([
-          api("/api/projects/" + state.current.id + "/db/backup-schedule"),
+          api(dbApiBase() + "/backup-schedule"),
           api("/api/storages"),
         ]);
         const storageOptions = (storages || []).filter((item) => item.target_dir).map((item) =>
@@ -8981,7 +9131,7 @@
           storageId: $("#db-auto-storage").value,
           backupBeforeUpdate: $("#db-auto-before-update").checked,
         });
-        const save = async () => api("/api/projects/" + state.current.id + "/db/backup-schedule", {
+        const save = async () => api(dbApiBase() + "/backup-schedule", {
           method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload()),
         });
         setDialogAction("保存", async () => {
@@ -8991,7 +9141,7 @@
         $("#db-auto-run").onclick = async () => {
           try {
             await save();
-            const job = await api("/api/projects/" + state.current.id + "/db/backup-schedule/run", { method: "POST" });
+            const job = await api(dbApiBase() + "/backup-schedule/run", { method: "POST" });
             showDbJobDialog("执行自动备份 · " + dbAdmin.database, job);
             await waitDbJob(job, async () => setDialogAction("查看备份历史", openDbBackups));
           } catch (e) { const box = $("#db-auto-error"); box.textContent = e.message; box.hidden = false; }
@@ -9009,7 +9159,7 @@
       $("#dialog").hidden = false;
       try {
         const items = await api(
-          "/api/projects/" + state.current.id + "/db/backups?" + dbQs(),
+          dbApiBase() + "/backups?" + dbQs(),
         );
         const box = $("#dialog-body .db-backup-list");
         if (!items.length) {
@@ -9086,7 +9236,7 @@
       if (!(await confirmDialog(`将覆盖 ${backup.database} 的${target}。恢复前会自动生成安全备份，确定继续？`, { danger: true }))) return;
       try {
         const job = await api(
-          "/api/projects/" + state.current.id + "/db/backups/" + encodeURIComponent(backup.id) + "/restore",
+          dbApiBase() + "/backups/" + encodeURIComponent(backup.id) + "/restore",
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -9111,7 +9261,7 @@
     }
 
     async function openDbSqlDialog() {
-      if (!state.current || !dbAdmin.service || !dbAdmin.database) {
+      if (!dbContextAvailable() || !dbAdmin.service || !dbAdmin.database) {
         dbShowErr("请先选择容器和数据库");
         return;
       }
@@ -9135,7 +9285,7 @@
     }
 
     async function dbRunSql() {
-      if (!state.current || !dbAdmin.service || !dbAdmin.database) {
+      if (!dbContextAvailable() || !dbAdmin.service || !dbAdmin.database) {
         dbShowErr("请先选择容器和数据库");
         return;
       }
@@ -9146,7 +9296,7 @@
       const out = $("#db-sql-out");
       if (out) out.innerHTML = `<p class="hint">正在执行…</p>`;
       try {
-        const data = await api("/api/projects/" + state.current.id + "/db/query", {
+        const data = await api(dbApiBase() + "/query", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

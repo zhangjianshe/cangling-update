@@ -12,6 +12,11 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
+use std::time::Duration;
 use uuid::Uuid;
 
 const MAX_JAR_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -95,6 +100,242 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cangling/apps/jars/upload", post(upload))
         .route("/api/cangling/apps/jars/delete", post(delete_files))
         .route("/api/cangling/apps/jars/sync", post(sync_all))
+        .route(
+            "/api/cangling/apps/jars/online",
+            get(online_status).post(online_start),
+        )
+}
+
+const ONLINE_JARS: [(&str, &str); 3] = [
+    ("cis-server-1.0.0.jar", "cis-server-1.0.0.jar"),
+    ("cis-map-1.0.0.jar", "cis-map-1.0.0.jar"),
+    ("cl-base-server-1.0.0.jar", "np4-base-server-1.0.0.jar"),
+];
+static ONLINE_RUNNING: AtomicBool = AtomicBool::new(false);
+static ONLINE_JOB: Mutex<Option<String>> = Mutex::new(None);
+struct OnlineGuard;
+impl Drop for OnlineGuard {
+    fn drop(&mut self) {
+        ONLINE_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+async fn online_status(State(state): State<AppState>) -> Json<Option<JobProgress>> {
+    let id = ONLINE_JOB.lock().expect("online jar job").clone();
+    Json(id.and_then(|id| state.jobs.get(&id)))
+}
+
+async fn online_start(State(state): State<AppState>) -> Result<Json<JobProgress>, AppError> {
+    if ONLINE_RUNNING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(AppError::conflict("正在在线获取 JAR，请等待当前任务完成"));
+    }
+    let guard = OnlineGuard;
+    // Resolve all configured hosts before starting any network or file changes.
+    let targets = hosts::ssh_sync_targets(&state)?;
+    let job = state.jobs.create();
+    *ONLINE_JOB.lock().expect("online jar job") = Some(job.id.clone());
+    let id = job.id.clone();
+    tokio::spawn(async move {
+        let _guard = guard;
+        let staging =
+            crate::jar_upgrade::incoming_dir().join(format!(".online-{}", Uuid::new_v4()));
+        let result = fetch_and_sync(&state, &id, &staging, targets).await;
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        match result {
+            Ok(message) => state.jobs.finish_ok(&id, &message),
+            Err(error) => state.jobs.finish_err(&id, &error.to_string()),
+        }
+    });
+    Ok(Json(job))
+}
+
+fn content_length(headers: &str) -> Option<u64> {
+    // Reset at every response (redirects/proxy CONNECT may precede the final one).
+    let mut length = None;
+    for line in headers.lines() {
+        if line.starts_with("HTTP/") {
+            length = None;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            if key.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse().ok();
+            }
+        }
+    }
+    length
+}
+
+async fn download_jar(
+    state: &AppState,
+    id: &str,
+    remote_name: &str,
+    path: &Path,
+    index: usize,
+) -> Result<(), AppError> {
+    let headers = path.with_extension("headers");
+    let url = format!("https://soft.cangling.cn:22002/software/np4-jars/latest/{remote_name}");
+    let mut child = tokio::process::Command::new("curl")
+        .args([
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "20",
+            "--max-time",
+            "1800",
+            "--max-filesize",
+            &MAX_JAR_BYTES.to_string(),
+            "--dump-header",
+        ])
+        .arg(&headers)
+        .arg("--output")
+        .arg(path)
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| AppError::bad(format!("无法启动 curl：{e}")))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| AppError::internal("缺少下载错误输出"))?;
+    let errors = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut message = String::new();
+        tokio::io::BufReader::new(stderr)
+            .read_to_string(&mut message)
+            .await
+            .map(|_| message)
+    });
+    let started = std::time::Instant::now();
+    loop {
+        let received = tokio::fs::metadata(path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let total = tokio::fs::read_to_string(&headers)
+            .await
+            .ok()
+            .and_then(|h| content_length(&h));
+        let part = total
+            .filter(|t| *t > 0)
+            .map(|t| received.saturating_mul(250) / t)
+            .unwrap_or(0)
+            .min(249);
+        let size = match total {
+            Some(total) => format!(
+                "{:.1} / {:.1} MiB",
+                received as f64 / 1048576.0,
+                total as f64 / 1048576.0
+            ),
+            None => format!("已下载 {:.1} MiB", received as f64 / 1048576.0),
+        };
+        state.jobs.set(
+            id,
+            "jar-download",
+            &format!("下载 {}/3：{remote_name} · {size}", index + 1),
+            index as u64 * 250 + part,
+            1000,
+        );
+        if received > MAX_JAR_BYTES {
+            let _ = child.kill().await;
+            return Err(AppError::bad("下载 JAR 超过 2 GiB 限制"));
+        }
+        if let Some(exit) = child.try_wait().map_err(|e| AppError::bad(e.to_string()))? {
+            let message = errors
+                .await
+                .map_err(|e| AppError::internal(e.to_string()))??;
+            if !exit.success() {
+                return Err(AppError::bad(format!(
+                    "下载 {remote_name} 失败：{}",
+                    message.trim()
+                )));
+            }
+            let received = tokio::fs::metadata(path).await?.len();
+            let total = tokio::fs::read_to_string(&headers)
+                .await
+                .ok()
+                .and_then(|h| content_length(&h));
+            if received == 0 || received > MAX_JAR_BYTES || total.is_some_and(|t| t != received) {
+                return Err(AppError::bad(format!("{remote_name} 下载大小校验失败")));
+            }
+            break;
+        }
+        if started.elapsed() > Duration::from_secs(1830) {
+            let _ = child.kill().await;
+            return Err(AppError::bad(format!("下载 {remote_name} 超时")));
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    state.jobs.set(
+        id,
+        "jar-verify",
+        &format!("校验 {remote_name} 的 JAR 内容…"),
+        (index as u64 + 1) * 250,
+        1000,
+    );
+    validate_downloaded_jar(path).await
+}
+
+async fn validate_downloaded_jar(path: &Path) -> Result<(), AppError> {
+    let output = tokio::time::timeout(Duration::from_secs(180), tokio::process::Command::new("python3")
+        .args(["-c", "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); assert 'META-INF/MANIFEST.MF' in z.namelist(), 'missing JAR manifest'; assert any(n.endswith('.class') for n in z.namelist()), 'missing Java classes'; assert sum(i.file_size for i in z.infolist()) <= 8589934592, 'unpacked JAR too large'; assert z.testzip() is None, 'JAR CRC mismatch'"])
+        .arg(path).kill_on_drop(true).output()).await
+        .map_err(|_| AppError::bad("JAR 内容校验超时"))?
+        .map_err(|e| AppError::bad(format!("无法校验 JAR：{e}")))?;
+    if !output.status.success() {
+        return Err(AppError::bad(format!(
+            "下载内容不是完整的 Java JAR：{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+async fn fetch_and_sync(
+    state: &AppState,
+    id: &str,
+    staging: &Path,
+    targets: Vec<SshSyncTarget>,
+) -> Result<String, AppError> {
+    tokio::fs::create_dir_all(staging).await?;
+    for (index, (remote, local)) in ONLINE_JARS.iter().enumerate() {
+        download_jar(state, id, remote, &staging.join(local), index).await?;
+    }
+    let files: Vec<String> = ONLINE_JARS
+        .iter()
+        .map(|(_, local)| local.to_string())
+        .collect();
+    let staging = staging.to_path_buf();
+    let jobs = state.jobs.clone();
+    let id = id.to_string();
+    tokio::task::spawn_blocking(move || {
+        for name in &files {
+            atomic_copy(
+                &staging.join(name),
+                &crate::jar_upgrade::incoming_dir().join(name),
+            )?;
+        }
+        let total = (targets.len() * files.len()).max(1) as u64;
+        let summary = sync_files(&targets, &files, |message, current| {
+            jobs.set(&id, "jar-sync", message, 750 + current * 250 / total, 1000);
+        })?;
+        Ok(format!(
+            "在线获取 3 个 JAR 完成；{summary}。重启工作负载后加载新 JAR。"
+        ))
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
 }
 
 async fn delete_files(
@@ -595,5 +836,55 @@ mod tests {
     #[test]
     fn remote_replace_is_shell_quoted() {
         assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+}
+
+#[cfg(test)]
+mod online_tests {
+    use super::*;
+
+    #[test]
+    fn download_size_uses_final_response_only() {
+        assert_eq!(content_length("HTTP/1.1 302 Found\r\nContent-Length: 25\r\n\r\nHTTP/2 200\r\ncontent-length: 4096\r\n"), Some(4096));
+        assert_eq!(
+            content_length(
+                "HTTP/1.1 302 Found\nContent-Length: 25\nHTTP/2 200\nTransfer-Encoding: chunked\n"
+            ),
+            None
+        );
+        assert_eq!(
+            content_length("HTTP/2 200\nContent-Length: invalid\n"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn jar_validation_rejects_error_pages_and_corrupted_archives() {
+        struct TempDir(PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = TempDir(std::env::temp_dir().join(format!("online-jar-test-{}", Uuid::new_v4())));
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("download.jar");
+        let result = Command::new("python3").args(["-c", "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1],'w'); z.writestr('META-INF/MANIFEST.MF','Manifest-Version: 1.0'); z.writestr('Test.class',b'\\xca\\xfe\\xba\\xbe'); z.close()"])
+            .arg(&path).status().unwrap();
+        assert!(result.success());
+        validate_downloaded_jar(&path).await.unwrap();
+        let valid = std::fs::read(&path).unwrap();
+        std::fs::write(&path, b"<html>download error</html>").unwrap();
+        assert!(validate_downloaded_jar(&path).await.is_err());
+        std::fs::write(&path, &valid[..valid.len() / 2]).unwrap();
+        assert!(validate_downloaded_jar(&path).await.is_err());
+        let mut damaged = valid;
+        let offset = damaged
+            .windows(4)
+            .position(|b| b == [0xca, 0xfe, 0xba, 0xbe])
+            .unwrap();
+        damaged[offset] ^= 0xff;
+        std::fs::write(&path, damaged).unwrap();
+        assert!(validate_downloaded_jar(&path).await.is_err());
     }
 }

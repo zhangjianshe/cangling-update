@@ -138,6 +138,7 @@ pub fn router(state: AppState) -> Router {
             "/api/projects/{id}/compose/exec/{service}",
             get(compose_exec),
         )
+        .merge(crate::k3s_db::routes())
         .route("/api/projects/{id}/db/meta", get(db_meta))
         .route("/api/projects/{id}/db/databases", get(db_databases))
         .route("/api/projects/{id}/db/schemas", get(db_schemas))
