@@ -627,6 +627,197 @@ struct NamedCount {
     name: String,
     requests: i64,
 }
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct UpstreamTarget {
+    group: String,
+    address: String,
+}
+
+#[derive(Debug)]
+enum NginxToken {
+    Word(String),
+    Open,
+    Close,
+    End,
+}
+
+fn nginx_tokens(text: &str) -> Vec<NginxToken> {
+    let mut tokens = Vec::new();
+    let mut word = String::new();
+    let (mut quote, mut escaped, mut comment) = (None, false, false);
+    for ch in text.chars() {
+        if comment {
+            if ch == '\n' {
+                comment = false;
+            } else {
+                continue;
+            }
+        }
+        if escaped {
+            word.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                word.push(ch);
+            }
+            continue;
+        }
+        if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch == '#' {
+            comment = true;
+            continue;
+        }
+        if ch.is_whitespace() || matches!(ch, '{' | '}' | ';') {
+            if !word.is_empty() {
+                tokens.push(NginxToken::Word(std::mem::take(&mut word)));
+            }
+            match ch {
+                '{' => tokens.push(NginxToken::Open),
+                '}' => tokens.push(NginxToken::Close),
+                ';' => tokens.push(NginxToken::End),
+                _ => {}
+            }
+        } else {
+            word.push(ch);
+        }
+    }
+    if !word.is_empty() {
+        tokens.push(NginxToken::Word(word));
+    }
+    tokens
+}
+
+fn backend_address(value: &str, default_port: u16) -> Option<String> {
+    if value.is_empty() || value.contains('$') || value == "-" {
+        return None;
+    }
+    let value = value.rsplit('@').next()?;
+    if value.starts_with("unix:") {
+        return Some(value.to_string());
+    }
+    if value.ends_with(']') || !value.contains(':') {
+        Some(format!("{value}:{default_port}"))
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn upstream_targets_from_configs(configs: &[String]) -> Vec<UpstreamTarget> {
+    let mut groups = HashSet::new();
+    let mut targets = Vec::new();
+    let mut proxies = Vec::new();
+    for config in configs {
+        let mut depth = 0usize;
+        let mut active: Vec<(usize, String)> = Vec::new();
+        let mut directive: Vec<String> = Vec::new();
+        for token in nginx_tokens(config) {
+            match token {
+                NginxToken::Word(word) => directive.push(word),
+                NginxToken::Open => {
+                    depth += 1;
+                    if directive.first().map(String::as_str) == Some("upstream")
+                        && directive.len() == 2
+                    {
+                        groups.insert(directive[1].clone());
+                        active.push((depth, directive[1].clone()));
+                    }
+                    directive.clear();
+                }
+                NginxToken::Close => {
+                    if active.last().is_some_and(|(at, _)| *at == depth) {
+                        active.pop();
+                    }
+                    depth = depth.saturating_sub(1);
+                    directive.clear();
+                }
+                NginxToken::End => {
+                    if directive.first().map(String::as_str) == Some("server") {
+                        if let (Some((_, group)), Some(address)) = (active.last(), directive.get(1))
+                        {
+                            if let Some(address) = backend_address(address, 80) {
+                                targets.push(UpstreamTarget {
+                                    group: group.clone(),
+                                    address,
+                                });
+                            }
+                        }
+                    } else if directive.first().map(String::as_str) == Some("proxy_pass") {
+                        if let Some(value) = directive.get(1) {
+                            proxies.push(value.clone());
+                        }
+                    }
+                    directive.clear();
+                }
+            }
+        }
+    }
+    for proxy in proxies {
+        let (rest, port) = if let Some(rest) = proxy.strip_prefix("http://") {
+            (rest, 80)
+        } else if let Some(rest) = proxy.strip_prefix("https://") {
+            (rest, 443)
+        } else {
+            continue;
+        };
+        let authority = rest.split('/').next().unwrap_or("");
+        if !groups.contains(authority) {
+            if let Some(address) = backend_address(authority, port) {
+                targets.push(UpstreamTarget {
+                    group: String::new(),
+                    address,
+                });
+            }
+        }
+    }
+    targets.sort_by(|a, b| (&a.group, &a.address).cmp(&(&b.group, &b.address)));
+    targets.dedup_by(|a, b| a.group == b.group && a.address == b.address);
+    targets
+}
+
+fn configured_upstream_targets(log_dir: &str) -> Vec<UpstreamTarget> {
+    let Some(root) = Path::new(log_dir).parent() else {
+        return Vec::new();
+    };
+    let mut paths = vec![root.join("nginx.conf"), root.join("conf/nginx.conf")];
+    for dir in [root.join("conf.d"), root.join("conf/conf.d")] {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            paths.extend(
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "conf")),
+            );
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    let configs = paths
+        .into_iter()
+        .take(32)
+        .filter_map(|path| {
+            let mut text = String::new();
+            File::open(path)
+                .ok()?
+                .take(1024 * 1024)
+                .read_to_string(&mut text)
+                .ok()?;
+            Some(text)
+        })
+        .collect::<Vec<_>>();
+    upstream_targets_from_configs(&configs)
+}
+
 fn top_named(values: HashMap<String, i64>, limit: usize, include_empty: bool) -> Vec<NamedCount> {
     let mut values = values
         .into_iter()
@@ -653,6 +844,7 @@ struct Report {
     totals: Totals,
     buckets: Vec<Bucket>,
     upstreams: Vec<NamedCount>,
+    upstream_targets: Vec<UpstreamTarget>,
     paths: Vec<NamedCount>,
     platforms: Vec<NamedCount>,
     os_versions: Vec<NamedCount>,
@@ -758,6 +950,7 @@ async fn report(
         .unwrap_or(0);
     let bucket_rows = buckets.len() as i64;
     let upstreams = grouped("nginx_bucket_upstreams", "upstream", 50)?;
+    let upstream_targets = configured_upstream_targets(&read_settings(&c)?.log_dir);
     let paths = grouped("nginx_bucket_paths", "path", 20)?;
     let query_ms = started.elapsed().as_millis();
     Ok(Json(Report {
@@ -766,6 +959,7 @@ async fn report(
         totals,
         buckets,
         upstreams,
+        upstream_targets,
         paths,
         platforms,
         os_versions,
@@ -789,6 +983,80 @@ async fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upstream_targets_follow_configuration_instead_of_fixed_hosts_or_ports() {
+        let configs = vec![r#"
+          # upstream fake { server 192.0.2.223:7108; }
+          http {
+            upstream cis_api { server 10.0.0.150:8078 weight=2; server "[fd00::2]:8078" backup; }
+            server { location /api { proxy_pass http://cis_api; } location /map { proxy_pass https://maps.example.test/; } }
+          }
+        "#.to_string(), "upstream tiles { server tile.internal:7601; }".to_string()];
+        let targets = upstream_targets_from_configs(&configs);
+        assert_eq!(targets.len(), 4);
+        assert!(targets.contains(&UpstreamTarget {
+            group: "cis_api".into(),
+            address: "10.0.0.150:8078".into()
+        }));
+        assert!(targets.contains(&UpstreamTarget {
+            group: "cis_api".into(),
+            address: "[fd00::2]:8078".into()
+        }));
+        assert!(targets.contains(&UpstreamTarget {
+            group: "tiles".into(),
+            address: "tile.internal:7601".into()
+        }));
+        assert!(targets.contains(&UpstreamTarget {
+            group: String::new(),
+            address: "maps.example.test:443".into()
+        }));
+    }
+
+    #[test]
+    fn upstream_configuration_ignores_variables_and_masks_url_credentials() {
+        let targets = upstream_targets_from_configs(&[r#"
+          upstream backend { server 10.0.0.122:9090; server 10.0.0.122:9090; }
+          server { location / { proxy_pass http://backend; } location /dynamic { proxy_pass http://$backend; }
+          location /private { proxy_pass http://user:password@127.0.0.1:8088/; } }
+        "#.into()]);
+        assert_eq!(targets.len(), 2);
+        assert!(targets
+            .iter()
+            .all(|target| !target.address.contains("password") && !target.address.contains('$')));
+        assert!(targets
+            .iter()
+            .any(|target| target.address == "127.0.0.1:8088"));
+    }
+
+    #[test]
+    fn upstream_configuration_reads_adjacent_nginx_and_conf_d_files() {
+        let root =
+            std::env::temp_dir().join(format!("nginx-upstream-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(root.join("logs")).unwrap();
+        std::fs::create_dir(root.join("conf.d")).unwrap();
+        std::fs::write(
+            root.join("nginx.conf"),
+            "http { include conf.d/*.conf; server { location / { proxy_pass http://app; } } }",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("conf.d/backend.conf"),
+            "upstream app { server 10.0.0.150:7600; }",
+        )
+        .unwrap();
+        let targets = configured_upstream_targets(root.join("logs").to_str().unwrap());
+        assert_eq!(
+            targets,
+            vec![UpstreamTarget {
+                group: "app".into(),
+                address: "10.0.0.150:7600".into()
+            }]
+        );
+        assert!(configured_upstream_targets("/does-not-exist/logs").is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn parses_combined_with_upstream() {
         let l = r#"182.18.90.194 - - [09/Oct/2026:05:35:48 +0000] \"GET /app/a?q=1 HTTP/1.1\" 200 143 \"-\" \"ua\" \"223.1.1.1, 172.22.0.1\" upstream=10.132.5.223:7600 cache=- rt=0.242 urt=0.242"#;

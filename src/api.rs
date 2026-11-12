@@ -5465,7 +5465,7 @@ mod tests {
         assert!(html.contains("appWebSocket("));
         assert!(html.contains("const action = init.mode === \"check\" ? \"检查并修复\""));
         assert!(html.contains("previous.running && !init.running"));
-        assert!(html.contains("data-cangling-tab=\"jars\""));
+        assert!(html.contains("data-cangling-run-tab=\"jars\""));
         assert!(!html.contains("JAR 发布源"));
         assert!(html.contains("JAR 包由“JAR 包”页统一同步到各节点"));
         assert!(html.contains("/api/cangling/apps/jars/upload"));
@@ -5483,7 +5483,7 @@ mod tests {
         assert!(html.contains("id=\"cangling-jar-select-all\""));
         assert!(html.contains("<th>文件名</th><th>大小</th><th>修改时间</th>"));
         assert!(html.contains("/api/cangling/apps/jars/delete"));
-        assert!(html.contains("data-cangling-tab=\"run\""));
+        assert!(html.contains("data-cangling-mode=\"status\""));
         assert!(html.contains("data-cangling-run-tab=\"runtime\""));
         assert!(html.contains("data-cangling-run-tab=\"diagnosis\""));
         assert!(html.contains("data-cangling-run-tab=\"containers\""));
