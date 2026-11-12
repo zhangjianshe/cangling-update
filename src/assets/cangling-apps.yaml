@@ -446,7 +446,7 @@ spec:
             periodSeconds: 20
           resources:
             requests: {cpu: 500m, memory: 1Gi}
-            limits: {cpu: "4", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
           volumeMounts:
             - {name: data, mountPath: /data}
             - {name: cache, mountPath: /cache}

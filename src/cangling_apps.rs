@@ -110,6 +110,8 @@ pub struct ApplicationConfig {
     pub group: ApplicationGroup,
     pub workload: WorkloadKind,
     pub replicas: u32,
+    #[serde(default = "default_memory_limit_gib", rename = "memoryLimitGiB")]
+    pub memory_limit_gib: u32,
     pub node: String,
     pub image: String,
     pub ports: Vec<u16>,
@@ -272,6 +274,7 @@ pub(crate) fn load_saved_config(
             .map_err(|error| AppError::internal(format!("解析苍灵应用配置失败：{error}")))?;
         migrate_builtin_image_versions(&mut config);
         migrate_builtin_application_ports(&mut config);
+        migrate_builtin_singletons(&mut config);
         migrate_environment_variables(&mut config);
         config.applications.retain(|app| app.id != "cis-k8s");
         validate_config(&config)?;
@@ -303,6 +306,26 @@ fn migrate_builtin_image_versions(config: &mut CanglingConfig) {
             _ => continue,
         };
     }
+}
+
+fn migrate_builtin_singletons(config: &mut CanglingConfig) {
+    for app in &mut config.applications {
+        if app.id == "cangling-map" {
+            let node = deployment_nodes(app, &config.primary_node)
+                .first()
+                .copied()
+                .unwrap_or(&config.primary_node)
+                .to_string();
+            app.group = ApplicationGroup::Single;
+            app.workload = WorkloadKind::Deployment;
+            app.replicas = 1;
+            app.node = node;
+        }
+    }
+}
+
+fn default_memory_limit_gib() -> u32 {
+    8
 }
 
 fn migrate_builtin_application_ports(config: &mut CanglingConfig) {
@@ -1255,7 +1278,7 @@ fn default_config() -> CanglingConfig {
         app(
             "cangling-map",
             "地图服务",
-            ApplicationGroup::Multi,
+            ApplicationGroup::Single,
             WorkloadKind::Deployment,
             "cangling-map:0.1.25",
             &[3000],
@@ -1418,6 +1441,7 @@ fn app(
         } else {
             String::new()
         },
+        memory_limit_gib: default_memory_limit_gib(),
         image: image.into(),
         ports: ports.to_vec(),
         storage: storage.into(),
@@ -1784,14 +1808,21 @@ fn validate_config(config: &CanglingConfig) -> Result<(), AppError> {
         if !ids.insert(app.id.as_str()) {
             return Err(AppError::bad(format!("应用 {} 重复", app.id)));
         }
-        if app.id == "cangling-broker"
+        if matches!(app.id.as_str(), "cangling-broker" | "cangling-map")
             && (app.group != ApplicationGroup::Single
                 || app.workload != WorkloadKind::Deployment
                 || app.replicas != 1)
         {
-            return Err(AppError::bad(
-                "cangling-broker 必须使用 Deployment 并固定为单实例运行",
-            ));
+            return Err(AppError::bad(format!(
+                "{} 必须使用 Deployment 并固定为单实例运行",
+                app.id
+            )));
+        }
+        if !(1..=1024).contains(&app.memory_limit_gib) {
+            return Err(AppError::bad(format!(
+                "应用 {} 的内存限制必须为 1–1024 G 的整数",
+                app.id
+            )));
         }
         if app.image.trim().is_empty()
             || app.image.len() > 255
@@ -2114,13 +2145,13 @@ fn patch_application_document(
     let spec = child_mut(doc, "spec")?;
     if kind == "Deployment" {
         let spec_map = mapping_mut(spec)?;
-        let replicas = if app.id == "cangling-broker" {
+        let replicas = if matches!(app.id.as_str(), "cangling-broker" | "cangling-map") {
             1
         } else {
             app.replicas
         };
         spec_map.insert(key("replicas"), Value::Number(replicas.into()));
-        if app.id == "cangling-broker" {
+        if matches!(app.id.as_str(), "cangling-broker" | "cangling-map") {
             let mut strategy = Mapping::new();
             set_mapping_string(&mut strategy, "type", "Recreate");
             spec_map.insert(key("strategy"), Value::Mapping(strategy));
@@ -2177,6 +2208,17 @@ fn patch_application_document(
             .ok_or_else(|| AppError::internal(format!("应用 {} 没有容器", app.id)))?;
         let container_map = mapping_mut(container)?;
         set_mapping_string(container_map, "image", &app.image);
+        let resources = container_map
+            .entry(key("resources"))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
+        let limits = mapping_mut(resources)?
+            .entry(key("limits"))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
+        set_mapping_string(
+            mapping_mut(limits)?,
+            "memory",
+            &format!("{}Gi", app.memory_limit_gib),
+        );
         if let Some(ports) = container_map
             .get_mut(key("ports"))
             .and_then(Value::as_sequence_mut)
@@ -2410,6 +2452,110 @@ fn rebase_template_images(value: &mut Value, prefix: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_applications_default_to_eight_gib_and_preserve_custom_limits() {
+        let mut json = serde_json::to_value(default_config()).unwrap();
+        for app in json["applications"].as_array_mut().unwrap() {
+            app.as_object_mut().unwrap().remove("memoryLimitGiB");
+        }
+        let mut config: CanglingConfig = serde_json::from_value(json).unwrap();
+        assert!(config
+            .applications
+            .iter()
+            .all(|app| app.memory_limit_gib == 8));
+        config.applications[0].memory_limit_gib = 16;
+        let persisted = serde_json::to_vec(&config).unwrap();
+        let restored: CanglingConfig = serde_json::from_slice(&persisted).unwrap();
+        assert_eq!(restored.applications[0].memory_limit_gib, 16);
+        assert!(restored.applications[1..]
+            .iter()
+            .all(|app| app.memory_limit_gib == 8));
+    }
+
+    #[test]
+    fn memory_limits_are_generated_per_application_without_changing_cpu_requests() {
+        let mut config = default_config();
+        config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cis-server")
+            .unwrap()
+            .memory_limit_gib = 16;
+        config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cangling-nginx")
+            .unwrap()
+            .memory_limit_gib = 2;
+        let (yaml, _) = render_manifest(&config).unwrap();
+        let docs: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
+            .map(|doc| Value::deserialize(doc).unwrap())
+            .collect();
+        for app in &config.applications {
+            let doc = docs
+                .iter()
+                .find(|doc| {
+                    metadata_name(doc) == Some(app.id.as_str())
+                        && matches!(value_str(doc, &["kind"]), Some("Deployment" | "DaemonSet"))
+                })
+                .unwrap();
+            let container = &doc["spec"]["template"]["spec"]["containers"][0];
+            assert_eq!(
+                value_str(container, &["resources", "limits", "memory"]),
+                Some(format!("{}Gi", app.memory_limit_gib).as_str())
+            );
+            if app.id == "cangling-map" {
+                assert_eq!(
+                    value_str(container, &["resources", "requests", "memory"]),
+                    Some("1Gi")
+                );
+                assert_eq!(
+                    value_str(container, &["resources", "limits", "cpu"]),
+                    Some("4")
+                );
+                assert_eq!(
+                    value_str(doc, &["spec", "strategy", "type"]),
+                    Some("Recreate")
+                );
+                assert_eq!(doc["spec"]["replicas"].as_u64(), Some(1));
+            }
+        }
+        for invalid in [0, 1025] {
+            config.applications[0].memory_limit_gib = invalid;
+            assert!(render_manifest(&config).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_map_configuration_migrates_to_a_single_node_and_rejects_scaling() {
+        let mut config = default_config();
+        let app = config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cangling-map")
+            .unwrap();
+        app.group = ApplicationGroup::Multi;
+        app.replicas = 3;
+        app.node = "n01, n02".into();
+        migrate_builtin_singletons(&mut config);
+        let app = config
+            .applications
+            .iter()
+            .find(|app| app.id == "cangling-map")
+            .unwrap();
+        assert_eq!(app.group, ApplicationGroup::Single);
+        assert_eq!(app.replicas, 1);
+        assert_eq!(app.node, "n01");
+        assert!(render_manifest(&config).is_ok());
+        config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cangling-map")
+            .unwrap()
+            .group = ApplicationGroup::Multi;
+        assert!(render_manifest(&config).is_err());
+    }
 
     #[test]
     fn shared_volume_mount_covers_business_volume_paths() {
@@ -2671,7 +2817,7 @@ mod tests {
                 .iter()
                 .filter(|app| app.group == ApplicationGroup::Multi)
                 .count(),
-            3
+            2
         );
         assert_eq!(
             config
@@ -2686,7 +2832,7 @@ mod tests {
             .iter()
             .find(|app| app.id == "cangling-map")
             .unwrap();
-        assert_eq!(map.group, ApplicationGroup::Multi);
+        assert_eq!(map.group, ApplicationGroup::Single);
         assert_eq!(map.replicas, 1);
         assert_eq!(map.image, "cangling-map:0.1.25");
         let tile = config
@@ -3038,7 +3184,7 @@ mod tests {
         let application = config
             .applications
             .iter_mut()
-            .find(|app| app.id == "cangling-map")
+            .find(|app| app.id == "cis-map")
             .unwrap();
         application.node = "n01, n02".into();
         let (yaml, _) = render_manifest(&config).unwrap();
@@ -3048,7 +3194,7 @@ mod tests {
         let deployment = documents
             .iter()
             .find(|document| {
-                metadata_name(document) == Some("cangling-map")
+                metadata_name(document) == Some("cis-map")
                     && value_str(document, &["kind"]) == Some("Deployment")
             })
             .unwrap();

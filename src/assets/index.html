@@ -3618,9 +3618,16 @@
           ${group === "single" ? "" : `<td>${deployment ? `<input data-cangling-app-field="replicas" type="number" min="1" max="100" value="${Number(app.replicas) || 1}" aria-label="${esc(app.title)}副本数" />` : "每节点 1 个"}</td>`}
           <td>${deployment ? `<div class="cangling-node-field"><input data-cangling-app-field="node" type="text" value="${esc(app.node)}" aria-label="${esc(app.title)}部署节点" readonly /><button type="button" class="btn" data-cangling-node-select="${index}">选择节点</button></div>` : '<span class="hint">所有可调度节点</span>'}</td>
           <td class="cangling-ports-cell"><input data-cangling-app-field="ports" type="text" value="${esc((app.ports || []).join(", "))}" aria-label="${esc(app.title)}端口" /></td>
+          <td><input data-cangling-app-field="memoryLimitGiB" type="number" min="1" max="1024" step="1" value="${Number(app.memoryLimitGiB ?? 8)}" aria-label="${esc(app.title)}内存限制（G）" title="单个容器的内存上限，1 G 按 1 GiB 写入 YAML，默认 8 G" /></td>
           <td class="cangling-storage" data-cangling-storage="${index}">${esc(app.storage || "—")}</td>
         </tr>`;
       }).join("");
+    }
+
+    function readCanglingMemoryLimit(value, title) {
+      const limit = Number(value);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1024) throw new Error(`${title}的内存限制必须是 1–1024 G 的整数`);
+      return limit;
     }
 
     function canglingSelectedNodes(value) {
@@ -4868,15 +4875,16 @@
         <section class="cangling-tab-panel cangling-deployment-stack" id="cangling-panel-deployment" data-cangling-tab-panel="deployment" role="tabpanel" hidden>
           <div class="card">
           <div class="cangling-section-head"><h3>系统入口</h3><p class="hint">统一承载外部访问、反向代理和服务路由，独立于业务工作负载展示</p></div>
-          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>Service</th><th>镜像名称与版本</th><th>副本</th><th>入口节点</th><th>入口端口</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("entry")}</tbody></table></div>
+          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>Service</th><th>镜像名称与版本</th><th>副本</th><th>入口节点</th><th>入口端口</th><th>内存限制（G）</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("entry")}</tbody></table></div>
           </div>
           <div class="card">
+          <p class="hint">内存限制对每个容器生效，默认 8 G（YAML 使用 Gi）；超过上限时容器可能被系统终止并重启。修改后请重新生成并应用 YAML。</p>
           <div class="cangling-section-head"><h3>单实例部署</h3><p class="hint">Deployment 固定到指定节点，适合数据库和有状态基础服务</p></div>
-          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>镜像名称与版本</th><th>部署节点</th><th>服务端口</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("single")}</tbody></table></div>
+          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>镜像名称与版本</th><th>部署节点</th><th>服务端口</th><th>内存限制（G）</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("single")}</tbody></table></div>
           </div>
           <div class="card">
           <div class="cangling-section-head"><h3>多实例部署</h3><p class="hint">Deployment 可按应用配置副本数量，由 Service 统一分发请求</p></div>
-          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>镜像名称与版本</th><th>实例</th><th>部署节点 / 调度范围</th><th>服务端口</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("multi")}</tbody></table></div>
+          <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>镜像名称与版本</th><th>实例</th><th>部署节点 / 调度范围</th><th>服务端口</th><th>内存限制（G）</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("multi")}</tbody></table></div>
           <p class="cangling-note">地图服务由 cangling-map 独立提供；该部署方案不包含 GeoServer 容器或回退工作负载。</p>
           </div>
         </section>
@@ -5067,6 +5075,7 @@
         row.querySelectorAll("[data-cangling-app-field]").forEach((input) => {
           const field = input.dataset.canglingAppField;
           if (field === "replicas") app[field] = Number(input.value);
+          else if (field === "memoryLimitGiB") app[field] = readCanglingMemoryLimit(input.value, app.title);
           else if (field === "ports") app[field] = input.value.split(/[，,\s]+/).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0 && value <= 65535);
           else app[field] = input.value.trim();
         });
