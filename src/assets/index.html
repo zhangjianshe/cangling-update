@@ -1726,6 +1726,10 @@
     const canglingRuntimePoll = { timer: null, inflight: false };
     let canglingJarJobWatch = "";
     const canglingDeploymentRestarts = new Set();
+    const canglingJarRestarts = new Set();
+    let canglingJarDeployments = null;
+    let canglingJarDeploymentError = "";
+    let canglingJarDeploymentLoad = 0;
     const canglingDataInitPoll = { timer: null, inflight: false };
     const initPoll = { timer: null, inflight: false, selecting: false, selectionHandled: false };
     const jarUpgradePoll = { timer: null, jobId: null };
@@ -3776,6 +3780,91 @@
       });
     }
 
+    function canglingJarDeploymentsFor(name, deployments = canglingJarDeployments || []) {
+      const root = (state.canglingJarDistributionDirectory || "/opt/cangling/jars").replace(/\/+$/, "");
+      const source = root + "/" + name;
+      return deployments.filter(item => {
+        const pod = item.spec && item.spec.template && item.spec.template.spec || {};
+        const volumes = new Map((pod.volumes || []).map(volume => [volume.name, volume]));
+        return [...(pod.containers || []), ...(pod.initContainers || [])].some(container =>
+          (container.volumeMounts || []).some(mount => {
+            const volume = volumes.get(mount.name);
+            const path = volume && volume.hostPath && volume.hostPath.path;
+            if (!path || mount.subPathExpr) return false;
+            const mounted = path.replace(/\/+$/, "") + (mount.subPath ? "/" + mount.subPath : "");
+            return mounted === source;
+          }));
+      });
+    }
+
+    function canglingJarRestartReason(name, deployments) {
+      if (canglingJarDeploymentError) return "读取关联部署失败：" + canglingJarDeploymentError;
+      if (canglingJarDeployments === null) return "正在读取关联部署";
+      if (!deployments.length) return "未找到关联部署";
+      const progress = $("#cangling-jar-prog");
+      if (canglingJarJobWatch || progress && !progress.hidden) return "JAR 正在更新，请等待完成";
+      for (const item of deployments) {
+        const metadata = item.metadata || {}, spec = item.spec || {};
+        const namespace = metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling";
+        if (canglingDeploymentRestarts.has(namespace + "/" + metadata.name)) return "部署正在处理重启请求";
+        if (spec.replicas === 0) return metadata.name + " 的副本数为 0";
+        if (spec.paused) return metadata.name + " 已暂停";
+        if (metadata.deletionTimestamp) return metadata.name + " 正在删除";
+      }
+      return "";
+    }
+
+    function canglingJarRestartButton(file) {
+      const deployments = canglingJarDeploymentsFor(file.name);
+      const names = deployments.map(item => item.metadata.name).join("、");
+      const pending = canglingJarRestarts.has(file.name);
+      const reason = canglingJarRestartReason(file.name, deployments);
+      return `<button type="button" class="btn small" data-cangling-jar-restart="${esc(file.name)}" title="${esc(reason || "滚动重启 " + names)}" ${pending || reason ? "disabled" : ""}>${pending ? "重启中…" : "重启"}</button><div class="hint">${esc(names || reason)}</div>`;
+    }
+
+    async function loadCanglingJarDeployments() {
+      const epoch = ++canglingJarDeploymentLoad;
+      const namespace = state.canglingConfig && state.canglingConfig.namespace || "cangling";
+      try {
+        const result = await api("/api/k3s/resources?kind=deployments&namespace=" + encodeURIComponent(namespace));
+        if (epoch !== canglingJarDeploymentLoad) return;
+        canglingJarDeployments = result.items || [];
+        canglingJarDeploymentError = "";
+      } catch (error) {
+        if (epoch !== canglingJarDeploymentLoad) return;
+        canglingJarDeployments = [];
+        canglingJarDeploymentError = error.message;
+      }
+      renderCanglingJars();
+    }
+
+    async function restartCanglingJarDeployments(name) {
+      if (canglingJarRestarts.has(name)) return;
+      canglingJarRestarts.add(name);
+      renderCanglingJars();
+      try {
+        await loadCanglingJarDeployments();
+        const deployments = canglingJarDeploymentsFor(name);
+        const reason = canglingJarRestartReason(name, deployments);
+        if (reason) throw new Error(reason);
+        const names = deployments.map(item => (item.metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling") + "/" + item.metadata.name);
+        if (!(await confirmDialog(`确定重启 ${name} 关联的部署？\n${names.join("\n")}\n请先确认 JAR 已同步完成。将滚动重新创建 Pod，单副本服务可能短暂不可用。`, { danger: true, confirmText: "重启" }))) return;
+        const restarted = [], failures = [];
+        for (let index = 0; index < deployments.length; index++) {
+          try {
+            if (await restartCanglingDeployment(deployments[index], { confirmed: true, quiet: true })) restarted.push(names[index]);
+            else failures.push(names[index] + "：当前不可重启");
+          } catch (error) { failures.push(names[index] + "：" + error.message); }
+        }
+        if (failures.length) flash("err", `已请求重启 ${restarted.length} 个部署；${failures.join("；")}`);
+        else flash("ok", `已请求滚动重启 ${restarted.join("、")}，Pod 重建后加载已分发的 JAR`);
+      } catch (error) { flash("err", "重启关联部署失败：" + error.message); }
+      finally {
+        canglingJarRestarts.delete(name);
+        renderCanglingJars();
+      }
+    }
+
     function renderCanglingJars() {
       const rows = $("#cangling-jar-rows");
       const directory = $("#cangling-jar-directory");
@@ -3785,13 +3874,16 @@
       if (!rows) return;
       const currentNames = new Set(state.canglingJars.map((file) => file.name));
       state.canglingJarSelection = new Set([...state.canglingJarSelection].filter((name) => currentNames.has(name)));
-      rows.innerHTML = state.canglingJars.length ? state.canglingJars.map((file) => `<tr><td class="select-cell"><input type="checkbox" data-cangling-jar-select-name="${esc(file.name)}" aria-label="选择 ${esc(file.name)}" ${state.canglingJarSelection.has(file.name) ? "checked" : ""} /></td><td class="path">${esc(file.name)}</td><td>${fmtBytes(file.size || 0)}</td><td>${esc(fmtDateTime(file.modifiedAt))}</td></tr>`).join("") : `<tr><td colspan="4" class="empty">目录中还没有 JAR 包</td></tr>`;
+      rows.innerHTML = state.canglingJars.length ? state.canglingJars.map((file) => `<tr><td class="select-cell"><input type="checkbox" data-cangling-jar-select-name="${esc(file.name)}" aria-label="选择 ${esc(file.name)}" ${state.canglingJarSelection.has(file.name) ? "checked" : ""} /></td><td class="path">${esc(file.name)}</td><td>${fmtBytes(file.size || 0)}</td><td>${esc(fmtDateTime(file.modifiedAt))}</td><td class="runtime-actions">${canglingJarRestartButton(file)}</td></tr>`).join("") : `<tr><td colspan="5" class="empty">目录中还没有 JAR 包</td></tr>`;
       document.querySelectorAll("[data-cangling-jar-select-name]").forEach((checkbox) => {
         checkbox.onchange = () => {
           if (checkbox.checked) state.canglingJarSelection.add(checkbox.dataset.canglingJarSelectName);
           else state.canglingJarSelection.delete(checkbox.dataset.canglingJarSelectName);
           updateCanglingJarDeleteState();
         };
+      });
+      rows.querySelectorAll("[data-cangling-jar-restart]").forEach(button => {
+        button.onclick = () => restartCanglingJarDeployments(button.dataset.canglingJarRestart);
       });
       const selectAll = $("#cangling-jar-select-all");
       if (selectAll) {
@@ -3809,17 +3901,20 @@
     async function loadCanglingJars() {
       const rows = $("#cangling-jar-rows");
       if (!rows || state.canglingTab !== "run" || state.canglingRunTab !== "jars") return;
-      rows.innerHTML = `<tr><td colspan="4" class="empty db-loading"><span class="spin"></span>正在读取 JAR 包…</td></tr>`;
+      canglingJarDeployments = null;
+      canglingJarDeploymentError = "";
+      rows.innerHTML = `<tr><td colspan="5" class="empty db-loading"><span class="spin"></span>正在读取 JAR 包…</td></tr>`;
       try {
         const result = await api("/api/cangling/apps/jars");
         state.canglingJars = result.files || [];
         state.canglingJarDirectory = result.directory || "/opt/cangling/jar-deploy/incoming";
         state.canglingJarDistributionDirectory = result.distributionDirectory || "/opt/cangling/jars";
         renderCanglingJars();
+        await loadCanglingJarDeployments();
         const online = await api("/api/cangling/apps/jars/online");
         if (online && !online.done && !canglingJarJobWatch) await waitCanglingJarJob(online.id);
       } catch (error) {
-        rows.innerHTML = `<tr><td colspan="4" class="empty bad">${esc(error.message)}</td></tr>`;
+        rows.innerHTML = `<tr><td colspan="5" class="empty bad">${esc(error.message)}</td></tr>`;
       }
     }
 
@@ -4098,25 +4193,31 @@
       });
     }
 
-    async function restartCanglingDeployment(item) {
+    async function restartCanglingDeployment(item, options = {}) {
       const metadata = item && item.metadata || {};
       const spec = item && item.spec || {};
       const namespace = metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling";
       const name = metadata.name;
       const key = namespace + "/" + name;
-      if (!name || spec.replicas === 0 || spec.paused || metadata.deletionTimestamp || canglingDeploymentRestarts.has(key)) return;
+      if (!name || spec.replicas === 0 || spec.paused || metadata.deletionTimestamp || canglingDeploymentRestarts.has(key)) return false;
       canglingDeploymentRestarts.add(key);
       renderCanglingRuntime();
+      renderCanglingJars();
       try {
-        if (!(await confirmDialog(`确定滚动重启工作负载 ${namespace}/${name}？将按部署策略重新创建该工作负载的全部 Pod，单副本服务可能短暂不可用。`, { danger: true, confirmText: "重启" }))) return;
+        if (!options.confirmed && !(await confirmDialog(`确定滚动重启工作负载 ${namespace}/${name}？将按部署策略重新创建该工作负载的全部 Pod，单副本服务可能短暂不可用。`, { danger: true, confirmText: "重启" }))) return false;
         await api("/api/k3s/workloads/deployments/" + encodeURIComponent(namespace) + "/" + encodeURIComponent(name) + "/restart", { method: "POST" });
-        flash("ok", `已请求滚动重启 ${name}，就绪状态将自动刷新`);
-        await loadCanglingRuntime(true);
+        if (!options.quiet) {
+          flash("ok", `已请求滚动重启 ${name}，就绪状态将自动刷新`);
+          await loadCanglingRuntime(true);
+        }
+        return true;
       } catch (error) {
+        if (options.quiet) throw error;
         flash("err", `重启工作负载 ${name} 失败：${error.message}`);
       } finally {
         canglingDeploymentRestarts.delete(key);
         renderCanglingRuntime();
+        renderCanglingJars();
       }
     }
 
@@ -4809,7 +4910,7 @@
             <div class="cangling-section-head"><div><h3>Jar包更新</h3><p class="hint">上传目录 <code id="cangling-jar-directory">${esc(state.canglingJarDirectory)}</code>；最终分发到各节点 <code id="cangling-jar-distribution-directory">${esc(state.canglingJarDistributionDirectory)}</code></p></div><div class="row"><button type="button" class="btn" id="cangling-jar-refresh">刷新列表</button><button type="button" class="btn" id="cangling-jar-online" title="由服务器下载最新 JAR，并同步到所有节点">在线获取</button><button type="button" class="btn danger" id="cangling-jar-delete" disabled>删除所选</button><button type="button" class="btn" id="cangling-jar-sync">同步到所有节点</button><button type="button" class="btn primary" id="cangling-jar-select">上传 JAR 包</button><input id="cangling-jar-file" type="file" accept=".jar,application/java-archive" multiple hidden /></div></div>
             <div class="progress-wrap" id="cangling-jar-prog" hidden><div class="progress-meta"><span id="cangling-jar-prog-msg">准备中</span><span id="cangling-jar-prog-pct">0%</span></div><div class="progress" id="cangling-jar-prog-bar"><span></span></div><div class="progress-sub" id="cangling-jar-prog-sub"></div></div>
             <p class="hint hint-soft">上传前分块计算 SHA-256，与服务器一致的文件会跳过上传；同步采用临时文件传输、校验和原子替换。正在运行的容器不会被中断，仍使用原来的只读挂载；重启或重新部署 Pod 后才会加载新 JAR。</p>
-            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th class="select-cell"><input type="checkbox" id="cangling-jar-select-all" aria-label="全选 JAR 包" /></th><th>文件名</th><th>大小</th><th>修改时间</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="4" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
+            <div class="cangling-table-wrap"><table class="cluster-table"><thead><tr><th class="select-cell"><input type="checkbox" id="cangling-jar-select-all" aria-label="全选 JAR 包" /></th><th>文件名</th><th>大小</th><th>修改时间</th><th>重启相关容器</th></tr></thead><tbody id="cangling-jar-rows"><tr><td colspan="5" class="empty">正在读取 JAR 包…</td></tr></tbody></table></div>
           </div>
         </section>
         <section class="cangling-tab-panel" id="cangling-panel-runtime" data-cangling-run-panel="runtime" hidden>
@@ -7465,6 +7566,7 @@
     function showProgress(prefix, on) {
       const wrap = document.getElementById(prefix);
       if (wrap) wrap.hidden = !on;
+      if (prefix === "cangling-jar-prog") renderCanglingJars();
     }
 
     function setCanglingJarProgressPhase(phase) {
