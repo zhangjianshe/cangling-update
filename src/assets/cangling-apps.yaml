@@ -221,6 +221,22 @@ spec:
     metadata: {labels: {app: cis-map}}
     spec:
       enableServiceLinks: false
+      initContainers:
+        - name: wait-postgres
+          image: hub.cangling.cn/cangling/postgis:17-3.5
+          imagePullPolicy: IfNotPresent
+          envFrom: [{configMapRef: {name: cangling-env}}]
+          command: [sh, -ec]
+          args:
+            - |
+              command -v pg_isready >/dev/null 2>&1 || { echo "Database image does not provide pg_isready" >&2; exit 1; }
+              echo "Waiting for PostgreSQL at ${HOST_POSTGIS:-cis-postgis}:${POSTGIS_PORT:-5432}"
+              until pg_isready -h "${HOST_POSTGIS:-cis-postgis}" -p "${POSTGIS_PORT:-5432}" -U "${POSTGIS_USER:-cangling}" -d postgres -t 3; do
+                sleep 2
+              done
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
       containers:
         - name: cis-map
           image: hub.cangling.cn/cangling/gdal-base:v4.2.35
@@ -260,6 +276,22 @@ spec:
     metadata: {labels: {app: np4-base}}
     spec:
       enableServiceLinks: false
+      initContainers:
+        - name: wait-postgres
+          image: hub.cangling.cn/cangling/postgis:17-3.5
+          imagePullPolicy: IfNotPresent
+          envFrom: [{configMapRef: {name: cangling-env}}]
+          command: [sh, -ec]
+          args:
+            - |
+              command -v pg_isready >/dev/null 2>&1 || { echo "Database image does not provide pg_isready" >&2; exit 1; }
+              echo "Waiting for PostgreSQL at ${HOST_POSTGIS:-cis-postgis}:${POSTGIS_PORT:-5432}"
+              until pg_isready -h "${HOST_POSTGIS:-cis-postgis}" -p "${POSTGIS_PORT:-5432}" -U "${POSTGIS_USER:-cangling}" -d postgres -t 3; do
+                sleep 2
+              done
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
       containers:
         - name: np4-base
           image: hub.cangling.cn/cangling/gdal-base:v4.2.35

@@ -1551,6 +1551,7 @@ fn render_manifest(config: &CanglingConfig) -> Result<(String, Vec<String>), App
         if let Some(name) = metadata_name(doc).map(ToOwned::to_owned) {
             if let Some(app) = apps.get(name.as_str()) {
                 patch_application_document(doc, app, config)?;
+                patch_postgres_startup_image(doc, &apps)?;
             }
         }
         patch_storage_volumes(doc, config)?;
@@ -2245,6 +2246,34 @@ fn patch_application_document(
     Ok(())
 }
 
+/// Keep the readiness client on the same image/version as the deployed PostgreSQL.
+/// The shell command in the YAML template reads the same ConfigMap
+/// connection settings as the Java applications, without receiving DB passwords.
+fn patch_postgres_startup_image(
+    doc: &mut Value,
+    apps: &BTreeMap<&str, &ApplicationConfig>,
+) -> Result<(), AppError> {
+    if !matches!(metadata_name(doc), Some("cis-map" | "np4-base"))
+        || !matches!(value_str(doc, &["kind"]), Some("Deployment" | "DaemonSet"))
+    {
+        return Ok(());
+    }
+    let database = apps
+        .get("cis-postgis")
+        .ok_or_else(|| AppError::internal("缺少 PostgreSQL 应用配置"))?;
+    let pod = child_mut(child_mut(child_mut(doc, "spec")?, "template")?, "spec")?;
+    let wait = child_mut(pod, "initContainers")?
+        .as_sequence_mut()
+        .and_then(|items| {
+            items
+                .iter_mut()
+                .find(|item| value_str(item, &["name"]) == Some("wait-postgres"))
+        })
+        .ok_or_else(|| AppError::internal("内置部署模板缺少 wait-postgres 初始化容器"))?;
+    set_mapping_string(mapping_mut(wait)?, "image", &database.image);
+    Ok(())
+}
+
 fn patch_storage_volumes(doc: &mut Value, config: &CanglingConfig) -> Result<(), AppError> {
     let kind = value_str(doc, &["kind"]).unwrap_or_default();
     if kind != "Deployment" && kind != "DaemonSet" && kind != "StatefulSet" {
@@ -2461,6 +2490,169 @@ fn rebase_template_images(value: &mut Value, prefix: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn database_wait_uses_the_configured_postgres_image_and_connection_configmap() {
+        let mut config = default_config();
+        config.namespace = "test-app".into();
+        config.image_prefix = "registry.example.test/platform".into();
+        config
+            .applications
+            .iter_mut()
+            .find(|app| app.id == "cis-postgis")
+            .unwrap()
+            .image = "postgis:18-custom".into();
+        config
+            .environment
+            .insert("HOST_POSTGIS".into(), "db.internal".into());
+        config
+            .environment
+            .insert("POSTGIS_PORT".into(), "6432".into());
+        let (yaml, _) = render_manifest(&config).unwrap();
+        let docs: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
+            .map(|doc| Value::deserialize(doc).unwrap())
+            .collect();
+        let expected_args = docs
+            .iter()
+            .find(|doc| {
+                metadata_name(doc) == Some("cis-map")
+                    && value_str(doc, &["kind"]) == Some("Deployment")
+            })
+            .unwrap()["spec"]["template"]["spec"]["initContainers"][0]["args"]
+            .clone();
+        for app in &config.applications {
+            let doc = docs
+                .iter()
+                .find(|doc| {
+                    metadata_name(doc) == Some(app.id.as_str())
+                        && matches!(value_str(doc, &["kind"]), Some("Deployment" | "DaemonSet"))
+                })
+                .unwrap();
+            let pod = &doc["spec"]["template"]["spec"];
+            if matches!(app.id.as_str(), "cis-map" | "np4-base") {
+                let init = pod["initContainers"].as_sequence().unwrap();
+                assert_eq!(init.len(), 1);
+                let init = &init[0];
+                assert_eq!(init["args"], expected_args);
+                assert_eq!(value_str(init, &["name"]), Some("wait-postgres"));
+                assert_eq!(
+                    value_str(init, &["image"]),
+                    Some("registry.example.test/platform/postgis:18-custom")
+                );
+                assert_eq!(value_str(init, &["imagePullPolicy"]), Some("IfNotPresent"));
+                assert_eq!(
+                    value_str(init, &["resources", "limits", "memory"]),
+                    Some("64Mi")
+                );
+                assert_eq!(
+                    init["command"],
+                    serde_yaml::to_value(vec!["sh", "-ec"]).unwrap()
+                );
+                assert_eq!(init["envFrom"].as_sequence().unwrap().len(), 1);
+                assert_eq!(
+                    value_str(&init["envFrom"][0], &["configMapRef", "name"]),
+                    Some("cangling-env")
+                );
+                assert!(init.get("volumeMounts").is_none());
+                assert_eq!(pod["containers"][0]["command"][0].as_str(), Some("java"));
+                assert_eq!(value_str(doc, &["metadata", "namespace"]), Some("test-app"));
+            } else {
+                assert!(pod.get("initContainers").is_none());
+            }
+        }
+        let env = docs
+            .iter()
+            .find(|doc| metadata_name(doc) == Some("cangling-env"))
+            .unwrap();
+        assert_eq!(
+            value_str(env, &["data", "HOST_POSTGIS"]),
+            Some("db.internal")
+        );
+        assert_eq!(value_str(env, &["data", "POSTGIS_PORT"]), Some("6432"));
+    }
+
+    #[test]
+    fn postgres_startup_wait_retries_until_ready_and_passes_settings_as_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let docs = parse_documents().unwrap();
+        let doc = docs
+            .iter()
+            .find(|doc| {
+                metadata_name(doc) == Some("cis-map")
+                    && value_str(doc, &["kind"]) == Some("Deployment")
+            })
+            .unwrap();
+        let script = doc["spec"]["template"]["spec"]["initContainers"][0]["args"][0]
+            .as_str()
+            .unwrap();
+        let root =
+            std::env::temp_dir().join(format!("postgres-wait-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let probe = root.join("pg_isready");
+        std::fs::write(&probe, "#!/bin/sh\nn=0\n[ ! -f \"$WAIT_STATE\" ] || n=$(cat \"$WAIT_STATE\")\nn=$((n+1))\nprintf '%s' \"$n\" > \"$WAIT_STATE\"\nprintf '%s\\n' \"$@\" > \"$WAIT_ARGS\"\n[ \"$n\" -ge 3 ]\n").unwrap();
+        let sleep = root.join("sleep");
+        std::fs::write(
+            &sleep,
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$WAIT_SLEEP\"\n",
+        )
+        .unwrap();
+        for file in [&probe, &sleep] {
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = format!(
+            "{}:{}",
+            root.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        for custom in [false, true] {
+            for file in ["state", "args", "sleep-count"] {
+                let _ = std::fs::remove_file(root.join(file));
+            }
+            let mut command = std::process::Command::new("/bin/sh");
+            command
+                .args(["-ec", script])
+                .env("PATH", &path)
+                .env("WAIT_STATE", root.join("state"))
+                .env("WAIT_ARGS", root.join("args"))
+                .env("WAIT_SLEEP", root.join("sleep-count"))
+                .env_remove("HOST_POSTGIS")
+                .env_remove("POSTGIS_PORT")
+                .env_remove("POSTGIS_USER");
+            if custom {
+                command
+                    .env("HOST_POSTGIS", "db.internal")
+                    .env("POSTGIS_PORT", "6432")
+                    .env("POSTGIS_USER", "custom-user");
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(std::fs::read_to_string(root.join("state")).unwrap(), "3");
+            assert_eq!(
+                std::fs::read_to_string(root.join("sleep-count")).unwrap(),
+                "2\n2\n"
+            );
+            let args = std::fs::read_to_string(root.join("args")).unwrap();
+            let expected = if custom {
+                "-h\ndb.internal\n-p\n6432\n-U\ncustom-user\n-d\npostgres\n-t\n3\n"
+            } else {
+                "-h\ncis-postgis\n-p\n5432\n-U\ncangling\n-d\npostgres\n-t\n3\n"
+            };
+            assert_eq!(args, expected);
+        }
+        std::fs::remove_file(&probe).unwrap();
+        let missing = std::process::Command::new("/bin/sh")
+            .args(["-ec", script])
+            .env("PATH", &root)
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+        assert!(String::from_utf8_lossy(&missing.stderr).contains("does not provide pg_isready"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn legacy_applications_default_to_eight_gib_and_preserve_custom_limits() {
