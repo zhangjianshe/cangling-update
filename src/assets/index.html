@@ -3802,7 +3802,7 @@
       if (canglingJarDeployments === null) return "正在读取关联部署";
       if (!deployments.length) return "未找到关联部署";
       const progress = $("#cangling-jar-prog");
-      if (canglingJarJobWatch || progress && !progress.hidden) return "JAR 正在更新，请等待完成";
+      if (canglingJarJobWatch || progress && !progress.hidden && !progress.classList.contains("phase-error")) return "JAR 正在更新，请等待完成";
       for (const item of deployments) {
         const metadata = item.metadata || {}, spec = item.spec || {};
         const namespace = metadata.namespace || state.canglingConfig && state.canglingConfig.namespace || "cangling";

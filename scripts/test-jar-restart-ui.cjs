@@ -19,7 +19,7 @@ function harness(items) {
   const context = vm.createContext({ state: { canglingConfig: { namespace: 'custom' } },
     canglingJarRestarts: new Set(), canglingDeploymentRestarts: new Set(),
     canglingJarDeployments: items, canglingJarDeploymentError: '', canglingJarDeploymentLoad: 0,
-    canglingJarJobWatch: '', progress: { hidden: true }, confirm: true, fail: '',
+    canglingJarJobWatch: '', progress: { hidden: true, classList: { contains() { return false; } } }, confirm: true, fail: '',
     renderCanglingJars() {}, renderCanglingRuntime() {}, async loadCanglingRuntime() {},
     $(selector) { return context.progress; }, esc: String,
     async api(url, options) {
@@ -74,6 +74,10 @@ function harness(items) {
   const active = harness([direct]); active.context.progress.hidden = false;
   await active.context.restartCanglingJarDeployments(jar);
   assert.equal(active.calls.filter(call => call.method === 'POST').length, 0);
+  const failedProgress = harness([direct]); failedProgress.context.progress.hidden = false;
+  failedProgress.context.progress.classList.contains = name => name === 'phase-error';
+  await failedProgress.context.restartCanglingJarDeployments(jar);
+  assert.equal(failedProgress.calls.filter(call => call.method === 'POST').length, 1);
   const unknown = harness([unrelated]);
   await unknown.context.restartCanglingJarDeployments(jar);
   assert.equal(unknown.prompts.length, 0);
