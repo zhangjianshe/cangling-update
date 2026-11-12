@@ -2211,6 +2211,15 @@ fn patch_application_document(
         let resources = container_map
             .entry(key("resources"))
             .or_insert_with(|| Value::Mapping(Mapping::new()));
+        // A limit without an explicit request is defaulted to an equal request by
+        // Kubernetes. Keep existing reservations, and preserve zero reservation
+        // for workloads that previously had no memory request.
+        let requests = mapping_mut(resources)?
+            .entry(key("requests"))
+            .or_insert_with(|| Value::Mapping(Mapping::new()));
+        mapping_mut(requests)?
+            .entry(key("memory"))
+            .or_insert_with(|| Value::String("0".into()));
         let limits = mapping_mut(resources)?
             .entry(key("limits"))
             .or_insert_with(|| Value::Mapping(Mapping::new()));
@@ -2519,6 +2528,11 @@ mod tests {
                     Some("Recreate")
                 );
                 assert_eq!(doc["spec"]["replicas"].as_u64(), Some(1));
+            } else {
+                assert_eq!(
+                    value_str(container, &["resources", "requests", "memory"]),
+                    Some("0")
+                );
             }
         }
         for invalid in [0, 1025] {

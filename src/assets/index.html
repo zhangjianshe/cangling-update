@@ -4878,7 +4878,7 @@
           <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>Service</th><th>镜像名称与版本</th><th>副本</th><th>入口节点</th><th>入口端口</th><th>内存限制（G）</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("entry")}</tbody></table></div>
           </div>
           <div class="card">
-          <p class="hint">内存限制对每个容器生效，默认 8 G（YAML 使用 Gi）；超过上限时容器可能被系统终止并重启。修改后请重新生成并应用 YAML。</p>
+          <p class="hint">内存限制对每个容器生效，默认 8 G（YAML 使用 Gi），不代表预留同等内存；超过上限时容器可能被系统终止并重启。修改后请重新生成并应用 YAML。</p>
           <div class="cangling-section-head"><h3>单实例部署</h3><p class="hint">Deployment 固定到指定节点，适合数据库和有状态基础服务</p></div>
           <div class="cangling-table-wrap"><table class="cangling-app-table"><thead><tr><th>应用</th><th>工作负载</th><th>镜像名称与版本</th><th>部署节点</th><th>服务端口</th><th>内存限制（G）</th><th>主机存储参考</th></tr></thead><tbody>${canglingAppRows("single")}</tbody></table></div>
           </div>
