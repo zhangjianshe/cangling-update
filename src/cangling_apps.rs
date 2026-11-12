@@ -295,9 +295,11 @@ fn migrate_builtin_image_versions(config: &mut CanglingConfig) {
     for app in &mut config.applications {
         app.image = match app.image.as_str() {
             "cangling-broker:0.1.60" => "cangling-broker:0.1.73".into(),
-            "cangling-map:0.1.11" | "cangling-map:0.1.21" | "cangling-map:0.1.22" => {
-                "cangling-map:0.1.23".into()
-            }
+            "cangling-map:0.1.11"
+            | "cangling-map:0.1.21"
+            | "cangling-map:0.1.22"
+            | "cangling-map:0.1.23"
+            | "cangling-map:0.1.24" => "cangling-map:0.1.25".into(),
             _ => continue,
         };
     }
@@ -317,12 +319,25 @@ fn migrate_builtin_application_ports(config: &mut CanglingConfig) {
 
 fn migrate_environment_variables(config: &mut CanglingConfig) {
     if config.environment.get("CL_BASE_PATH").is_some_and(|value| {
-        value == &format!("{TEMPLATE_SHARED_ROOT}/cldata")
-            || value == &format!("{}/cldata", config.shared_root)
+        value == &format!("{TEMPLATE_SHARED_ROOT}/np4/cldata")
+            || value == &format!("{}/np4/cldata", config.shared_root)
     }) {
         config.environment.insert(
             "CL_BASE_PATH".into(),
-            format!("{}/np4/cldata", config.shared_root),
+            format!("{}/cldata", config.shared_root),
+        );
+    }
+    if config
+        .environment
+        .get("VOLUME_DEFAULT_PATH")
+        .is_some_and(|value| {
+            value == "/mnt/cangling/storage/volumes"
+                || value == &format!("{TEMPLATE_SHARED_ROOT}/volumes")
+        })
+    {
+        config.environment.insert(
+            "VOLUME_DEFAULT_PATH".into(),
+            format!("{}/volumes", config.shared_root),
         );
     }
 
@@ -1242,7 +1257,7 @@ fn default_config() -> CanglingConfig {
             "地图服务",
             ApplicationGroup::Multi,
             WorkloadKind::Deployment,
-            "cangling-map:0.1.23",
+            "cangling-map:0.1.25",
             &[3000],
             "/opt/cangling/local/cangling-map",
         ),
@@ -1964,7 +1979,11 @@ fn patch_environment(
         ("HOST_KAFKA", config.host_ip.clone()),
         ("WEB_PORT", web.to_string()),
         ("DATA_PATH", config.shared_root.clone()),
-        ("CL_BASE_PATH", format!("{}/np4/cldata", config.shared_root)),
+        ("CL_BASE_PATH", format!("{}/cldata", config.shared_root)),
+        (
+            "VOLUME_DEFAULT_PATH",
+            format!("{}/volumes", config.shared_root),
+        ),
         ("IB_CACHE_PATH", format!("{}/ibcache", config.local_root)),
         ("CL_BROKER_PORT", broker.to_string()),
         ("CL_BROKER_WEBPORT", broker_web.to_string()),
@@ -2393,7 +2412,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_business_directories_are_nested_under_np4() {
+    fn shared_volume_mount_covers_business_volume_paths() {
         let config = default_config();
         let (yaml, _) = render_manifest(&config).unwrap();
         let documents: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
@@ -2421,27 +2440,70 @@ mod tests {
             .unwrap();
         assert_eq!(
             value_str(np4, &["mountPath"]),
-            Some("/opt/cl/share/cangling/np4")
+            Some("/opt/cl/share/cangling")
         );
         for name in ["algo_tools", "cldata", "np4-resource-images"] {
             assert!(yaml.contains(&format!("/np4/{name}")));
-            assert!(!yaml.contains(&format!("/opt/cl/share/cangling/{name}")));
+        }
+        let environment = documents
+            .iter()
+            .find(|doc| metadata_name(doc) == Some("cangling-env"))
+            .unwrap();
+        assert_eq!(
+            value_str(environment, &["data", "VOLUME_DEFAULT_PATH"]),
+            Some("/opt/cl/share/cangling/volumes")
+        );
+        assert_eq!(
+            value_str(environment, &["data", "CL_BASE_PATH"]),
+            Some("/opt/cl/share/cangling/cldata")
+        );
+        for id in ["cis-map", "np4-base"] {
+            let deployment = documents
+                .iter()
+                .find(|doc| {
+                    metadata_name(doc) == Some(id)
+                        && value_str(doc, &["kind"]) == Some("Deployment")
+                })
+                .unwrap();
+            let mounts = deployment["spec"]["template"]["spec"]["containers"][0]["volumeMounts"]
+                .as_sequence()
+                .unwrap();
+            let np4 = mounts
+                .iter()
+                .find(|mount| value_str(mount, &["name"]) == Some("np4"))
+                .unwrap();
+            assert_eq!(
+                value_str(np4, &["mountPath"]),
+                Some("/opt/cl/share/cangling")
+            );
         }
         let mut saved = config;
         saved.environment.insert(
             "CL_BASE_PATH".into(),
-            format!("{}/cldata", saved.shared_root),
+            format!("{}/np4/cldata", saved.shared_root),
+        );
+        saved.environment.insert(
+            "VOLUME_DEFAULT_PATH".into(),
+            "/mnt/cangling/storage/volumes".into(),
         );
         migrate_environment_variables(&mut saved);
         assert_eq!(
             saved.environment["CL_BASE_PATH"],
-            format!("{}/np4/cldata", saved.shared_root)
+            format!("{}/cldata", saved.shared_root)
+        );
+        assert_eq!(
+            saved.environment["VOLUME_DEFAULT_PATH"],
+            format!("{}/volumes", saved.shared_root)
         );
         saved
             .environment
             .insert("CL_BASE_PATH".into(), "/custom/base".into());
+        saved
+            .environment
+            .insert("VOLUME_DEFAULT_PATH".into(), "/custom/volumes".into());
         migrate_environment_variables(&mut saved);
         assert_eq!(saved.environment["CL_BASE_PATH"], "/custom/base");
+        assert_eq!(saved.environment["VOLUME_DEFAULT_PATH"], "/custom/volumes");
     }
 
     #[test]
@@ -2626,7 +2688,7 @@ mod tests {
             .unwrap();
         assert_eq!(map.group, ApplicationGroup::Multi);
         assert_eq!(map.replicas, 1);
-        assert_eq!(map.image, "cangling-map:0.1.23");
+        assert_eq!(map.image, "cangling-map:0.1.25");
         let tile = config
             .applications
             .iter()

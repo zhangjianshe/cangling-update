@@ -32,7 +32,7 @@ data:
   TZ: Asia/Shanghai
   HOST: "192.168.3.121"
   DATA_PATH: /mnt/cangling/cangling-share/storage
-  VOLUME_DEFAULT_PATH: /mnt/cangling/storage/volumes
+  VOLUME_DEFAULT_PATH: /mnt/cangling/cangling-share/storage/volumes
   HOST_KAFKA: "192.168.3.121"
   JDBC_DRIVER_NAME: org.postgresql.Driver
   JDBC_URL_PREFIX: jdbc:postgresql
@@ -54,7 +54,7 @@ data:
   IM_THEME: base
   SERVER_URL: https://app.cangling.cn/
   AI_IM_PATH: /mnt/cangling/storage/imdata
-  CL_BASE_PATH: /mnt/cangling/cangling-share/storage/np4/cldata
+  CL_BASE_PATH: /mnt/cangling/cangling-share/storage/cldata
   CL_SERVER_URL: http://192.168.3.121:7600/
   ENABLE_DOC: "false"
   POSTGIS_MVT_USER: cangling
@@ -194,7 +194,7 @@ spec:
           volumeMounts: &javaMounts
             - {name: passwd, mountPath: /etc/passwd, readOnly: true}
             - {name: ibcache, mountPath: /var/ibcache}
-            - {name: np4, mountPath: /mnt/cangling/cangling-share/storage/np4}
+            - {name: np4, mountPath: /mnt/cangling/cangling-share/storage}
             - {name: backup, mountPath: /ibbackup}
             - {name: cldata, mountPath: /app/imdata}
             - {name: jar, mountPath: /app/app.jar, readOnly: true}
@@ -234,7 +234,7 @@ spec:
           readinessProbe: {tcpSocket: {port: 8079}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
           volumeMounts:
             - {name: passwd, mountPath: /etc/passwd, readOnly: true}
-            - {name: np4, mountPath: /mnt/prod/np4}
+            - {name: np4, mountPath: /mnt/cangling/cangling-share/storage}
             - {name: modules, mountPath: /app/module}
             - {name: ibcache, mountPath: /var/ibcache}
             - {name: jar, mountPath: /app/app.jar, readOnly: true}
@@ -271,7 +271,7 @@ spec:
           volumeMounts:
             - {name: cldata, mountPath: /app/imdata}
             - {name: logs, mountPath: /app/imdata/logs}
-            - {name: np4, mountPath: /mnt/prod/np4}
+            - {name: np4, mountPath: /mnt/cangling/cangling-share/storage}
             - {name: localtime, mountPath: /etc/localtime, readOnly: true}
             - {name: jar, mountPath: /app/app.jar, readOnly: true}
       volumes:
@@ -423,7 +423,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: cangling-map
-          image: hub.cangling.cn/cangling/cangling-map:0.1.23
+          image: hub.cangling.cn/cangling/cangling-map:0.1.25
           imagePullPolicy: IfNotPresent
           env:
             - {name: MAP_SERVER_ADDRESS, value: "0.0.0.0:3000"}
