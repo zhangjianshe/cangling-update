@@ -22,6 +22,7 @@ pub struct AppState {
     pub image_import_lock: Arc<AsyncMutex<()>>,
     pub nginx_stats_lock: Arc<AsyncMutex<()>>,
     pub active_image_job: Arc<Mutex<Option<String>>>,
+    pub active_jar_upgrade_job: Arc<Mutex<Option<String>>>,
     pub data_init: Arc<Mutex<crate::cangling_data_init::DataInitState>>,
     pub login_guard: LoginGuard,
     pub cluster: ClusterConfig,
@@ -52,6 +53,7 @@ impl AppState {
             image_import_lock: Arc::new(AsyncMutex::new(())),
             nginx_stats_lock: Arc::new(AsyncMutex::new(())),
             active_image_job: Arc::new(Mutex::new(None)),
+            active_jar_upgrade_job: Arc::new(Mutex::new(None)),
             data_init: Arc::new(Mutex::new(
                 crate::cangling_data_init::DataInitState::default(),
             )),

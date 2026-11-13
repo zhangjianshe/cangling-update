@@ -229,6 +229,7 @@
     .app[data-section="images"] .shell,
     .app[data-section="certificates"] .shell,
     .app[data-section="install-resources"] .shell,
+    .app[data-section="jar-upgrade"] .shell,
     .app[data-section="storage"] .shell { grid-template-columns: 1fr; }
     .app[data-section="cluster"] aside,
     .app[data-section="k3s"] aside,
@@ -236,6 +237,7 @@
     .app[data-section="images"] aside,
     .app[data-section="certificates"] aside,
     .app[data-section="install-resources"] aside,
+    .app[data-section="jar-upgrade"] aside,
     .app[data-section="storage"] aside { display: none; }
     .app[data-section="traffic"] .shell { grid-template-columns: 1fr; }
     .app[data-section="traffic"] aside { display: none; }
@@ -716,7 +718,11 @@
     .upgrade-upload-pane .hint { min-height: 38px; margin: 0 0 10px; }
     .upgrade-upload-pane .drop { min-height: 96px; display: flex; align-items: center; justify-content: center; }
     .jar-upgrade-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
-    .jar-upgrade-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+    .jar-upgrade-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 14px 0; }
+    .jar-run-progress { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; color: var(--muted); font-size: 13px; }
+    .jar-run-progress[hidden] { display: none !important; }
+    .jar-run-progress progress { width: 120px; flex: 0 0 120px; height: 10px; accent-color: var(--success-emphasis); }
+    .jar-run-progress-message { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .jar-status-ok { color: var(--ok); font-weight: 700; }
     .jar-status-missing { color: var(--bad); font-weight: 700; }
     .filelist { margin: 12px 0 0; padding: 0; list-style: none; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
@@ -6566,6 +6572,7 @@
               <input id="jar-files" type="file" accept=".jar,application/java-archive" multiple hidden />
               <button class="btn" id="btn-jar-upload" ${data.upgrading ? "disabled" : ""}>选择并上传 JAR</button>
               <button class="btn primary" id="btn-jar-run" ${data.ready && !data.upgrading ? "" : "disabled"}>${data.upgrading ? "正在升级…" : "执行升级"}</button>
+              <div class="jar-run-progress" id="jar-run-progress" hidden role="status" aria-live="polite"><progress id="jar-run-bar" max="100" aria-label="JAR 升级进度"></progress><span id="jar-run-percent"></span><span class="jar-run-progress-message" id="jar-run-message"></span></div>
             </div>
             <div class="progress-wrap" id="jar-upload-progress" hidden>
               <div class="progress-meta"><span id="jar-upload-message">正在上传</span><span id="jar-upload-percent">0%</span></div>
@@ -6600,6 +6607,8 @@
       $("#jar-files").onchange = uploadJarFiles;
       $("#btn-jar-run").onclick = runJarUpgrade;
       $("#btn-jar-repair-storage").onclick = openJarStorageRepair;
+      if (data.active_job && !data.active_job.done) watchJarUpgrade(data.active_job.id, data.active_job);
+      else setJarRunProgress(null);
     }
 
     async function checkJarEnvironment() {
@@ -6740,42 +6749,67 @@
         + (skipped.length ? `\n以下节点检查失败，将跳过：${skipped.join("、")}。` : "");
     }
 
+    function setJarRunProgress(job) {
+      const root=$("#jar-run-progress");
+      if(!root)return;
+      root.hidden=!job || !!job.done;
+      if(root.hidden)return;
+      const bar=$("#jar-run-bar"),percent=$("#jar-run-percent"),message=$("#jar-run-message");
+      const known=Number(job.total)>0;
+      const value=Math.max(0,Math.min(100,Number(job.percent)||0));
+      if(known)bar.value=value;else bar.removeAttribute("value");
+      percent.textContent=known?`${value}%（${Number(job.current)||0}/${Number(job.total)}）`:"";
+      message.textContent=job.message||"正在升级…";
+      message.title=message.textContent;
+    }
+
     async function runJarUpgrade() {
       const button = $("#btn-jar-run");
       try {
         const current = await api("/api/jar-upgrade/status");
+        if ($("#btn-jar-run") !== button) return;
         if (!current.ready || current.upgrading) {
           drawJarUpgrade(current);
           flash("err", current.upgrading ? "已有 JAR 升级任务正在执行" : "尚无检查通过且匹配本批次 JAR 的升级目标，或升级脚本尚未生成");
           return;
         }
         if (!(await confirmDialog(jarUpgradeConfirmation(current)))) return;
-        if (button) button.disabled = true;
+        if ($("#btn-jar-run") !== button) return;
+        if (button) { button.disabled = true; button.textContent = "正在升级…"; }
+        setJarRunProgress({message:"正在提交升级任务…",total:0});
         const job = await api("/api/jar-upgrade/run", { method: "POST" });
-        watchJarUpgrade(job.id);
+        if ($("#btn-jar-run") === button) watchJarUpgrade(job.id);
       } catch (e) {
+        if ($("#btn-jar-run") !== button) return;
+        setJarRunProgress(null);
         flash("err", e.message);
-        if (button) button.disabled = false;
+        if (button) { button.disabled = false; button.textContent = "执行升级"; }
       }
     }
 
-    function watchJarUpgrade(jobId) {
+    function watchJarUpgrade(jobId, initialJob) {
       stopJarUpgradePoll();
       jarUpgradePoll.jobId = jobId;
+      setJarRunProgress(initialJob || {message:"正在升级…",total:0});
+      const button=$("#btn-jar-run");if(button){button.disabled=true;button.textContent="正在升级…";}
       const poll = async () => {
         try {
-          const job = await api("/api/jobs/" + jobId);
+          const job = await api("/api/jobs/" + encodeURIComponent(jobId));
+          if(jarUpgradePoll.jobId!==jobId)return;
+          setJarRunProgress(job);
           const log = $("#jar-upgrade-log"); if (log) log.textContent = job.message || job.phase;
           if (job.done) {
             stopJarUpgradePoll();
             flash(job.error ? "err" : "ok", job.error || "JAR 升级完成");
-            const button = $("#btn-jar-run"); if (button) button.disabled = false;
+            const button = $("#btn-jar-run"); if (button) { button.disabled = false; button.textContent = "执行升级"; }
           }
         } catch (e) {
-          stopJarUpgradePoll(); flash("err", e.message);
+          if(jarUpgradePoll.jobId!==jobId)return;
+          stopJarUpgradePoll();flash("err", e.message);
+          const button=$("#btn-jar-run");if(button){button.disabled=false;button.textContent="执行升级";}
         }
+        if(jarUpgradePoll.jobId===jobId)jarUpgradePoll.timer=setTimeout(poll,1000);
       };
-      jarUpgradePoll.timer = setInterval(poll, 1000);
       poll();
     }
 
@@ -6783,6 +6817,7 @@
       if (jarUpgradePoll.timer) clearInterval(jarUpgradePoll.timer);
       jarUpgradePoll.timer = null;
       jarUpgradePoll.jobId = null;
+      setJarRunProgress(null);
     }
 
     function imageDirectoryQuery() {

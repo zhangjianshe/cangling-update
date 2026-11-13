@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 
 const DEFAULT_DEPLOY_DIR: &str = "/opt/cangling/jar-deploy";
@@ -92,6 +92,7 @@ struct JarUpgradeStatus {
     eligible_targets: usize,
     skipped_nodes: usize,
     upgrading: bool,
+    active_job: Option<crate::progress::JobProgress>,
     files: Vec<JarFileStatus>,
     checked_at: Option<String>,
     nodes: Vec<JarNodeStatus>,
@@ -169,14 +170,22 @@ async fn load_status_at(root: &Path) -> Result<JarUpgradeStatus, AppError> {
         eligible_targets,
         skipped_nodes,
         upgrading: UPGRADING.load(Ordering::SeqCst),
+        active_job: None,
         files,
         checked_at: (!report.checked_at.is_empty()).then_some(report.checked_at),
         nodes: report.nodes,
     })
 }
 
-async fn status() -> Result<Json<JarUpgradeStatus>, AppError> {
-    load_status().await.map(Json)
+async fn status(State(state): State<AppState>) -> Result<Json<JarUpgradeStatus>, AppError> {
+    let mut status = load_status().await?;
+    let id = state
+        .active_jar_upgrade_job
+        .lock()
+        .map_err(|_| AppError::internal("jar job lock"))?
+        .clone();
+    status.active_job = id.and_then(|id| state.jobs.get(&id));
+    Ok(Json(status))
 }
 
 async fn check_environment(
@@ -539,6 +548,10 @@ fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<Strin
         }
         for target in &node.status.targets {
             let incoming = format!("$INCOMING/{}", target.jar);
+            let label = shell_quote(&format!("{} / {}", node.status.name, target.container));
+            script.push_str(&format!(
+                "if [ -f {incoming} ]; then printf 'CK_JAR_PROGRESS|start|%s\\n' {label}; fi\n"
+            ));
             if node.kind == "local" {
                 let backup_dir = root.join("backups");
                 let backup = format!(
@@ -557,6 +570,7 @@ fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<Strin
                         shell_quote(deployment), shell_quote(deployment),
                         &backup, &backup, shell_quote(&target.path), shell_quote(deployment), shell_quote(deployment),
                     ));
+                    script.push_str(&format!("if [ -f {incoming} ]; then printf 'CK_JAR_PROGRESS|done|%s\\n' {label}; fi\n"));
                     continue;
                 }
                 script.push_str(&format!(
@@ -603,6 +617,9 @@ fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<Strin
                     shell_quote(&remote_command),
                 ));
             }
+            script.push_str(&format!(
+                "if [ -f {incoming} ]; then printf 'CK_JAR_PROGRESS|done|%s\\n' {label}; fi\n"
+            ));
         }
     }
     script.push_str("[ \"$UPDATED\" -gt 0 ] || { echo '没有发现与本次上传匹配的运行容器' >&2; exit 1; }\necho \"JAR 升级完成，共更新 $UPDATED 个容器\"\n");
@@ -716,8 +733,26 @@ async fn run(
     let job = state.jobs.create();
     let job_id = job.id.clone();
     let jobs = state.jobs.clone();
+    let active = state.active_jar_upgrade_job.clone();
+    match active.lock() {
+        Ok(mut slot) => *slot = Some(job_id.clone()),
+        Err(_) => {
+            UPGRADING.store(false, Ordering::SeqCst);
+            return Err(AppError::internal("jar job lock"));
+        }
+    }
     let script = deploy_dir().join("upgrade-jars.sh");
     tokio::spawn(async move {
+        // Older generated scripts still run; show an indeterminate indicator
+        // until a fresh environment check generates progress markers.
+        let progress_total = if tokio::fs::read_to_string(&script)
+            .await
+            .is_ok_and(|text| text.contains("CK_JAR_PROGRESS|"))
+        {
+            current.eligible_targets as u64
+        } else {
+            0
+        };
         jobs.set(
             &job_id,
             "upgrade",
@@ -726,26 +761,109 @@ async fn run(
                 current.eligible_targets, current.skipped_nodes
             ),
             0,
-            0,
+            progress_total,
         );
-        let result = tokio::process::Command::new(&script).output().await;
-        UPGRADING.store(false, Ordering::SeqCst);
+        let result = execute_upgrade_script(&script, &jobs, &job_id, progress_total).await;
         match result {
-            Ok(output) if output.status.success() => {
-                let message = output_tail(&output.stdout, "JAR 升级完成");
+            Ok((status, stdout, _)) if status.success() => {
+                let message = output_tail(&stdout, "JAR 升级完成");
                 jobs.finish_ok(&job_id, &message);
             }
-            Ok(output) => {
-                let fallback = format!("升级脚本退出码：{}", output.status);
-                let message = output_tail(&output.stderr, &output_tail(&output.stdout, &fallback));
+            Ok((status, stdout, stderr)) => {
+                let fallback = format!("升级脚本退出码：{status}");
+                let message = output_tail(&stderr, &output_tail(&stdout, &fallback));
                 jobs.finish_err(&job_id, &message);
             }
             Err(error) => {
                 jobs.finish_err(&job_id, &format!("无法执行 {}：{error}", script.display()))
             }
         }
+        if let Ok(mut slot) = active.lock() {
+            if slot.as_deref() == Some(&job_id) {
+                *slot = None;
+            }
+        }
+        UPGRADING.store(false, Ordering::SeqCst);
     });
     Ok(Json(job))
+}
+
+fn record_upgrade_progress(
+    line: &str,
+    jobs: &crate::progress::JobHub,
+    id: &str,
+    completed: &mut u64,
+    total: u64,
+) -> bool {
+    let Some(marker) = line.strip_prefix("CK_JAR_PROGRESS|") else {
+        return false;
+    };
+    let Some((phase, label)) = marker.split_once('|') else {
+        return false;
+    };
+    if !matches!(phase, "start" | "done") {
+        return false;
+    }
+    if phase == "done" {
+        *completed = completed.saturating_add(1).min(total);
+    }
+    let label = label.chars().take(300).collect::<String>();
+    let message = if phase == "start" {
+        format!("正在升级 {label}（已完成 {completed}/{total}）")
+    } else {
+        format!("已完成 {completed}/{total}：{label}")
+    };
+    jobs.set(id, "upgrade", &message, *completed, total);
+    true
+}
+async fn capture_upgrade_output<R: AsyncRead + Unpin>(
+    stream: R,
+    mut progress: impl FnMut(&str) -> bool,
+) -> std::io::Result<Vec<u8>> {
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    let mut tail = Vec::new();
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).await? == 0 {
+            break;
+        }
+        if progress(String::from_utf8_lossy(&line).trim_end_matches(['\r', '\n'])) {
+            continue;
+        }
+        tail.extend_from_slice(&line);
+        if tail.len() > 16384 {
+            tail.drain(..tail.len() - 16384);
+        }
+    }
+    Ok(tail)
+}
+async fn execute_upgrade_script(
+    script: &Path,
+    jobs: &crate::progress::JobHub,
+    id: &str,
+    total: u64,
+) -> std::io::Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    let mut child = tokio::process::Command::new(script)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let mut completed = 0;
+    let (out, err, status) = tokio::join!(
+        capture_upgrade_output(stdout, |line| record_upgrade_progress(
+            line,
+            jobs,
+            id,
+            &mut completed,
+            total
+        )),
+        capture_upgrade_output(stderr, |_| false),
+        child.wait()
+    );
+    Ok((status?, out?, err?))
 }
 
 async fn repair_storage(
@@ -1574,5 +1692,76 @@ mod partial_upgrade_tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("已跳过 1 个检查失败节点"));
         assert!(!script.contains("docker restart 'failed-app'"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod upgrade_progress_tests {
+    use super::*;
+    #[test]
+    fn target_progress_uses_actual_completed_count_and_ignores_other_output() {
+        let jobs = crate::progress::JobHub::default();
+        let job = jobs.create();
+        let mut completed = 0;
+        assert!(!record_upgrade_progress(
+            "ordinary rollout output",
+            &jobs,
+            &job.id,
+            &mut completed,
+            2
+        ));
+        assert!(record_upgrade_progress(
+            "CK_JAR_PROGRESS|start|node/app",
+            &jobs,
+            &job.id,
+            &mut completed,
+            2
+        ));
+        assert_eq!(jobs.get(&job.id).unwrap().percent, 0);
+        assert!(record_upgrade_progress(
+            "CK_JAR_PROGRESS|done|node/app",
+            &jobs,
+            &job.id,
+            &mut completed,
+            2
+        ));
+        assert_eq!(jobs.get(&job.id).unwrap().percent, 50);
+        assert_eq!(jobs.get(&job.id).unwrap().current, 1);
+    }
+    #[tokio::test]
+    async fn non_utf8_output_does_not_turn_a_completed_upgrade_into_a_read_failure() {
+        let bytes = b"legacy-output-\xff\n";
+        assert_eq!(
+            capture_upgrade_output(&bytes[..], |_| false).await.unwrap(),
+            bytes
+        );
+    }
+    #[tokio::test]
+    async fn output_progress_is_visible_before_exit_and_failure_stderr_is_retained() {
+        let path = std::env::temp_dir().join(format!("jar-progress-{}", Uuid::new_v4()));
+        std::fs::write(&path,"#!/bin/sh\nprintf 'CK_JAR_PROGRESS|start|node/app\\n'\nprintf 'CK_JAR_PROGRESS|done|node/app\\n'\nsleep 0.3\necho deployment-failed >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let jobs = crate::progress::JobHub::default();
+        let job = jobs.create();
+        let worker_jobs = jobs.clone();
+        let id = job.id.clone();
+        let script = path.clone();
+        let task =
+            tokio::spawn(
+                async move { execute_upgrade_script(&script, &worker_jobs, &id, 2).await },
+            );
+        for _ in 0..100 {
+            if jobs.get(&job.id).unwrap().current == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        assert_eq!(jobs.get(&job.id).unwrap().percent, 50);
+        assert!(!task.is_finished());
+        let (status, out, err) = task.await.unwrap().unwrap();
+        assert_eq!(status.code(), Some(7));
+        assert!(out.is_empty());
+        assert!(String::from_utf8_lossy(&err).contains("deployment-failed"));
+        std::fs::remove_file(path).unwrap();
     }
 }

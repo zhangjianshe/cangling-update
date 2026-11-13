@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const html = fs.readFileSync(require('node:path').join(__dirname, '../src/assets/index.html'), 'utf8');
 for (const match of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) new vm.Script(match[1]);
 const elements = new Map();
-const $ = key => { if (!elements.has(key)) elements.set(key, { innerHTML: '', disabled: false }); return elements.get(key); };
+const $ = key => { if (!elements.has(key)) elements.set(key, { innerHTML: '', disabled: false, removeAttribute(name) { delete this[name]; } }); return elements.get(key); };
 let status, confirmed = true, posts = 0, watched = null, confirmation = '';
 const context = vm.createContext({
   $, Number, state: {}, fmtBytes: String, fmtDateTime: String,
