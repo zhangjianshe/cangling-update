@@ -4707,7 +4707,9 @@
         baseOutput.textContent = (base.output || []).join("\n");
         baseOutput.hidden = !base.output || !base.output.length;
         const region = await api("/api/cangling/apps/region-init");
-        const regionJob = region.job;
+        const recoveredRegionJob = region.initialized === true && region.job && region.job.done && Boolean(region.job.error);
+        const regionJob = recoveredRegionJob ? null : region.job;
+        const regionReady = region.initialized === true && (!regionJob || regionJob.done);
         const regionButton = $("#cangling-region-init-start");
         const regionStatus = $("#cangling-region-init-status");
         const regionProgress = $("#cangling-region-init-progress");
@@ -4715,9 +4717,9 @@
         const regionOutput = $("#cangling-region-init-output");
         if (!regionButton || !regionStatus || !regionProgress || !regionPercent || !regionOutput) return;
         regionButton.disabled = !region.available || Boolean(regionJob && !regionJob.done);
-        regionStatus.className = regionJob && regionJob.error ? "flash err" : regionJob && regionJob.done ? "flash ok" : "hint";
-        regionStatus.textContent = regionJob ? regionJob.message : region.available
-          ? [...((region.pending || []).length ? ["可初始化：" + region.pending.join("、")] : []), ...((region.indexRepairs || []).length ? ["需补建空间索引：" + region.indexRepairs.join("、")] : [])].join("；")
+        regionStatus.className = regionReady ? "flash ok" : regionJob && regionJob.error ? "flash err" : regionJob && regionJob.done ? "flash ok" : "hint";
+        regionStatus.textContent = regionReady ? (region.reason || "行政区划数据和空间索引已就绪") : regionJob ? regionJob.message : region.available
+          ? [...((region.pending || []).length ? ["可初始化：" + region.pending.join("、")] : []), ...((region.geometryRepairs || []).length ? ["需补齐空间字段或几何数据：" + region.geometryRepairs.join("、")] : []), ...((region.indexRepairs || []).length ? ["需补建空间索引：" + region.indexRepairs.join("、")] : [])].join("；")
           : (region.reason || "未找到行政区划数据包：" + region.packagePath);
         regionProgress.hidden = !regionJob || regionJob.done;
         regionPercent.hidden = !regionJob || regionJob.done;
@@ -4725,8 +4727,9 @@
           regionProgress.value = regionJob.percent || 0;
           regionPercent.textContent = `${regionJob.percent || 0}%`;
         }
-        regionOutput.textContent = (region.output || []).join("\n");
-        regionOutput.hidden = !region.output || !region.output.length;
+        const regionVisibleOutput = recoveredRegionJob ? [] : (region.output || []);
+        regionOutput.textContent = regionVisibleOutput.join("\n");
+        regionOutput.hidden = !regionVisibleOutput.length;
         if (((job && !job.done) || (baseJob && !baseJob.done) || (regionJob && !regionJob.done)) && !canglingDataInitPoll.timer) {
           canglingDataInitPoll.timer = setInterval(loadCanglingDataInit, 1200);
         } else if ((!job || job.done) && (!baseJob || baseJob.done) && (!regionJob || regionJob.done) && canglingDataInitPoll.timer) {
@@ -5027,7 +5030,7 @@
             <pre id="cangling-base-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>
           </div>
           <div class="card" style="margin-top:16px">
-            <div class="cangling-section-head"><div><h3>行政区划数据库初始化</h3><p class="hint">将离线 SQL 导入 cis-postgis 的 biz.cl.t_sys_region 和 cl-base.public.sys_region，包含行政区划属性与空间几何。请先初始化基础数据库；已有数据的表会跳过导入，空表在事务中导入，并自动检查、补建空间索引。</p></div><button type="button" class="btn primary" id="cangling-region-init-start" disabled>初始化行政区划数据</button></div>
+            <div class="cangling-section-head"><div><h3>行政区划数据库初始化</h3><p class="hint">将离线 SQL 导入 cis-postgis 的 biz.cl.t_sys_region 和 cl-base.public.sys_region，包含行政区划属性与空间几何。请先初始化基础数据库；已有属性记录保留，缺少的空间字段及几何数据按 ID 和行政区划编码匹配后补齐；空表在事务中导入，并自动检查、补建空间索引。</p></div><button type="button" class="btn primary" id="cangling-region-init-start" disabled>初始化行政区划数据</button></div>
             <div id="cangling-region-init-status" class="hint">正在检查数据包与 PostGIS 数据库…</div>
             <div class="row" style="margin-top:12px;align-items:center"><progress id="cangling-region-init-progress" max="100" value="0" style="width:min(520px,80vw);height:14px" hidden></progress><strong id="cangling-region-init-percent" hidden></strong></div>
             <pre id="cangling-region-init-output" class="cangling-yaml-diff" style="margin-top:12px;max-height:300px;overflow:auto" hidden></pre>

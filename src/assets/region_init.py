@@ -60,6 +60,21 @@ def pending_targets(remote):
     return pending, completed
 
 
+def has_geometry_column(remote, database, schema, table):
+    return psql(remote, database, f"""SELECT EXISTS (
+      SELECT 1 FROM pg_attribute
+      WHERE attrelid='{schema}.{table}'::regclass AND attname='geom'
+        AND attnum > 0 AND NOT attisdropped
+    )""") == "t"
+
+
+def needs_geometry_repair(remote, database, schema, table):
+    if not has_geometry_column(remote, database, schema, table):
+        return True
+    return psql(remote, database,
+                f'SELECT EXISTS(SELECT 1 FROM "{schema}"."{table}" WHERE "geom" IS NULL)') == "t"
+
+
 def has_spatial_index(remote, database, schema, table):
     # A partial, expression, invalid or unfinished index cannot cover all rows.
     return psql(remote, database, f"""SELECT EXISTS (
@@ -118,12 +133,37 @@ def check(archive):
     inspect(archive)
     remote = target()
     pending, completed = pending_targets(remote)
-    repairs = [f"{d}.{s}.{t}" for _, d, s, t in completed if not has_spatial_index(remote, d, s, t)]
-    return {"available": bool(pending or repairs), "initialized": not pending and not repairs,
-            "reason": "行政区划数据和空间索引已就绪" if not pending and not repairs else "",
-            "indexRepairs": repairs,
+    geometry = [f"{d}.{s}.{t}" for _, d, s, t in completed if needs_geometry_repair(remote, d, s, t)]
+    repairs = [f"{d}.{s}.{t}" for _, d, s, t in completed
+               if f"{d}.{s}.{t}" not in geometry and not has_spatial_index(remote, d, s, t)]
+    initialized = not pending and not geometry and not repairs
+    return {"available": not initialized, "initialized": initialized,
+            "reason": "行政区划数据和空间索引已就绪" if initialized else "",
+            "geometryRepairs": geometry, "indexRepairs": repairs,
             "pending": [f"{d}.{s}.{t}" for _, d, s, t in pending],
             "skipped": [f"{d}.{s}.{t}" for _, d, s, t in completed]}
+
+
+def write_source(output, archive, entry, stage, table, extension):
+    removed = {"begin": 0, "commit": 0, "table": 0, "sequence": 0}
+    with zipfile.ZipFile(archive) as bundle, bundle.open(entry) as source:
+        for raw in source:
+            line = raw.decode("utf-8-sig").replace("\r\n", "\n")
+            stripped = line.strip()
+            if stripped in ("BEGIN;", "COMMIT;"):
+                removed["begin" if stripped == "BEGIN;" else "commit"] += 1
+                continue
+            if stripped == f'DROP TABLE IF EXISTS "{table}";':
+                removed["table"] += 1
+                continue
+            if stripped == 'DROP SEQUENCE IF EXISTS "sys_region_id_seq";':
+                removed["sequence"] += 1
+                continue
+            line = line.replace("'cl.sys_region_id_seq'::regclass", f"'{stage}.sys_region_id_seq'::regclass")
+            line = line.replace('"public"."gist_geometry_ops_2d"', f'{extension}."gist_geometry_ops_2d"')
+            output.write(line.encode("utf-8"))
+    if removed != {"begin": 1, "commit": 1, "table": 1, "sequence": 1}:
+        raise RuntimeError(f"{entry} 的建表和事务语句不符合预期")
 
 
 def import_one(remote, archive, item, percent):
@@ -138,25 +178,7 @@ def import_one(remote, archive, item, percent):
             output.write(text.encode("utf-8"))
         write(f'SELECT pg_advisory_xact_lock(209182, 1401);\nCREATE SCHEMA IF NOT EXISTS "{schema}";\n')
         write(f'CREATE SCHEMA "{stage}";\nSET LOCAL search_path TO "{stage}", {extension}, public;\n')
-        removed = {"begin": 0, "commit": 0, "table": 0, "sequence": 0}
-        with zipfile.ZipFile(archive) as bundle, bundle.open(entry) as source:
-            for raw in source:
-                line = raw.decode("utf-8-sig").replace("\r\n", "\n")
-                stripped = line.strip()
-                if stripped in ("BEGIN;", "COMMIT;"):
-                    removed["begin" if stripped == "BEGIN;" else "commit"] += 1
-                    continue
-                if stripped == f'DROP TABLE IF EXISTS "{table}";':
-                    removed["table"] += 1
-                    continue
-                if stripped == 'DROP SEQUENCE IF EXISTS "sys_region_id_seq";':
-                    removed["sequence"] += 1
-                    continue
-                line = line.replace("'cl.sys_region_id_seq'::regclass", f"'{stage}.sys_region_id_seq'::regclass")
-                line = line.replace('"public"."gist_geometry_ops_2d"', f'{extension}."gist_geometry_ops_2d"')
-                write(line)
-        if removed != {"begin": 1, "commit": 1, "table": 1, "sequence": 1}:
-            raise RuntimeError(f"{entry} 的建表和事务语句不符合预期")
+        write_source(output, archive, entry, stage, table, extension)
         # The complete import and promotion share one transaction. Existing data
         # is checked again under the same lock before any business rows change.
         write(f'''\nDO $region$
@@ -168,6 +190,7 @@ BEGIN
     LOCK TABLE {relation} IN ACCESS EXCLUSIVE MODE;
     SELECT count(*) INTO target_count FROM {relation};
     IF target_count > 0 THEN RAISE EXCEPTION '目标表已有行政区划数据，已停止导入'; END IF;
+    ALTER TABLE {relation} ADD COLUMN IF NOT EXISTS "geom" {extension}.geometry;
     INSERT INTO {relation} ({COLUMNS}) SELECT {COLUMNS} FROM "{stage}"."{table}";
   ELSE
     ALTER SEQUENCE "{stage}"."sys_region_id_seq" SET SCHEMA "{schema}";
@@ -190,12 +213,44 @@ ANALYZE {relation};
     return f"{database}.{schema}.{table}：{result}"
 
 
+def repair_geometry(remote, archive, item):
+    entry, database, schema, table = item
+    extension = postgis_schema(remote, database)
+    stage = "region_repair_" + uuid.uuid4().hex
+    relation = f'"{schema}"."{table}"'
+    report(5, f"正在准备 {database}.{schema}.{table} 缺失的空间几何，保留已有属性记录")
+    with tempfile.TemporaryFile() as output:
+        output.write(f'CREATE SCHEMA "{stage}"; SET LOCAL search_path TO "{stage}", {extension}, public;\n'.encode())
+        write_source(output, archive, entry, stage, table, extension)
+        output.write(f"""
+SELECT pg_advisory_xact_lock(209182, 1401);
+ALTER TABLE {relation} ADD COLUMN IF NOT EXISTS "geom" {extension}.geometry;
+DO $repair$
+BEGIN
+  IF EXISTS (SELECT 1 FROM {relation} t LEFT JOIN "{stage}"."{table}" s ON t.id=s.id
+             WHERE t.geom IS NULL AND (s.id IS NULL OR s.geom IS NULL OR t.ext_id IS DISTINCT FROM s.ext_id)) THEN
+    RAISE EXCEPTION '目标记录与源行政区划 ID/编码不匹配或缺少几何数据，修复已回滚';
+  END IF;
+END $repair$;
+UPDATE {relation} t SET geom=s.geom FROM "{stage}"."{table}" s
+WHERE t.id=s.id AND t.geom IS NULL;
+DROP SCHEMA "{stage}" CASCADE;
+ANALYZE {relation};
+""".encode())
+        output.seek(0)
+        psql(remote, database, stream=output)
+    if needs_geometry_repair(remote, database, schema, table):
+        raise RuntimeError(f"{database}.{schema}.{table} 空间几何修复校验失败")
+    return f"{database}.{schema}.{table} 已补齐缺失空间几何，原有属性与记录保持不变"
+
+
 def run(archive):
     expected = inspect(archive)
     remote = target()
     pending, completed = pending_targets(remote)
     summaries = [f"{d}.{s}.{t} 已有数据，跳过" for _, d, s, t in completed]
-    if pending:
+    geometry = [item for item in completed if needs_geometry_repair(remote, *item[1:])]
+    if pending or geometry:
         report(1, "正在校验行政区划数据包 SHA-256")
         digest = hashlib.sha256()
         with open(archive, "rb") as source:
@@ -205,6 +260,8 @@ def run(archive):
             raise RuntimeError("行政区划数据包 SHA-256 不匹配")
         for index, item in enumerate(pending):
             summaries.append(import_one(remote, archive, item, 5 + index * 45))
+    for item in geometry:
+        summaries.append(repair_geometry(remote, archive, item))
     for item in TARGETS:
         summaries.append(ensure_spatial_index(remote, item))
     print("RESULT\t" + "；".join(summaries), flush=True)

@@ -248,6 +248,7 @@ async fn region_status(State(state): State<AppState>) -> Json<Value> {
         "initialized": availability["initialized"],
         "pending": availability["pending"],
         "skipped": availability["skipped"],
+        "geometryRepairs": availability["geometryRepairs"],
         "indexRepairs": availability["indexRepairs"],
         "job": job,
         "output": snapshot.region_output,
