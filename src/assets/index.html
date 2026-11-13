@@ -3612,7 +3612,8 @@
       "CANGLING_TILE_MEMORY_CACHE_BYTES": "瓦片内存缓存上限（字节）",
       "CANGLING_TILE_ROOT": "瓦片数据根目录",
       "CIS_MONGO_MIGRATION_ENABLED": "是否启用历史 MongoDB 数据迁移",
-      "KAFKA_RELAY_ENABLED": "中继kafka"
+      "KAFKA_RELAY_ENABLED": "中继kafka",
+      "CONSOLE_LOG_LEVEL": "控制台日志级别，默认 INFO"
 };
 
     function canglingEnvironmentDescription(name) {
@@ -3639,7 +3640,7 @@
       { id: "database", title: "数据库", hint: "PostgreSQL / PostGIS 连接与 Schema", names: ["JDBC_DRIVER_NAME", "JDBC_URL_PREFIX", "JDBC_DEFAULT_DB", "JDBC_SCHEMA", "POSTGIS_USER", "POSTGIS_MVT_USER"] },
       { id: "messaging", title: "消息服务", hint: "Broker、Kafka 及 MQTT 端口", prefixes: ["CL_BROKER_"], names: ["HOST_KAFKA", "KAFKA_PORT"] },
       { id: "services", title: "服务地址", hint: "CIS、地图、GeoServer 与前端访问地址", names: ["AI_MAP", "HOST_GEOSERVER_URL", "MAP_FRONT", "CL_SERVER_URL", "SERVER_URL"] },
-      { id: "runtime", title: "CIS 运行参数", hint: "命名空间、主题、功能开关与部署自动值", names: ["TZ", "HOST", "AI_K8S_NAMESPACE", "AI_THEME", "IM_THEME", "ENABLE_DOC", "CIS_MONGO_MIGRATION_ENABLED", "KAFKA_RELAY_ENABLED", "WEB_PORT"] },
+      { id: "runtime", title: "CIS 运行参数", hint: "命名空间、主题、功能开关与部署自动值", names: ["TZ", "HOST", "AI_K8S_NAMESPACE", "AI_THEME", "IM_THEME", "ENABLE_DOC", "CIS_MONGO_MIGRATION_ENABLED", "KAFKA_RELAY_ENABLED", "CONSOLE_LOG_LEVEL", "WEB_PORT"] },
       { id: "storage", title: "存储路径", hint: "共享、本地缓存与应用数据目录", names: ["DATA_PATH", "VOLUME_DEFAULT_PATH", "IB_CACHE_PATH", "AI_IM_PATH", "CL_BASE_PATH"] },
       { id: "tile", title: "地图与瓦片", hint: "cangling-map 与 cangling-tile 配置", names: ["TILE_CACHE_URL"], prefixes: ["CANGLING_TILE_"] },
     ];

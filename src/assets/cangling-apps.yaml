@@ -64,6 +64,7 @@ data:
   CANGLING_TILE_ROOT: /app/tiledata
   CIS_MONGO_MIGRATION_ENABLED: "false"
   KAFKA_RELAY_ENABLED: "false" # 中继kafka
+  CONSOLE_LOG_LEVEL: INFO # 控制台日志级别
 ---
 apiVersion: v1
 kind: Secret

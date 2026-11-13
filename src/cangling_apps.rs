@@ -369,6 +369,10 @@ fn migrate_environment_variables(config: &mut CanglingConfig) {
         .environment
         .entry("KAFKA_RELAY_ENABLED".into())
         .or_insert_with(|| "false".into());
+    config
+        .environment
+        .entry("CONSOLE_LOG_LEVEL".into())
+        .or_insert_with(|| "INFO".into());
     for name in [
         "DOMAIN_NAME",
         "AI_IMAGE_PREFIX",
@@ -3138,6 +3142,7 @@ mod tests {
         assert!(yaml.contains("/data/shared"));
         assert!(yaml.contains("CIS_MONGO_MIGRATION_ENABLED: 'false'"));
         assert!(yaml.contains("KAFKA_RELAY_ENABLED: 'false'"));
+        assert!(yaml.contains("CONSOLE_LOG_LEVEL: INFO"));
         for obsolete in ["AI_IMAGE_PREFIX:", "AI_WEB:", "GEOSERVER_FRONT:"] {
             assert!(
                 !yaml.contains(obsolete),
