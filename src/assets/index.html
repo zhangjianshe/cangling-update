@@ -2899,7 +2899,7 @@
           <td>${esc(host.role || "—")}</td>
           <td>${esc(host.version || "—")}</td>
           <td>${resourceText}</td>
-          <td>${gpuText}</td>
+          <td>${gpuText}<br/><button type="button" class="btn" data-host-devices="${esc(host.id)}">设备诊断</button></td>
           <td>${(info.projects || []).length || "—"}</td>
           <td>${fmtDateTime(host.last_seen)}</td>
           <td><div class="host-actions">
@@ -2910,9 +2910,14 @@
         </tr>`;
       }).join("");
       el.innerHTML = `<table class="cluster-table">
-        <thead><tr><th>状态</th><th>来源</th><th>名称</th><th>SSH 地址</th><th>用户</th><th>认证</th><th>集群角色</th><th>版本</th><th>CPU / 内存 / 磁盘</th><th>GPU</th><th>项目</th><th>最后心跳</th><th>操作</th></tr></thead>
+        <thead><tr><th>状态</th><th>来源</th><th>名称</th><th>SSH 地址</th><th>用户</th><th>认证</th><th>集群角色</th><th>版本</th><th>CPU / 内存 / 磁盘</th><th>GPU / NPU</th><th>项目</th><th>最后心跳</th><th>操作</th></tr></thead>
         <tbody>${rows || `<tr><td colspan="13" class="hint">暂无主机</td></tr>`}</tbody>
       </table>`;
+      el.querySelectorAll("[data-host-devices]").forEach(button => button.onclick = event => {
+        event.stopPropagation();
+        const host = (state.managedHosts || []).find(item => item.id === button.dataset.hostDevices);
+        if (host) openDeviceDiagnostics("host", host);
+      });
       el.querySelectorAll("[data-host-terminal]").forEach(row => row.onclick = () => openHostTerminal(row.dataset.hostTerminal));
       el.querySelectorAll("[data-host-edit]").forEach(button => button.onclick = event => {
         event.stopPropagation();
@@ -3119,6 +3124,64 @@
       return K3S_RESOURCES.find((item) => item.id === state.k3sKind) || K3S_RESOURCES[1];
     }
 
+    function deviceCheckRows(checks) {
+      const stages = { hardware: "设备发现", node: "节点", driver: "驱动", runtime: "容器运行时", container: "容器验证", registration: "资源注册", plugin: "设备插件", algorithm: "算法验证" };
+      const statuses = { ok: "已检查", error: "异常", warning: "需关注", unknown: "未验证", timeout: "检查超时", completed: "历史任务已完成" };
+      return (checks || []).map(item => `<tr><td>${esc(stages[item.stage] || item.stage)}</td><td class="${item.status === "error" ? "bad" : ""}">${esc(statuses[item.status] || item.status)}</td><td style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(item.message || "")}</td></tr>`).join("");
+    }
+
+    function hostDeviceReportHtml(report) {
+      if (!report) return `<p class="hint">尚未采集此主机的设备诊断。请升级该主机的 cangling-update，等待主机信息上报；不会自动执行 SSH 命令。</p>`;
+      const age = Date.now() - Date.parse(report.observedAt || "");
+      const stale = !Number.isFinite(age) || age < 0 || age > 120000;
+      const devices = (report.devices || []).map(d => `<tr><td>${esc(d.vendor)}</td><td>${esc(d.name)}</td><td><code>${esc(d.pciAddress)}</code></td><td>${esc(d.driver || "未绑定")}</td><td>${esc(d.driverVersion || "未验证")}</td><td>${d.memoryMiB == null ? "未验证" : esc(d.memoryMiB) + " MiB"}</td></tr>`).join("");
+      const runtimes = (report.runtimes || []).map(r => `<tr><td>${esc(r.handler)}</td><td><code>${esc(r.binary)}</code></td><td>${r.executable ? "文件可执行" : "缺失或不可执行"}</td><td style="white-space:pre-wrap">${esc(r.versionProbe && r.versionProbe.output || "未采集版本")}</td></tr>`).join("");
+      return `<p class="hint">${esc(report.hostname || "")} · 采集时间 ${esc(report.observedAt || "未知")}${stale ? " · 数据已过期，仅供参考" : ""}</p>
+        <h3>PCI 加速设备</h3><div class="table-scroll"><table><thead><tr><th>厂商</th><th>型号</th><th>PCI 地址</th><th>内核驱动</th><th>驱动版本</th><th>显存</th></tr></thead><tbody>${devices || '<tr><td colspan="6">未发现可识别的 PCI 加速设备；虚拟设备和受限环境需进一步核对</td></tr>'}</tbody></table></div>
+        <h3>容器运行时配置</h3><p class="hint">${esc(report.runtimeConfig || "尚未发现 K3s containerd 配置")}。文件存在或可执行，不等于容器内设备访问已验证。</p>
+        <div class="table-scroll"><table><thead><tr><th>Handler</th><th>实际路径</th><th>文件检查</th><th>版本</th></tr></thead><tbody>${runtimes || '<tr><td colspan="4">尚未采集到自定义运行时</td></tr>'}</tbody></table></div>
+        <h3>诊断证据${stale ? "（历史数据）" : ""}</h3><table><thead><tr><th>层级</th><th>状态</th><th>说明</th></tr></thead><tbody>${deviceCheckRows(report.checks)}</tbody></table>`;
+    }
+
+    function clusterDeviceReportHtml(report) {
+      const nodes = (report.nodes || []).map(node => {
+        const info = node.nodeInfo || {}, labels = node.labels || {};
+        const resources = (node.resources || []).map(r => `<tr><td><code>${esc(r.name)}</code></td><td>${esc(r.capacity)}</td><td>${esc(r.allocatable)}</td><td class="${r.overcommitted ? "bad" : ""}">${r.requested == null ? "未采集" : esc(r.requested)}${r.overcommitted ? "（超过可调度总量）" : ""}</td><td>${r.free == null ? "未采集" : esc(r.free)}</td></tr>`).join("");
+        return `<section class="card"><h3>${esc(node.name)}${node.unschedulable ? "（已禁止调度）" : ""}</h3>
+          <p class="hint">${esc(info.architecture || "未知架构")} · ${esc(info.osImage || "")} · ${esc(info.kernelVersion || "")} · ${esc(info.kubeletVersion || "")} · ${esc(info.containerRuntimeVersion || "")}</p>
+          <details><summary>设备标签（可能滞后，实际驱动以主机诊断为准）</summary><table><tbody>${Object.entries(labels).map(([key, value]) => `<tr><td><code>${esc(key)}</code></td><td>${esc(value)}</td></tr>`).join("") || '<tr><td>无设备相关标签</td></tr>'}</tbody></table></details>
+          <div class="table-scroll"><table><thead><tr><th>实际资源名</th><th>容量</th><th>可调度总量</th><th>已分配</th><th>剩余</th></tr></thead><tbody>${resources || '<tr><td colspan="5">无扩展设备资源；普通 CPU 节点无需安装 GPU 插件</td></tr>'}</tbody></table></div>
+          <table><thead><tr><th>层级</th><th>状态</th><th>说明</th></tr></thead><tbody>${deviceCheckRows(node.checks)}</tbody></table>
+          <details><summary>主机驱动与运行时证据</summary>${hostDeviceReportHtml(node.hostDiagnostics)}</details></section>`;
+      }).join("");
+      const components = (report.components || []).map(c => `<tr><td>${esc(c.namespace)}/${esc(c.name)}</td><td>${esc(c.node || "尚未调度")}</td><td>${esc(c.phase)} · ${esc(c.status)}</td><td style="overflow-wrap:anywhere">${(c.images || []).map(esc).join("<br/>")}</td><td style="overflow-wrap:anywhere">${esc(c.message || "")}</td></tr>`).join("");
+      return `<p class="hint">只读检查 · ${esc(report.observedAt)}。资源数量是调度配额，不是物理卡数或实际利用率；不会安装驱动、修改配置或创建测试 Pod。</p>
+        ${(report.warnings || []).map(w => `<p class="flash err">${esc(w)}</p>`).join("")}${nodes}
+        <h3>加速器组件</h3><div class="table-scroll"><table><thead><tr><th>Pod</th><th>节点</th><th>状态</th><th>镜像版本</th><th>异常原因</th></tr></thead><tbody>${components || '<tr><td colspan="5">未识别到已知的加速器组件；自定义插件需人工核对</td></tr>'}</tbody></table></div>
+        <h3>RuntimeClass 声明</h3><p class="hint">${(report.runtimeClasses || []).map(c => `${esc(c.name)} → ${esc(c.handler)}`).join(" · ") || "无数据"}。集群级声明不保证每个节点均已配置对应运行时。</p>`;
+    }
+
+    async function openDeviceDiagnostics(mode, host) {
+      closeDialog();
+      $("#dialog-modal").classList.add("resource-detail-modal");
+      $("#dialog-title").textContent = mode === "cluster" ? "K3s GPU / NPU 设备诊断" : "主机设备诊断 · " + (host && host.name || "本机");
+      $("#dialog-body").innerHTML = '<div id="accelerator-report" style="padding:16px 24px;overflow:auto;min-height:0;flex:1"><p class="hint">正在只读采集设备信息…</p></div>';
+      $("#dialog").hidden = false;
+      const root = $("#accelerator-report");
+      if (host && host.kind !== "local") {
+        root.innerHTML = hostDeviceReportHtml(host.host_info && host.host_info.accelerator_diagnostics);
+        return;
+      }
+      setDialogAction("刷新诊断", () => openDeviceDiagnostics(mode, host));
+      try {
+        const report = await api(mode === "cluster" ? "/api/k3s/accelerators" : "/api/hostinfo/accelerators");
+        if ($("#accelerator-report") !== root) return;
+        root.innerHTML = mode === "cluster" ? clusterDeviceReportHtml(report) : hostDeviceReportHtml(report);
+      } catch (e) {
+        if ($("#accelerator-report") === root) root.innerHTML = `<p class="flash err">${esc(e.message)}</p>`;
+      }
+    }
+
     async function renderK3s() {
       state.current = null;
       renderList();
@@ -3126,11 +3189,12 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>K3s 资源</h2></div>
-          <div class="row"><div id="k3s-summary"></div><button type="button" class="btn" id="k3s-copy-config" title="复制当前集群 kubeconfig，包含认证信息">拷贝连接信息</button></div>
+          <div class="row"><div id="k3s-summary"></div><button type="button" class="btn" id="k3s-devices">设备诊断</button><button type="button" class="btn" id="k3s-copy-config" title="复制当前集群 kubeconfig，包含认证信息">拷贝连接信息</button></div>
         </div>
         <div id="flash" hidden></div>
         <div id="k3s-root"><div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取集群…</div></div></div>`;
       $("#k3s-copy-config").onclick = copyK3sConnection;
+      $("#k3s-devices").onclick = () => openDeviceDiagnostics("cluster");
       await loadK3s(true);
       k3sPoll.timer = setInterval(() => loadK3s(false), 5000);
     }

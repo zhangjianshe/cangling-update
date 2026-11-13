@@ -197,6 +197,7 @@ pub fn router(state: AppState) -> Router {
             get(crate::cluster::init::status),
         )
         .merge(crate::k3s_resources::routes())
+        .merge(crate::accelerators::routes())
         .merge(crate::cangling_apps::routes())
         .merge(crate::cangling_data_init::routes())
         .merge(crate::hosts::routes())

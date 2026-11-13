@@ -9,7 +9,8 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 
 /// 每隔多久重新采集一次完整主机信息（毫秒级心跳里只带轻量数据）。
-const SNAPSHOT_REFRESH: Duration = Duration::from_secs(300);
+// Keep device evidence fresh within the diagnostics API's 120-second window.
+const SNAPSHOT_REFRESH: Duration = Duration::from_secs(60);
 
 enum Tick {
     Ok,

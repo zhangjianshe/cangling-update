@@ -1,0 +1,1005 @@
+{
+  "nodes": {
+    "items": [
+      {
+        "apiVersion": "v1",
+        "kind": "Node",
+        "metadata": {
+          "name": "k3s-master",
+          "labels": {}
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "capacity": {
+            "cpu": "4",
+            "ephemeral-storage": "52857584Ki",
+            "hugepages-1Gi": "0",
+            "hugepages-2Mi": "0",
+            "memory": "32862528Ki",
+            "pods": "110"
+          },
+          "allocatable": {
+            "cpu": "4",
+            "ephemeral-storage": "51419857675",
+            "hugepages-1Gi": "0",
+            "hugepages-2Mi": "0",
+            "memory": "32862528Ki",
+            "pods": "110"
+          },
+          "nodeInfo": {
+            "architecture": "amd64",
+            "containerRuntimeVersion": "containerd://2.1.5-k3s1",
+            "kernelVersion": "5.15.0-173-generic",
+            "kubeletVersion": "v1.34.3+k3s1",
+            "operatingSystem": "linux",
+            "osImage": "Ubuntu 22.04.5 LTS"
+          },
+          "addresses": [
+            {
+              "address": "10.0.0.140",
+              "type": "InternalIP"
+            },
+            {
+              "address": "k3s-master",
+              "type": "Hostname"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Node",
+        "metadata": {
+          "name": "k3s-w1",
+          "labels": {
+            "nvidia.com/cuda.driver-version.full": "580.126.09",
+            "nvidia.com/gfd.timestamp": "1775547753",
+            "nvidia.com/gpu.count": "4",
+            "nvidia.com/gpu.memory": "32607",
+            "nvidia.com/gpu.product": "NVIDIA-GeForce-RTX-5090",
+            "nvidia.com/gpu.sharing-strategy": "none"
+          }
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "capacity": {
+            "cpu": "64",
+            "ephemeral-storage": "459354844Ki",
+            "hugepages-1Gi": "0",
+            "hugepages-2Mi": "0",
+            "memory": "100563956Ki",
+            "nvidia.com/gpu": "4",
+            "pods": "110"
+          },
+          "allocatable": {
+            "cpu": "64",
+            "ephemeral-storage": "446860391893",
+            "hugepages-1Gi": "0",
+            "hugepages-2Mi": "0",
+            "memory": "100563956Ki",
+            "nvidia.com/gpu": "4",
+            "pods": "110"
+          },
+          "nodeInfo": {
+            "architecture": "amd64",
+            "containerRuntimeVersion": "containerd://2.1.5-k3s1",
+            "kernelVersion": "5.15.0-173-generic",
+            "kubeletVersion": "v1.34.3+k3s1",
+            "operatingSystem": "linux",
+            "osImage": "Ubuntu 22.04.5 LTS"
+          },
+          "addresses": [
+            {
+              "address": "10.0.0.141",
+              "type": "InternalIP"
+            },
+            {
+              "address": "k3s-w1",
+              "type": "Hostname"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Node",
+        "metadata": {
+          "name": "k3s-w2",
+          "labels": {
+            "nvidia.com/cuda.driver-version.full": "580.126.09",
+            "nvidia.com/gfd.timestamp": "1782186236",
+            "nvidia.com/gpu.count": "3",
+            "nvidia.com/gpu.memory": "32607",
+            "nvidia.com/gpu.product": "NVIDIA-GeForce-RTX-5090",
+            "nvidia.com/gpu.sharing-strategy": "none"
+          }
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "capacity": {
+            "cpu": "64",
+            "ephemeral-storage": "357730272Ki",
+            "hugepages-1Gi": "0",
+            "hugepages-2Mi": "0",
+            "memory": "100563948Ki",
+            "nvidia.com/gpu": "3",
+            "pods": "110"
+          },
+          "allocatable": {
+            "cpu": "64",
+            "ephemeral-storage": "348000008329",
+            "hugepages-1Gi": "0",
+            "hugepages-2Mi": "0",
+            "memory": "100563948Ki",
+            "nvidia.com/gpu": "3",
+            "pods": "110"
+          },
+          "nodeInfo": {
+            "architecture": "amd64",
+            "containerRuntimeVersion": "containerd://2.1.5-k3s1",
+            "kernelVersion": "5.15.0-170-generic",
+            "kubeletVersion": "v1.34.3+k3s1",
+            "operatingSystem": "linux",
+            "osImage": "Ubuntu 22.04.5 LTS"
+          },
+          "addresses": [
+            {
+              "address": "10.0.0.142",
+              "type": "InternalIP"
+            },
+            {
+              "address": "k3s-w2",
+              "type": "Hostname"
+            }
+          ],
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "pods": {
+    "items": [
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-feature-discovery-h9v7x",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "gpu-feature-discovery",
+              "image": "nvcr.io/nvidia/k8s-device-plugin:v0.18.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "gpu-feature-discovery",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:42:32Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-feature-discovery-z8xn8",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "gpu-feature-discovery",
+              "image": "nvcr.io/nvidia/k8s-device-plugin:v0.18.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "gpu-feature-discovery",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-06-23T03:43:55Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-operator-7569f8b499-jmw49",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-master",
+          "containers": [
+            {
+              "name": "gpu-operator",
+              "image": "nvcr.io/nvidia/gpu-operator:v25.10.1",
+              "resources": {
+                "limits": {
+                  "cpu": "500m",
+                  "memory": "350Mi"
+                },
+                "requests": {
+                  "cpu": "200m",
+                  "memory": "100Mi"
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "phase": "Pending",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "gpu-operator",
+              "ready": false,
+              "state": {
+                "waiting": {
+                  "message": "Back-off pulling image \"nvcr.io/nvidia/gpu-operator:v25.10.1\": ErrImagePull: failed to pull and unpack image \"nvcr.io/nvidia/gpu-operator:v25.10.1\": failed to resolve reference \"nvcr.io/nvidia/gpu-operator:v25.10.1\": failed to do request: Head \"https://nvcr.io/v2/nvidia/gpu-operator/manifests/v25.10.1\": EOF",
+                  "reason": "ImagePullBackOff"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-operator-node-feature-discovery-gc-55ffc49ccc-4xmv7",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-master",
+          "containers": [
+            {
+              "name": "gc",
+              "image": "registry.k8s.io/nfd/node-feature-discovery:v0.18.2",
+              "resources": {
+                "limits": {
+                  "memory": "1Gi"
+                },
+                "requests": {
+                  "cpu": "10m",
+                  "memory": "128Mi"
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "gc",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:41:46Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-operator-node-feature-discovery-master-6b5787f695-bsz4t",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-master",
+          "containers": [
+            {
+              "name": "master",
+              "image": "registry.k8s.io/nfd/node-feature-discovery:v0.18.2",
+              "resources": {
+                "limits": {
+                  "memory": "4Gi"
+                },
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "128Mi"
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "master",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:41:46Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-operator-node-feature-discovery-worker-66hwg",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-master",
+          "containers": [
+            {
+              "name": "worker",
+              "image": "registry.k8s.io/nfd/node-feature-discovery:v0.18.2",
+              "resources": {
+                "limits": {
+                  "memory": "512Mi"
+                },
+                "requests": {
+                  "cpu": "5m",
+                  "memory": "64Mi"
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "worker",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:41:46Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-operator-node-feature-discovery-worker-g7nlt",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "worker",
+              "image": "registry.k8s.io/nfd/node-feature-discovery:v0.18.2",
+              "resources": {
+                "limits": {
+                  "memory": "512Mi"
+                },
+                "requests": {
+                  "cpu": "5m",
+                  "memory": "64Mi"
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "worker",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:42:12Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "gpu-operator-node-feature-discovery-worker-mxmqt",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "worker",
+              "image": "registry.k8s.io/nfd/node-feature-discovery:v0.18.2",
+              "resources": {
+                "limits": {
+                  "memory": "512Mi"
+                },
+                "requests": {
+                  "cpu": "5m",
+                  "memory": "64Mi"
+                }
+              }
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "worker",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-06-23T03:43:40Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-container-toolkit-daemonset-hdjmv",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "nvidia-container-toolkit-ctr",
+              "image": "nvcr.io/nvidia/k8s/container-toolkit:v1.18.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-container-toolkit-ctr",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-06-23T03:43:41Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-container-toolkit-daemonset-zdjxn",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "nvidia-container-toolkit-ctr",
+              "image": "nvcr.io/nvidia/k8s/container-toolkit:v1.18.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-container-toolkit-ctr",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:42:13Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-cuda-validator-cgn79",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "nvidia-cuda-validator",
+              "image": "nvcr.io/nvidia/gpu-operator:v25.10.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Succeeded",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-cuda-validator",
+              "ready": false,
+              "state": {
+                "terminated": {
+                  "containerID": "containerd://61eb0375f2b62fe83d439f27c3f60bf4851016e796ce6c8e75db55bb5773c812",
+                  "exitCode": 0,
+                  "finishedAt": "2026-06-23T03:43:57Z",
+                  "reason": "Completed",
+                  "startedAt": "2026-06-23T03:43:57Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-cuda-validator-ffg4x",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "nvidia-cuda-validator",
+              "image": "nvcr.io/nvidia/gpu-operator:v25.10.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Succeeded",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-cuda-validator",
+              "ready": false,
+              "state": {
+                "terminated": {
+                  "containerID": "containerd://63b0420358c515f85934e06459c07d0d021d029829f5e7de6f4d2e7ee7c507fc",
+                  "exitCode": 0,
+                  "finishedAt": "2026-04-07T07:42:33Z",
+                  "reason": "Completed",
+                  "startedAt": "2026-04-07T07:42:33Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-dcgm-exporter-f946d",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "nvidia-dcgm-exporter",
+              "image": "nvcr.io/nvidia/k8s/dcgm-exporter:4.4.2-4.7.0-distroless",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-dcgm-exporter",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-06-23T03:43:56Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-dcgm-exporter-r42fh",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "nvidia-dcgm-exporter",
+              "image": "nvcr.io/nvidia/k8s/dcgm-exporter:4.4.2-4.7.0-distroless",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-dcgm-exporter",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:42:33Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-device-plugin-daemonset-kgt5m",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "nvidia-device-plugin",
+              "image": "nvcr.io/nvidia/k8s-device-plugin:v0.18.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-device-plugin",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-06-23T03:43:55Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-device-plugin-daemonset-ph46l",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "nvidia-device-plugin",
+              "image": "nvcr.io/nvidia/k8s-device-plugin:v0.18.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-device-plugin",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:42:32Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-operator-validator-n94jm",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w1",
+          "containers": [
+            {
+              "name": "nvidia-operator-validator",
+              "image": "nvcr.io/nvidia/gpu-operator:v25.10.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-operator-validator",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-04-07T07:42:43Z"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nvidia-operator-validator-wzgcf",
+          "namespace": "gpu-operator"
+        },
+        "spec": {
+          "nodeName": "k3s-w2",
+          "containers": [
+            {
+              "name": "nvidia-operator-validator",
+              "image": "nvcr.io/nvidia/gpu-operator:v25.10.1",
+              "resources": {}
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "nvidia-operator-validator",
+              "ready": true,
+              "state": {
+                "running": {
+                  "startedAt": "2026-06-23T03:44:02Z"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "classes": {
+    "items": [
+      {
+        "metadata": {
+          "name": "crun"
+        },
+        "handler": "crun"
+      },
+      {
+        "metadata": {
+          "name": "lunatic"
+        },
+        "handler": "lunatic"
+      },
+      {
+        "metadata": {
+          "name": "nvidia"
+        },
+        "handler": "nvidia"
+      },
+      {
+        "metadata": {
+          "name": "nvidia-cdi"
+        },
+        "handler": "nvidia-cdi"
+      },
+      {
+        "metadata": {
+          "name": "nvidia-experimental"
+        },
+        "handler": "nvidia-experimental"
+      },
+      {
+        "metadata": {
+          "name": "nvidia-legacy"
+        },
+        "handler": "nvidia-legacy"
+      },
+      {
+        "metadata": {
+          "name": "slight"
+        },
+        "handler": "slight"
+      },
+      {
+        "metadata": {
+          "name": "spin"
+        },
+        "handler": "spin"
+      },
+      {
+        "metadata": {
+          "name": "wasmedge"
+        },
+        "handler": "wasmedge"
+      },
+      {
+        "metadata": {
+          "name": "wasmer"
+        },
+        "handler": "wasmer"
+      },
+      {
+        "metadata": {
+          "name": "wasmtime"
+        },
+        "handler": "wasmtime"
+      },
+      {
+        "metadata": {
+          "name": "wws"
+        },
+        "handler": "wws"
+      }
+    ]
+  }
+}

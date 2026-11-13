@@ -1,3 +1,4 @@
+mod accelerators;
 mod api;
 mod auth;
 mod backup;
@@ -161,6 +162,11 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         import: Option<PathBuf>,
     },
+    /// 只读采集加速器诊断，输出 JSON；--cluster 同时检查 K3s 资源
+    Devices {
+        #[arg(long)]
+        cluster: bool,
+    },
     /// 采集主机信息，写入程序目录下的 info.md
     Hostinfo {
         /// 输出路径（默认：程序所在目录/info.md）
@@ -302,6 +308,16 @@ async fn main() -> anyhow::Result<()> {
                 return update::import(&path);
             }
             return update::run(check, force, proxy);
+        }
+        Some(Command::Devices { cluster }) => {
+            let host = tokio::task::spawn_blocking(accelerators::local_report).await?;
+            let report = if cluster {
+                accelerators::cluster_inventory(vec![host]).await?
+            } else {
+                host
+            };
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
         }
         Some(Command::Hostinfo { output, note }) => {
             let paths = AppPaths::resolve(cli.data_dir)?;

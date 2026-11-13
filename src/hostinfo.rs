@@ -70,6 +70,7 @@ pub struct HostSnapshot {
     pub mem: MemInfo,
     pub cpu: CpuInfo,
     pub gpus: Vec<GpuInfo>,
+    pub accelerator_diagnostics: Option<serde_json::Value>,
     pub exe_dir: String,
     pub config_dir: String,
     pub note: String,
@@ -117,6 +118,7 @@ pub fn collect_with_projects(paths: &AppPaths, projects: Vec<Project>) -> HostSn
         mem: collect_mem(),
         cpu: collect_cpu(),
         gpus: collect_gpus(),
+        accelerator_diagnostics: Some(crate::accelerators::local_report()),
         exe_dir: paths.exe_dir.display().to_string(),
         config_dir: paths.config_dir.display().to_string(),
         note: load_note(paths),
@@ -811,7 +813,7 @@ pub fn primary_ip() -> String {
     list_ips().into_iter().next().unwrap_or_default()
 }
 
-fn list_ips() -> Vec<String> {
+pub(crate) fn list_ips() -> Vec<String> {
     let mut ips = Vec::new();
     if let Some(raw) = cmd_out("hostname", &["-I"]) {
         for ip in raw.split_whitespace() {
@@ -1035,7 +1037,13 @@ pub fn parse_nvidia_smi_l(raw: &str) -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
     for line in raw.lines() {
         let line = line.trim();
-        if line.is_empty() {
+        if !line
+            .strip_prefix("GPU ")
+            .and_then(|s| s.split_once(':'))
+            .is_some_and(|(index, _)| {
+                !index.is_empty() && index.bytes().all(|c| c.is_ascii_digit())
+            })
+        {
             continue;
         }
         // GPU 0: NVIDIA A100-SXM4-40GB (UUID: ...)
@@ -1122,7 +1130,10 @@ pub fn parse_lspci_display(raw: &str) -> Vec<GpuInfo> {
         }
         // ASPEED VGA devices are BMC/remote-console adapters rather than
         // compute GPUs and should not be advertised as algorithm resources.
-        if lower.contains("aspeed") {
+        if ["aspeed", "virtio", "bochs", "qxl", "vmware", "1234:1111"]
+            .iter()
+            .any(|s| lower.contains(s))
+        {
             continue;
         }
         let name = line.split(": ").nth(1).unwrap_or(line).trim();
@@ -1169,6 +1180,21 @@ fn coalesce_gpus(gpus: Vec<GpuInfo>) -> Vec<GpuInfo> {
 }
 
 fn collect_gpus() -> Vec<GpuInfo> {
+    let report = crate::accelerators::local_report();
+    let devices = report["devices"].as_array().cloned().unwrap_or_default();
+    if !devices.is_empty() {
+        return coalesce_gpus(
+            devices
+                .iter()
+                .map(|d| GpuInfo {
+                    name: d["name"].as_str().unwrap_or("Unknown accelerator").into(),
+                    arch: d["vendor"].as_str().unwrap_or("Other").into(),
+                    count: 1,
+                    source: "PCI sysfs / driver probe".into(),
+                })
+                .collect(),
+        );
+    }
     let mut gpus = Vec::new();
     if let Some(raw) = cmd_out("nvidia-smi", &["-L"]) {
         gpus.extend(parse_nvidia_smi_l(&raw));
@@ -1195,14 +1221,28 @@ fn collect_gpus() -> Vec<GpuInfo> {
             .into_iter()
             .flatten()
             .flatten()
-            .any(|e| e.file_name().to_string_lossy().starts_with("davinci"))
+            .any(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .strip_prefix("davinci")
+                    .is_some_and(|suffix| {
+                        !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit())
+                    })
+            })
     {
         let n = std::fs::read_dir("/dev")
             .ok()
             .into_iter()
             .flatten()
             .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with("davinci"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .strip_prefix("davinci")
+                    .is_some_and(|suffix| {
+                        !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit())
+                    })
+            })
             .count() as u32;
         if n > 0 {
             gpus.push(GpuInfo {
@@ -1364,6 +1404,7 @@ mod tests {
                 sockets: Some(2),
             },
             gpus: vec![],
+            accelerator_diagnostics: None,
             exe_dir: "/root/update".into(),
             config_dir: "/root/update/config".into(),
             note: "机房：A3\n负责人：张三".into(),
@@ -1517,6 +1558,7 @@ physical id\t: 1
                 sockets: Some(2),
             },
             gpus: vec![],
+            accelerator_diagnostics: None,
             exe_dir: "/root/update".into(),
             config_dir: "/root/update/config".into(),
             note: "维护窗口：周日 02:00".into(),
