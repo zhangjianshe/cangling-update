@@ -154,7 +154,7 @@ spec:
       nodeSelector: {kubernetes.io/hostname: n01}
       containers:
         - name: cangling-tile
-          image: hub.cangling.cn/cangling/cangling-tile:0.1.20
+          image: hub.cangling.cn/cangling/cangling-tile:0.1.21
           imagePullPolicy: IfNotPresent
           envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
           ports: [{containerPort: 7601}]

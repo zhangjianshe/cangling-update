@@ -298,6 +298,7 @@ fn migrate_builtin_image_versions(config: &mut CanglingConfig) {
     for app in &mut config.applications {
         app.image = match app.image.as_str() {
             "cangling-broker:0.1.60" => "cangling-broker:0.1.73".into(),
+            "cangling-tile:0.1.20" => "cangling-tile:0.1.21".into(),
             "cangling-map:0.1.11"
             | "cangling-map:0.1.21"
             | "cangling-map:0.1.22"
@@ -1271,7 +1272,7 @@ fn default_config() -> CanglingConfig {
             "瓦片缓存",
             ApplicationGroup::Single,
             WorkloadKind::Deployment,
-            "cangling-tile:0.1.20",
+            "cangling-tile:0.1.21",
             &[7601],
             "/opt/cangling/local/tiledata",
         ),
@@ -3046,7 +3047,7 @@ mod tests {
             .iter()
             .find(|app| app.id == "cangling-tile")
             .unwrap();
-        assert_eq!(tile.image, "cangling-tile:0.1.20");
+        assert_eq!(tile.image, "cangling-tile:0.1.21");
         let broker = config
             .applications
             .iter()
