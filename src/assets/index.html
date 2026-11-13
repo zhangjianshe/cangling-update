@@ -3130,6 +3130,13 @@
       return (checks || []).map(item => `<tr><td>${esc(stages[item.stage] || item.stage)}</td><td class="${item.status === "error" ? "bad" : ""}">${esc(statuses[item.status] || item.status)}</td><td style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(item.message || "")}</td></tr>`).join("");
     }
 
+    function physicalDeviceSummary(report) {
+      if (!report || !Array.isArray(report.devices)) return "物理设备：未采集";
+      const age = Date.now() - Date.parse(report.observedAt || "");
+      if (!Number.isFinite(age) || age < 0 || age > 120000) return "物理设备：数据已过期";
+      return report.devices.length ? `已识别物理设备：${report.devices.length} 个（按 PCI 地址去重）` : "物理设备：未确认";
+    }
+
     function hostDeviceReportHtml(report) {
       if (!report) return `<p class="hint">尚未采集此主机的设备诊断。请升级该主机的 cangling-update，等待主机信息上报；不会自动执行 SSH 命令。</p>`;
       const age = Date.now() - Date.parse(report.observedAt || "");
@@ -3137,7 +3144,7 @@
       const devices = (report.devices || []).map(d => `<tr><td>${esc(d.vendor)}</td><td>${esc(d.name)}</td><td><code>${esc(d.pciAddress)}</code></td><td>${esc(d.driver || "未绑定")}</td><td>${esc(d.driverVersion || "未验证")}</td><td>${d.memoryMiB == null ? "未验证" : esc(d.memoryMiB) + " MiB"}</td></tr>`).join("");
       const runtimes = (report.runtimes || []).map(r => `<tr><td>${esc(r.handler)}</td><td><code>${esc(r.binary)}</code></td><td>${r.executable ? "文件可执行" : "缺失或不可执行"}</td><td style="white-space:pre-wrap">${esc(r.versionProbe && r.versionProbe.output || "未采集版本")}</td></tr>`).join("");
       return `<p class="hint">${esc(report.hostname || "")} · 采集时间 ${esc(report.observedAt || "未知")}${stale ? " · 数据已过期，仅供参考" : ""}</p>
-        <h3>PCI 加速设备</h3><div class="table-scroll"><table><thead><tr><th>厂商</th><th>型号</th><th>PCI 地址</th><th>内核驱动</th><th>驱动版本</th><th>显存</th></tr></thead><tbody>${devices || '<tr><td colspan="6">未发现可识别的 PCI 加速设备；虚拟设备和受限环境需进一步核对</td></tr>'}</tbody></table></div>
+        <h3>PCI 加速设备</h3><p class="hint">${esc(physicalDeviceSummary(report))}</p><div class="table-scroll"><table><thead><tr><th>厂商</th><th>型号</th><th>PCI 地址</th><th>内核驱动</th><th>驱动版本</th><th>显存</th></tr></thead><tbody>${devices || '<tr><td colspan="6">未发现可识别的 PCI 加速设备；虚拟设备和受限环境需进一步核对</td></tr>'}</tbody></table></div>
         <h3>容器运行时配置</h3><p class="hint">${esc(report.runtimeConfig || "尚未发现 K3s containerd 配置")}。文件存在或可执行，不等于容器内设备访问已验证。</p>
         <div class="table-scroll"><table><thead><tr><th>Handler</th><th>实际路径</th><th>文件检查</th><th>版本</th></tr></thead><tbody>${runtimes || '<tr><td colspan="4">尚未采集到自定义运行时</td></tr>'}</tbody></table></div>
         <h3>诊断证据${stale ? "（历史数据）" : ""}</h3><table><thead><tr><th>层级</th><th>状态</th><th>说明</th></tr></thead><tbody>${deviceCheckRows(report.checks)}</tbody></table>`;
@@ -3149,6 +3156,7 @@
         const resources = (node.resources || []).map(r => `<tr><td><code>${esc(r.name)}</code></td><td>${esc(r.capacity)}</td><td>${esc(r.allocatable)}</td><td class="${r.overcommitted ? "bad" : ""}">${r.requested == null ? "未采集" : esc(r.requested)}${r.overcommitted ? "（超过可调度总量）" : ""}</td><td>${r.free == null ? "未采集" : esc(r.free)}</td></tr>`).join("");
         return `<section class="card"><h3>${esc(node.name)}${node.unschedulable ? "（已禁止调度）" : ""}</h3>
           <p class="hint">${esc(info.architecture || "未知架构")} · ${esc(info.osImage || "")} · ${esc(info.kernelVersion || "")} · ${esc(info.kubeletVersion || "")} · ${esc(info.containerRuntimeVersion || "")}</p>
+          <p class="hint">${esc(physicalDeviceSummary(node.hostDiagnostics))}；下表为插件注册的逻辑资源。</p>
           <details><summary>设备标签（可能滞后，实际驱动以主机诊断为准）</summary><table><tbody>${Object.entries(labels).map(([key, value]) => `<tr><td><code>${esc(key)}</code></td><td>${esc(value)}</td></tr>`).join("") || '<tr><td>无设备相关标签</td></tr>'}</tbody></table></details>
           <div class="table-scroll"><table><thead><tr><th>实际资源名</th><th>容量</th><th>可调度总量</th><th>已分配</th><th>剩余</th></tr></thead><tbody>${resources || '<tr><td colspan="5">无扩展设备资源；普通 CPU 节点无需安装 GPU 插件</td></tr>'}</tbody></table></div>
           <table><thead><tr><th>层级</th><th>状态</th><th>说明</th></tr></thead><tbody>${deviceCheckRows(node.checks)}</tbody></table>
@@ -3182,6 +3190,74 @@
       }
     }
 
+    function integrationSupportLink() {
+      return `<a href="${esc(appPath("/accelerators/supported"))}" target="_blank" rel="noopener">支持型号与架构表</a>`;
+    }
+    function integrationPlanHtml(plan) {
+      return `<p><b>${esc(plan.node_name)}</b> · ${esc(plan.architecture)} · 离线包：${esc(plan.package || "维护现有插件")}</p>
+        ${(plan.blockers || []).map(text => `<p class="flash err">${esc(text)}</p>`).join("")}
+        <h3 style="font-size:18px;font-weight:600">${plan.actions.length ? "将执行的操作" : "无需修复"}</h3>
+        <ol>${plan.actions.map(text => `<li>${esc(text)}</li>`).join("")}</ol>
+        ${(plan.pods || []).length ? `<p>将重建：${plan.pods.map(p => `${esc(p.namespace)}/${esc(p.name)}`).join("、")}</p>` : ""}
+        ${(plan.warnings || []).map(text => `<p class="hint">${esc(text)}</p>`).join("")}
+        <p>${integrationSupportLink()}</p>`;
+    }
+    async function openAcceleratorIntegration() {
+      closeDialog();
+      $("#dialog-modal").classList.add("resource-detail-modal");
+      $("#dialog-title").textContent = "GPU/NPU/DCU 集成";
+      $("#dialog-body").innerHTML = '<div id="accelerator-integration" style="padding:16px 24px;overflow:auto;min-height:0;flex:1"><p class="hint">正在检查集群设备与离线软件包…</p></div>';
+      $("#dialog").hidden = false;
+      setDialogAction(null, null);
+      const root = $("#accelerator-integration");
+      const active = () => $("#accelerator-integration") === root;
+      const fail = (e) => { if (active()) { const out=root.querySelector("#integration-result") || root; out.innerHTML=`<p class="flash err">${esc(e.message)}</p><p>${integrationSupportLink()}</p>`; } };
+      try {
+        const overview = await api("/api/k3s/accelerator-integration");
+        if (!active()) return;
+        const nodes=overview.report.nodes || [], profiles=overview.catalog.profiles || [];
+        root.innerHTML = `<p class="hint">检查硬件、驱动、运行时、设备插件与资源注册。先生成计划，再执行；内核驱动与固件需提前安装。</p>
+          <div class="row"><label>目标节点 <select id="integration-node">${nodes.map(n=>`<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></label>
+          <label>设备方案 <select id="integration-profile">${profiles.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><button type="button" class="btn" id="integration-check">检查并生成修复计划</button></div>
+          <p>${integrationSupportLink()}</p><div id="integration-result"></div>`;
+        const nodeInput=root.querySelector("#integration-node"), profileInput=root.querySelector("#integration-profile"), check=root.querySelector("#integration-check"), result=root.querySelector("#integration-result");
+        let generation=0, running=false;
+        const chooseProfile=()=>{const node=nodes.find(n=>n.name===nodeInput.value), host=node&&node.hostDiagnostics;const devices=host&&host.devices||[];const resources=node&&node.resources||[];
+          profileInput.value=devices.some(d=>d.vendor==="Hygon")?(resources.some(r=>/hygon\.com\/hcu/.test(r.name))?"hygon-hcu":"hygon-dcu"):(node&&node.nodeInfo&&node.nodeInfo.architecture==="arm64"?"nvidia-arm64":"nvidia");};
+        const clear=()=>{generation++;result.innerHTML="";setDialogAction(null,null);};
+        chooseProfile();nodeInput.onchange=()=>{chooseProfile();clear();};profileInput.onchange=clear;
+        check.disabled=!nodes.length;
+        check.onclick=async()=>{
+          const seq=++generation;setDialogAction(null,null);check.disabled=true;
+          const selection={node_name:nodeInput.value,profile_id:profileInput.value};
+          result.innerHTML='<p class="hint">正在检查目标节点…</p>';
+          try {
+            const plan=await api("/api/k3s/accelerator-integration/plan",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(selection)});
+            if(!active()||seq!==generation)return;
+            result.innerHTML=integrationPlanHtml(plan);
+            if(plan.blockers.length || !plan.actions.length)return;
+            result.insertAdjacentHTML("beforeend",'<label style="display:block;margin:16px 0"><input type="checkbox" id="integration-confirm"> 我已核对上述计划，确认执行所选节点的集成或修复</label>');
+            setDialogAction("执行集成 / 修复",async()=>{
+              if(running || !active())return;
+              if(!root.querySelector("#integration-confirm").checked){result.querySelector("#integration-confirm").focus();return;}
+              running=true;check.disabled=true;nodeInput.disabled=true;profileInput.disabled=true;setDialogAction(null,null);
+              try {
+                const job=await api("/api/k3s/accelerator-integration/repair",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...selection,fingerprint:plan.fingerprint,confirmed:true})});
+                result.innerHTML='<p class="hint">任务已提交，正在执行。关闭窗口后任务会继续。</p>';
+                while(active()){
+                  const progress=await api("/api/jobs/"+encodeURIComponent(job.id));
+                  if(!active())return;
+                  result.innerHTML=`<p>${esc(progress.message)}</p><progress max="100" value="${Number(progress.percent)||0}" style="width:100%"></progress><p>${integrationSupportLink()}</p>`;
+                  if(progress.done){if(progress.error)result.insertAdjacentHTML("afterbegin",`<p class="flash err">${esc(progress.error)}</p>`);break;}
+                  await new Promise(resolve=>setTimeout(resolve,2000));
+                }
+              }catch(e){fail(e);}finally{running=false;if(active()){check.disabled=false;nodeInput.disabled=false;profileInput.disabled=false;setDialogAction("重新检查",()=>check.click());}}
+            });
+          }catch(e){if(seq===generation)fail(e);}finally{if(active()&&!running)check.disabled=false;}
+        };
+      }catch(e){fail(e);}
+    }
+
     async function renderK3s() {
       state.current = null;
       renderList();
@@ -3189,12 +3265,13 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>K3s 资源</h2></div>
-          <div class="row"><div id="k3s-summary"></div><button type="button" class="btn" id="k3s-devices">设备诊断</button><button type="button" class="btn" id="k3s-copy-config" title="复制当前集群 kubeconfig，包含认证信息">拷贝连接信息</button></div>
+          <div class="row"><div id="k3s-summary"></div><button type="button" class="btn" id="k3s-devices">设备诊断</button><button type="button" class="btn" id="k3s-integrate">GPU/NPU/DCU 集成</button><button type="button" class="btn" id="k3s-copy-config" title="复制当前集群 kubeconfig，包含认证信息">拷贝连接信息</button></div>
         </div>
         <div id="flash" hidden></div>
         <div id="k3s-root"><div class="card"><div class="empty db-loading"><span class="spin"></span>正在读取集群…</div></div></div>`;
       $("#k3s-copy-config").onclick = copyK3sConnection;
       $("#k3s-devices").onclick = () => openDeviceDiagnostics("cluster");
+      $("#k3s-integrate").onclick = openAcceleratorIntegration;
       await loadK3s(true);
       k3sPoll.timer = setInterval(() => loadK3s(false), 5000);
     }

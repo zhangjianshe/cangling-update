@@ -50,15 +50,20 @@ fn tool(name: &str) -> Option<PathBuf> {
     dirs.extend(
         [
             "/usr/bin",
+            "/usr/sbin",
             "/usr/local/bin",
             "/usr/local/nvidia/toolkit",
             "/usr/local/Ascend/driver/tools",
+            "/opt/hyhal/bin",
+            "/usr/local/hyhal/bin",
+            "/opt/dtk/bin",
         ]
         .map(PathBuf::from),
     );
-    dirs.into_iter()
-        .map(|p| p.join(name))
-        .find(|p| executable(p))
+    tool_in_dirs(name, &dirs)
+}
+fn tool_in_dirs(name: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter().map(|p| p.join(name)).find(|p| executable(p))
 }
 fn executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
@@ -113,10 +118,16 @@ fn pci_devices(root: &Path) -> Vec<Value> {
     for e in fs::read_dir(root).into_iter().flatten().flatten() {
         let p = e.path();
         let class = read(p.join("class"));
-        if !(class.starts_with("0x03") || class.starts_with("0x12")) {
+        let id = read(p.join("vendor"));
+        // Hygon DCUs use the processor/co-processor class rather than display/3D.
+        // The same vendor also supplies host bridges and CPUs: vendor alone is insufficient.
+        let hygon_dcu = id == "0x1d94" && class.starts_with("0x0b40");
+        if !(class.starts_with("0x03") || class.starts_with("0x12") || hygon_dcu) {
             continue;
         }
-        let id = read(p.join("vendor"));
+        if hygon_dcu && p.join("physfn").exists() {
+            continue; // SR-IOV virtual functions must not inflate the physical DCU count.
+        }
         // BMC consoles and virtual VGA adapters are not algorithm accelerators.
         if ["0x1a03", "0x1234", "0x1af4", "0x1b36", "0x15ad", "0x1013"].contains(&id.as_str()) {
             continue;
@@ -125,7 +136,7 @@ fn pci_devices(root: &Path) -> Vec<Value> {
             .ok()
             .and_then(|v| v.file_name().map(|v| v.to_string_lossy().into_owned()))
             .unwrap_or_default();
-        devices.push(json!({"pciAddress":e.file_name().to_string_lossy(),"vendor":vendor(&id),"vendorId":id,"deviceId":read(p.join("device")),"name":format!("{} {}",vendor(&id),read(p.join("device"))),"driver":driver,"driverVersion":null,"memoryMiB":null}));
+        devices.push(json!({"pciAddress":e.file_name().to_string_lossy(),"pciClass":class,"vendor":vendor(&id),"vendorId":id,"deviceId":read(p.join("device")),"name":format!("{} {}",vendor(&id),read(p.join("device"))),"driver":driver,"driverVersion":null,"memoryMiB":null}));
     }
     devices.sort_by_key(|d| d["pciAddress"].as_str().unwrap_or_default().to_string());
     devices
@@ -154,6 +165,46 @@ fn apply_nvidia(devices: &mut [Value], csv: &str) {
             d["memoryMiB"] = f[3].parse::<u64>().map_or(Value::Null, |n| json!(n));
         }
     }
+}
+fn apply_hygon(devices: &mut [Value], output: &str) -> usize {
+    let Ok(Value::Object(cards)) = serde_json::from_str::<Value>(output) else {
+        return 0;
+    };
+    let mut matched = BTreeSet::new();
+    for card in cards.values() {
+        let Some(bus) = card["PCI Bus"]
+            .as_str()
+            .and_then(|v| v.split_whitespace().next())
+        else {
+            continue;
+        };
+        let bus = normalized_bus(bus);
+        let Some(device) = devices
+            .iter_mut()
+            .find(|d| d["vendor"] == "Hygon" && d["pciAddress"] == bus)
+        else {
+            continue;
+        };
+        if let Some(name) = ["Card Series", "Card series", "Card Model", "Card model"]
+            .iter()
+            .find_map(|key| card[*key].as_str().filter(|v| !v.trim().is_empty()))
+        {
+            device["name"] = json!(name.trim());
+        }
+        let number = |key: &str| {
+            card[key]
+                .as_u64()
+                .or_else(|| card[key].as_str()?.trim().parse::<u64>().ok())
+        };
+        let memory = number("vram Total Memory (MiB)")
+            .or_else(|| number("VRAM Total Memory (MiB)"))
+            .or_else(|| number("VRAM Total Memory (B)").map(|v| v / (1024 * 1024)));
+        if let Some(memory) = memory.filter(|v| *v > 0) {
+            device["memoryMiB"] = json!(memory);
+        }
+        matched.insert(bus);
+    }
+    matched.len()
 }
 fn runtime_entries(text: &str) -> Vec<Value> {
     let mut handler = String::new();
@@ -196,6 +247,17 @@ pub fn local_report() -> Value {
 }
 fn collect_local() -> Value {
     let mut devices = pci_devices(Path::new("/sys/bus/pci/devices"));
+    for device in &mut devices {
+        if device["vendor"] == "Hygon" {
+            let driver = device["driver"].as_str().unwrap_or("");
+            if !driver.is_empty() {
+                let version = read(Path::new("/sys/module").join(driver).join("version"));
+                if !version.is_empty() {
+                    device["driverVersion"] = json!(version);
+                }
+            }
+        }
+    }
     let mut tools = Vec::new();
     let mut checks = Vec::new();
     let vendors = devices
@@ -229,7 +291,17 @@ fn collect_local() -> Value {
                 ],
             )),
             "Ascend" => Some(("npu-smi", vec!["info", "-l"])),
-            "Hygon" => Some(("hy-smi", vec!["--showproductname"])),
+            "Hygon" => Some((
+                "hy-smi",
+                vec![
+                    "--showproductname",
+                    "--showbus",
+                    "--showdriverversion",
+                    "--showmeminfo",
+                    "vram",
+                    "--json",
+                ],
+            )),
             "AMD" => Some(("rocm-smi", vec!["--showproductname"])),
             _ => None,
         };
@@ -238,6 +310,10 @@ fn collect_local() -> Value {
             if v == "NVIDIA" && result["status"] == "ok" {
                 apply_nvidia(&mut devices, result["output"].as_str().unwrap_or_default());
             }
+            let incomplete_hygon = v == "Hygon"
+                && result["status"] == "ok"
+                && apply_hygon(&mut devices, result["output"].as_str().unwrap_or_default())
+                    != devices.iter().filter(|d| d["vendor"] == "Hygon").count();
             let incomplete_nvidia = v == "NVIDIA"
                 && result["status"] == "ok"
                 && devices
@@ -246,7 +322,7 @@ fn collect_local() -> Value {
                     .any(|d| d["driverVersion"].is_null());
             checks.push(check(
                 "driver",
-                if incomplete_nvidia {
+                if incomplete_nvidia || incomplete_hygon {
                     "warning"
                 } else {
                     result["status"].as_str().unwrap_or("unknown")
@@ -328,7 +404,7 @@ fn collect_local() -> Value {
         "未启动测试容器，容器内设备访问尚未验证",
     ));
     checks.push(check("algorithm", "unknown", "尚未执行算法兼容性测试"));
-    json!({"observedAt":chrono::Utc::now().to_rfc3339(),"hostname":crate::hostinfo::hostname(),"ips":crate::hostinfo::list_ips(),"devices":devices,"tools":tools,"runtimeConfig":if config_path.is_file(){Some(config_path.display().to_string())}else{None},"runtimes":runtimes,"checks":checks})
+    json!({"platform":crate::repo::host_platform(),"deviceFiles":{"kfd":Path::new("/dev/kfd").exists(),"dtk2604":Path::new("/opt/dtk-26.04").is_dir()},"customRuntimeTemplate":(["config.toml.tmpl","config-v3.toml.tmpl"].iter().any(|n|Path::new("/var/lib/rancher/k3s/agent/etc/containerd").join(n).exists())),"observedAt":chrono::Utc::now().to_rfc3339(),"hostname":crate::hostinfo::hostname(),"ips":crate::hostinfo::list_ips(),"devices":devices,"tools":tools,"runtimeConfig":if config_path.is_file(){Some(config_path.display().to_string())}else{None},"runtimes":runtimes,"checks":checks})
 }
 fn items(v: &Value) -> Vec<Value> {
     v["items"].as_array().cloned().unwrap_or_default()
@@ -438,7 +514,7 @@ fn component_report(p: &Value) -> Value {
     } else {
         "unknown"
     };
-    json!({"name":p["metadata"]["name"],"namespace":p["metadata"]["namespace"],"node":p["spec"]["nodeName"],"phase":phase,"status":status,"images":p["spec"]["containers"].as_array().into_iter().flatten().map(|c|c["image"].clone()).collect::<Vec<_>>(),"message":failures.join("; ").chars().take(2000).collect::<String>()})
+    json!({"uid":p["metadata"]["uid"],"owners":p["metadata"]["ownerReferences"],"name":p["metadata"]["name"],"namespace":p["metadata"]["namespace"],"node":p["spec"]["nodeName"],"phase":phase,"status":status,"images":p["spec"]["containers"].as_array().into_iter().flatten().map(|c|c["image"].clone()).collect::<Vec<_>>(),"message":failures.join("; ").chars().take(2000).collect::<String>()})
 }
 fn matching_host<'a>(node: &Value, hosts: &'a [Value]) -> Option<&'a Value> {
     let ips = node["status"]["addresses"]
@@ -542,7 +618,7 @@ pub(crate) async fn cluster_inventory(hosts: Vec<Value>) -> Result<Value, AppErr
         warnings,
     ))
 }
-async fn cluster_report(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+pub(crate) async fn cluster_report(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let mut hosts = vec![tokio::task::spawn_blocking(local_report)
         .await
         .map_err(|e| AppError::internal(e.to_string()))?];
@@ -685,6 +761,99 @@ mod tests {
         assert_eq!(d[0]["vendor"], "NVIDIA");
         assert_eq!(d[1]["vendor"], "Ascend");
         assert_eq!(d[2]["vendor"], "Other");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn hygon_coprocessors_are_counted_without_host_bridges_or_virtual_functions() {
+        let root = std::env::temp_dir().join(format!("cangling-hygon-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        for i in 0..6 {
+            let p = root.join(format!("0000:{i:02x}:00.0"));
+            fs::create_dir(&p).unwrap();
+            fs::write(p.join("vendor"), "0x1d94").unwrap();
+            fs::write(p.join("class"), "0x0b4000").unwrap();
+            fs::write(p.join("device"), "0x6370").unwrap();
+        }
+        for (name, vendor, class) in [
+            ("bridge", "0x1d94", "0x060000"),
+            ("pcie", "0x1d94", "0x060400"),
+            ("crypto", "0x1d94", "0x108000"),
+            ("processor", "0x1d94", "0x130000"),
+            ("other-coprocessor", "0x9999", "0x0b4000"),
+            ("virtual-function", "0x1d94", "0x0b4000"),
+        ] {
+            let p = root.join(name);
+            fs::create_dir(&p).unwrap();
+            fs::write(p.join("vendor"), vendor).unwrap();
+            fs::write(p.join("class"), class).unwrap();
+            fs::write(p.join("device"), "0x1480").unwrap();
+        }
+        std::os::unix::fs::symlink(
+            root.join("0000:00:00.0"),
+            root.join("virtual-function/physfn"),
+        )
+        .unwrap();
+        let devices = pci_devices(&root);
+        assert_eq!(devices.len(), 6);
+        assert!(devices
+            .iter()
+            .all(|d| d["vendor"] == "Hygon" && d["pciClass"] == "0x0b4000"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn hygon_smi_inventory_matches_pci_addresses_and_deduplicates_cards() {
+        let mut inventory: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hygon-bw100-smi.json")).unwrap();
+        let mut devices = inventory.as_object().unwrap().values().map(|card| {
+            json!({"vendor":"Hygon", "pciAddress":card["PCI Bus"].as_str().unwrap().split_whitespace().next().unwrap(), "name":"unknown", "memoryMiB":null})
+        }).collect::<Vec<_>>();
+        devices.reverse();
+        inventory["duplicate"] = inventory["card0"].clone();
+        inventory["unmatched"] =
+            json!({"PCI Bus":"0000:ff:00.0", "Card Series":"do not invent a device"});
+        assert_eq!(apply_hygon(&mut devices, &inventory.to_string()), 6);
+        assert_eq!(devices.len(), 6);
+        assert!(devices
+            .iter()
+            .all(|d| d["name"] == "BW100" && d["memoryMiB"] == 65520));
+        let before = devices.clone();
+        assert_eq!(
+            apply_hygon(&mut devices, "unparseable management output"),
+            0
+        );
+        assert_eq!(devices, before);
+    }
+    #[test]
+    fn hygon_smi_accepts_byte_memory_units_and_does_not_change_other_vendors() {
+        let mut devices = vec![
+            json!({"vendor":"Hygon","pciAddress":"0000:06:00.0","memoryMiB":null}),
+            json!({"vendor":"NVIDIA","pciAddress":"0000:09:00.0","memoryMiB":null}),
+        ];
+        let inventory = json!({"card0":{"PCI Bus":"00000000:06:00.0", "VRAM Total Memory (B)":65520_u64*1024*1024},
+                               "card1":{"PCI Bus":"0000:09:00.0", "vram Total Memory (MiB)":"65520"}});
+        assert_eq!(apply_hygon(&mut devices, &inventory.to_string()), 1);
+        assert_eq!(devices[0]["memoryMiB"], 65520);
+        assert!(devices[1]["memoryMiB"].is_null());
+    }
+    #[test]
+    fn management_tool_resolution_supports_non_path_directories_and_executable_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("cangling-tool-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let first = root.join("non-executable");
+        let second = root.join("hyhal/bin");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("hy-smi"), "not executable").unwrap();
+        fs::set_permissions(first.join("hy-smi"), fs::Permissions::from_mode(0o600)).unwrap();
+        let executable = root.join("real-hy-smi");
+        fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        std::os::unix::fs::symlink(&executable, second.join("hy-smi")).unwrap();
+        assert_eq!(
+            tool_in_dirs("hy-smi", &[first, second.clone()]),
+            Some(second.join("hy-smi"))
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

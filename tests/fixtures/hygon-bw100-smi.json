@@ -1,0 +1,44 @@
+{
+  "card0": {
+    "Card Series": "BW100",
+    "Card Vendor": "C-3000 IC Design Co., Ltd.",
+    "PCI Bus": "0000:06:00.0 --> SN: redacted",
+    "vram Total Memory (MiB)": "65520",
+    "vram Total Used Memory (MiB)": "2"
+  },
+  "card1": {
+    "Card Series": "BW100",
+    "Card Vendor": "C-3000 IC Design Co., Ltd.",
+    "PCI Bus": "0000:09:00.0 --> SN: redacted",
+    "vram Total Memory (MiB)": "65520",
+    "vram Total Used Memory (MiB)": "2"
+  },
+  "card2": {
+    "Card Series": "BW100",
+    "Card Vendor": "C-3000 IC Design Co., Ltd.",
+    "PCI Bus": "0000:0c:00.0 --> SN: redacted",
+    "vram Total Memory (MiB)": "65520",
+    "vram Total Used Memory (MiB)": "2"
+  },
+  "card3": {
+    "Card Series": "BW100",
+    "Card Vendor": "C-3000 IC Design Co., Ltd.",
+    "PCI Bus": "0000:14:00.0 --> SN: redacted",
+    "vram Total Memory (MiB)": "65520",
+    "vram Total Used Memory (MiB)": "2"
+  },
+  "card4": {
+    "Card Series": "BW100",
+    "Card Vendor": "C-3000 IC Design Co., Ltd.",
+    "PCI Bus": "0000:17:00.0 --> SN: redacted",
+    "vram Total Memory (MiB)": "65520",
+    "vram Total Used Memory (MiB)": "2"
+  },
+  "card5": {
+    "Card Series": "BW100",
+    "Card Vendor": "C-3000 IC Design Co., Ltd.",
+    "PCI Bus": "0000:1a:00.0 --> SN: redacted",
+    "vram Total Memory (MiB)": "65520",
+    "vram Total Used Memory (MiB)": "2"
+  }
+}

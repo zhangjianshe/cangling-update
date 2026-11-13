@@ -161,6 +161,7 @@ pub fn m2m_routes(state: AppState) -> Router<AppState> {
             get(crate::cluster::self_update::download),
         )
         .merge(crate::images::cluster_routes())
+        .merge(crate::accelerator_integration::cluster_routes())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_cluster_token,

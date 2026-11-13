@@ -1,0 +1,209 @@
+{
+  "components": [
+    {
+      "images": [
+        "docker.io/projecthami/dcu-vgpu-device-plugin:master"
+      ],
+      "message": "",
+      "name": "dcu-device-plugin-example",
+      "namespace": "kube-system",
+      "node": "worker-bw100",
+      "phase": "Running",
+      "status": "ok",
+      "uid": "example-uid",
+      "owners": [
+        {
+          "kind": "DaemonSet",
+          "name": "dcu-device-plugin-daemonset",
+          "controller": true
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "components": [
+        {
+          "images": [
+            "docker.io/projecthami/dcu-vgpu-device-plugin:master"
+          ],
+          "message": "",
+          "name": "dcu-device-plugin-example",
+          "namespace": "kube-system",
+          "node": "worker-bw100",
+          "phase": "Running",
+          "status": "ok",
+          "uid": "example-uid",
+          "owners": [
+            {
+              "kind": "DaemonSet",
+              "name": "dcu-device-plugin-daemonset",
+              "controller": true
+            }
+          ]
+        }
+      ],
+      "hostDiagnostics": {
+        "devices": [
+          {
+            "deviceId": "0x6370",
+            "driver": "hycu",
+            "driverVersion": "6.3.30-V1.4.1a",
+            "memoryMiB": 65520,
+            "name": "BW100",
+            "pciAddress": "0000:06:00.0",
+            "pciClass": "0x0b4000",
+            "vendor": "Hygon",
+            "vendorId": "0x1d94"
+          },
+          {
+            "deviceId": "0x6370",
+            "driver": "hycu",
+            "driverVersion": "6.3.30-V1.4.1a",
+            "memoryMiB": 65520,
+            "name": "BW100",
+            "pciAddress": "0000:09:00.0",
+            "pciClass": "0x0b4000",
+            "vendor": "Hygon",
+            "vendorId": "0x1d94"
+          },
+          {
+            "deviceId": "0x6370",
+            "driver": "hycu",
+            "driverVersion": "6.3.30-V1.4.1a",
+            "memoryMiB": 65520,
+            "name": "BW100",
+            "pciAddress": "0000:0c:00.0",
+            "pciClass": "0x0b4000",
+            "vendor": "Hygon",
+            "vendorId": "0x1d94"
+          },
+          {
+            "deviceId": "0x6370",
+            "driver": "hycu",
+            "driverVersion": "6.3.30-V1.4.1a",
+            "memoryMiB": 65520,
+            "name": "BW100",
+            "pciAddress": "0000:14:00.0",
+            "pciClass": "0x0b4000",
+            "vendor": "Hygon",
+            "vendorId": "0x1d94"
+          },
+          {
+            "deviceId": "0x6370",
+            "driver": "hycu",
+            "driverVersion": "6.3.30-V1.4.1a",
+            "memoryMiB": 65520,
+            "name": "BW100",
+            "pciAddress": "0000:17:00.0",
+            "pciClass": "0x0b4000",
+            "vendor": "Hygon",
+            "vendorId": "0x1d94"
+          },
+          {
+            "deviceId": "0x6370",
+            "driver": "hycu",
+            "driverVersion": "6.3.30-V1.4.1a",
+            "memoryMiB": 65520,
+            "name": "BW100",
+            "pciAddress": "0000:1a:00.0",
+            "pciClass": "0x0b4000",
+            "vendor": "Hygon",
+            "vendorId": "0x1d94"
+          }
+        ],
+        "runtimeConfig": "/var/lib/rancher/k3s/agent/etc/containerd/config.toml",
+        "runtimes": [],
+        "tools": [
+          {
+            "name": "hy-smi",
+            "result": {
+              "status": "ok"
+            },
+            "vendor": "Hygon"
+          }
+        ]
+      },
+      "labels": {},
+      "name": "worker-bw100",
+      "nodeInfo": {
+        "architecture": "amd64",
+        "bootID": "257811df-5474-4b5d-922b-1e8fd8eab88e",
+        "containerRuntimeVersion": "containerd://1.7.27-k3s1",
+        "kernelVersion": "4.19.90-89.43.v2401.ky10.x86_64",
+        "kubeProxyVersion": "v1.30.13-rc1+k3s1",
+        "kubeletVersion": "v1.30.13-rc1+k3s1",
+        "machineID": "5eab2f84c5df4d60a487ffc5c63951e3",
+        "operatingSystem": "linux",
+        "osImage": "Kylin Linux Advanced Server V10 (Halberd)",
+        "systemUUID": "1626b280-e44b-11f0-8f3a-e8611aae1e70"
+      },
+      "ready": true,
+      "resources": [
+        {
+          "allocatable": 24,
+          "capacity": 24,
+          "free": 24,
+          "name": "hygon.com/dcunum",
+          "overcommitted": false,
+          "requested": 0
+        }
+      ],
+      "unschedulable": false
+    }
+  ],
+  "readOnly": true,
+  "runtimeClasses": [
+    {
+      "handler": "crun",
+      "name": "crun",
+      "scheduling": null
+    },
+    {
+      "handler": "lunatic",
+      "name": "lunatic",
+      "scheduling": null
+    },
+    {
+      "handler": "nvidia",
+      "name": "nvidia",
+      "scheduling": null
+    },
+    {
+      "handler": "nvidia-experimental",
+      "name": "nvidia-experimental",
+      "scheduling": null
+    },
+    {
+      "handler": "slight",
+      "name": "slight",
+      "scheduling": null
+    },
+    {
+      "handler": "spin",
+      "name": "spin",
+      "scheduling": null
+    },
+    {
+      "handler": "wasmedge",
+      "name": "wasmedge",
+      "scheduling": null
+    },
+    {
+      "handler": "wasmer",
+      "name": "wasmer",
+      "scheduling": null
+    },
+    {
+      "handler": "wasmtime",
+      "name": "wasmtime",
+      "scheduling": null
+    },
+    {
+      "handler": "wws",
+      "name": "wws",
+      "scheduling": null
+    }
+  ],
+  "warnings": []
+}

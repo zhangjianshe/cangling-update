@@ -485,6 +485,14 @@ pub fn scan_index(paths: &AppPaths) -> RepoIndex {
             packages: scan_tab(&np4_dir),
         });
     }
+    let accelerator_dir = root.join("accelerators/packages");
+    if accelerator_dir.is_dir() {
+        tabs.push(RepoTab {
+            id: "accelerators".into(),
+            name: "GPU/NPU/DCU 集成".into(),
+            packages: scan_tab(&accelerator_dir),
+        });
+    }
     RepoIndex {
         root: root.display().to_string(),
         exists,
@@ -748,6 +756,9 @@ fn package_dir(root: &FsPath, tab: &str, package: &str) -> Result<PathBuf, AppEr
     }
     if !valid_segment(package) {
         return Err(AppError::bad("无效的软件包名"));
+    }
+    if tab == "accelerators" {
+        return Ok(root.join("accelerators/packages").join(package));
     }
     if tab == NP4_SET {
         return Ok(root.join(NP4_SET).join(package));

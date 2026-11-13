@@ -42,3 +42,44 @@ GFD 的 CUDA 标签/驱动能力信息不是已安装 CUDA Toolkit 或算法兼�
 复现样本：`tests/fixtures/accelerator-cluster-140.json`，只包含节点设备信息和组件状态，不包含 kubeconfig、Secret 或容器环境变量。
 
 新静态诊断二进制已临时上传到三台节点执行 `devices`，140 额外执行 `devices --cluster`，退出后清理临时目录。实际程序输出正确识别 0/4/3 个 PCI 加速设备、两个 GPU 节点的驱动 580.126.09、单卡 32607 MiB，并通过配置中的绝对路径执行 NVIDIA Container Runtime，确认版本 1.18.1。所有主机探测命令均通过；集群检查识别到 18 个相关组件及 1 个 Operator 异常。此次查询时已分配 GPU 请求为 0，这不等于主机 GPU 实际利用率为 0。
+
+## 海光 DCU 实测（2026-11-13）
+
+内蒙古 `np4-master`（麒麟 V10）有 6 个海光 DCU PCI 设备，厂商/设备 ID 为
+`1d94:6370`，PCI 类别为 `0x0b4000`，绑定 `hycu` 驱动。这个类别不属于显示控制器
+或处理加速器类别，必须单独识别；同厂商的 CPU、桥接、加密控制器和 SR-IOV 虚拟函数不计入物理 DCU 数量。
+
+`hy-smi` 安装于 `/opt/hyhal/bin`，实际目标在 `/usr/local/hyhal/bin`，不一定出现在服务的 PATH 中。
+使用只读 JSON 查询按 PCI 地址合并型号和显存，不按照 `cardN` 顺序或逻辑资源配额推算物理卡数。
+实测为 BW100，单卡显存 65520 MiB，`/sys/module/hycu/version` 为 `6.3.30-V1.4.1a`。
+
+同一节点的 HAMI DCU 设备插件注册了 `hygon.com/dcunum=24`。页面分别显示 6 个物理设备与
+24 个插件逻辑资源；这不表示 24 张物理卡，也不表示已经运行过算法兼容性测试。
+脱敏管理工具样本：`tests/fixtures/hygon-bw100-smi.json`。
+
+## GPU/NPU/DCU 集成
+
+K3s 资源面板新增同名按钮，先选择节点和方案，再生成修复计划。方案表也可从
+`/accelerators/supported` 打开；链接保留 `/update/` 等反向代理前缀，页面需要登录。
+所有错误界面提供“支持型号与架构表”链接。
+
+第一批覆盖 NVIDIA amd64 与海光 BW100 DCU；HCU 仅维护现有 DaemonSet 插件。
+昇腾、ARM64 NVIDIA、DPU 明确标记待适配。支持表区分实测设备发现、既有集成、离线包
+准备和算法验证，避免把注册的逻辑资源数当作物理卡数。
+
+离线组件集中在配套仓库 `cangling-repo/accelerators/packages/`，由主节点向代理分发，
+须完整拉取 Git LFS。安装前校验 `SHA256SUMS` 和审核过的包版本；模板、安装器也在清单内。
+NVIDIA Toolkit 仅自动安装到 Ubuntu 22.04/24.04 amd64；海光新增集成要求已有 BW100
+驱动和 `/opt/dtk-26.04`。不安装内核驱动、固件，不覆盖自定义 containerd 模板，不混装
+GPU Operator 或切换 HCU/DCU 插件。
+
+已有健康插件与资源时无需修改。异常插件只重建所选节点上由 DaemonSet 管理的 Pod，
+删除操作携带 UID 前提；新插件通过节点名称 affinity 限制部署范围。安装 NVIDIA
+运行时前会暂时 cordon 节点，完成或失败后按本任务的标记恢复调度；原先 cordon 的节点
+保持原状。升级服务或中断任务前应先核对执行状态，进程退出后不自动重试安装。
+
+测试包括 Rust 检查策略回归、Node 界面转义和代理路径检查、Python 离线安装器检查，
+以及 `scripts/test-accelerator-integration-http.py` 的独立模拟集群 HTTP 流程。
+设置 `ACCELERATOR_HTTP_RUNTIME=1` 可测试运行时安装计划与调度状态恢复分支；模拟程序
+不会操作真实 K3s。两种厂商模板另已通过内蒙古现有 K3s 的 server dry-run。
+新增离线安装尚未在空白物理 GPU 节点上验收。

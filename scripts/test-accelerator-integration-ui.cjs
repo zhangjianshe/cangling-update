@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const html = fs.readFileSync(path.join(__dirname, '../src/assets/index.html'), 'utf8');
+const support = fs.readFileSync(path.join(__dirname, '../src/assets/accelerator-support.html'), 'utf8');
+for (const text of [html, support]) for(const m of text.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) new vm.Script(m[1]);
+const escape = value => String(value??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const context=vm.createContext({esc:escape,appPath:p=>'/update'+p});
+const start=html.indexOf('    function integrationSupportLink(');
+vm.runInContext(html.slice(start,html.indexOf('    async function openAcceleratorIntegration()',start)),context);
+const rendered=context.integrationPlanHtml({node_name:'<node>',architecture:'amd64',package:'nvidia-amd64',actions:['<script>bad</script>'],warnings:['warning <b>'],blockers:['<img src=x onerror=1>']});
+assert.match(rendered,/href="\/update\/accelerators\/supported"/);assert.match(rendered,/&lt;script&gt;/);assert.doesNotMatch(rendered,/<script>|<img/);
+assert.equal(new URL('../api/k3s/accelerator-integration/catalog','https://host/update/accelerators/supported').pathname,'/update/api/k3s/accelerator-integration/catalog');
+assert.equal(new URL('../','https://host/update/accelerators/supported').pathname,'/update/');
+assert.match(html,/id="k3s-integrate">GPU\/NPU\/DCU 集成/);
+console.log('Integration UI: scripts parse, plan output is escaped, support links and API retain reverse-proxy prefix.');

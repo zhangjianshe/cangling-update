@@ -21,6 +21,16 @@ assert.match(h, /&lt;script&gt;/); assert.doesNotMatch(h, /<script>/); assert.ma
 const r = context.clusterDeviceReportHtml(report);
 assert.match(r, /vendor.test\/partition/); assert.match(r, /未采集/); assert.match(r, /ImagePullBackOff &lt;script&gt;/); assert.doesNotMatch(r, /<img onerror/);
 assert.match(r, /不是物理卡数或实际利用率/);
+const hygon = { hostname: 'np4-master', observedAt: new Date().toISOString(), devices: Array.from({ length: 6 }, (_, i) => ({ vendor: 'Hygon', name: 'BW100', pciAddress: `0000:${i}:00.0`, memoryMiB: 65520, driver: 'hycu', driverVersion: '6.3.30-V1.4.1a' })) };
+assert.match(context.hostDeviceReportHtml(hygon), /已识别物理设备：6 个/);
+const hygonCluster = context.clusterDeviceReportHtml({ nodes: [{ name: 'np4-master', hostDiagnostics: hygon, resources: [{ name: 'hygon.com/dcunum', capacity: 24, allocatable: 24, requested: 0, free: 24 }] }] });
+assert.match(hygonCluster, /已识别物理设备：6 个/);
+assert.match(hygonCluster, /hygon.com\/dcunum/);
+assert.match(hygonCluster, />24</);
+assert.match(context.physicalDeviceSummary({ devices: [], observedAt: new Date().toISOString() }), /未确认/);
+assert.match(context.physicalDeviceSummary({ ...hygon, observedAt: '2000-01-01' }), /已过期/);
+assert.match(context.physicalDeviceSummary(null), /未采集/);
+
 (async () => {
   const staleRequest = context.openDeviceDiagnostics('cluster');
   const oldRoot = dom.get('#accelerator-report');

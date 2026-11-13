@@ -54,6 +54,9 @@ pub fn is_public(method: &Method, path: &str) -> bool {
         || path == "/api/cluster/zot/environment"
         || path == "/api/cluster/self-update"
         || path.starts_with("/api/cluster/self-update/")
+        || path == "/api/cluster/accelerators/info"
+        || path == "/api/cluster/accelerators/prepare"
+        || path.starts_with("/api/cluster/accelerators/jobs/")
         || path == "/api/cluster/images"
         || path == "/api/cluster/images/import"
         || path == "/api/cluster/images/delete"

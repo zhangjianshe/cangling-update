@@ -1,3 +1,4 @@
+mod accelerator_integration;
 mod accelerators;
 mod api;
 mod auth;

@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "name": "GPU/NPU/DCU 集成支持表",
+  "profiles": [
+    {
+      "id": "nvidia",
+      "vendor": "NVIDIA",
+      "name": "NVIDIA GPU",
+      "models": [
+        "GeForce RTX 5090"
+      ],
+      "architectures": [
+        "amd64"
+      ],
+      "systems": [
+        "Ubuntu 22.04",
+        "Ubuntu 24.04",
+        "其他 Linux 仅维护既有插件"
+      ],
+      "resources": [
+        "nvidia.com/gpu"
+      ],
+      "package": "nvidia-amd64",
+      "automatic": true,
+      "runtime": "nvidia",
+      "requirements": [
+        "已安装且 nvidia-smi 查询成功的 NVIDIA 驱动",
+        "自动安装运行时限 Ubuntu 22.04/24.04 amd64",
+        "Operator 管理的节点仅维护现有插件"
+      ],
+      "validation": "RTX 5090 已实测设备发现、驱动与现有 K3s 集成；新增离线安装需目标节点复核；未执行算法测试",
+      "source": "https://docs.nvidia.com/datacenter/cloud-native/kubernetes/latest/k8s-device-plugin.html"
+    },
+    {
+      "id": "hygon-dcu",
+      "vendor": "Hygon",
+      "name": "海光 DCU / HAMi",
+      "models": [
+        "BW100"
+      ],
+      "architectures": [
+        "amd64"
+      ],
+      "systems": [
+        "Kylin V10"
+      ],
+      "resources": [
+        "hygon.com/dcunum"
+      ],
+      "package": "hygon-dcu-amd64",
+      "automatic": true,
+      "runtime": "runc",
+      "requirements": [
+        "hycu 驱动与 hy-smi 已就绪",
+        "新增集成需要预装 /opt/dtk-26.04",
+        "离线镜像固定为内蒙古已使用镜像的 config digest，并校验归档 SHA-256；不切换 HCU 插件或资源名"
+      ],
+      "validation": "BW100 ×6、65520 MiB/设备、hycu 6.3.30-V1.4.1a 已实测；插件注册24个逻辑资源；未执行算法测试",
+      "source": "https://github.com/Project-HAMi/dcu-vgpu-device-plugin"
+    },
+    {
+      "id": "hygon-hcu",
+      "vendor": "Hygon",
+      "name": "海光 HCU / 厂商插件",
+      "models": [
+        "K100_AI"
+      ],
+      "architectures": [
+        "amd64"
+      ],
+      "systems": [
+        "Kylin V10 SP3"
+      ],
+      "resources": [
+        "hygon.com/hcu",
+        "hygon.com/hcunum"
+      ],
+      "package": null,
+      "automatic": true,
+      "runtime": "runc",
+      "requirements": [
+        "仅检查并重建由现有 DaemonSet 管理的异常插件 Pod",
+        "缺少插件时提示补齐匹配版本的离线包；不将 HCU 转为 DCU/HAMi"
+      ],
+      "validation": "山东站点记录：K100_AI + hcu-device-plugin v3.0.0；本模块尚未执行新增安装；离线包待准备",
+      "source": "https://project-hami.io/docs/userguide/hygon-device/enable-hygon-hcu-sharing"
+    },
+    {
+      "id": "ascend-310p",
+      "vendor": "Ascend",
+      "name": "昇腾 NPU（待适配）",
+      "models": [
+        "Ascend 310P"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "systems": [
+        "Kylin V10"
+      ],
+      "resources": [
+        "huawei.com/Ascend310P"
+      ],
+      "package": null,
+      "automatic": false,
+      "runtime": "ascend",
+      "requirements": [
+        "首批只提供诊断和历史资料，不执行自动修复"
+      ],
+      "validation": "河南等历史站点有部署记录；历史软件包仍保留在 platforms/kylin/arm/v10/rpm/npu；本功能未验证",
+      "source": "https://www.hiascend.com/document"
+    },
+    {
+      "id": "nvidia-arm64",
+      "vendor": "NVIDIA",
+      "name": "NVIDIA GPU / ARM64（待验证）",
+      "models": [
+        "未逐型号验证"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "systems": [
+        "待验证"
+      ],
+      "resources": [
+        "nvidia.com/gpu"
+      ],
+      "package": null,
+      "automatic": false,
+      "runtime": "nvidia",
+      "requirements": [
+        "ARM64 离线包待准备"
+      ],
+      "validation": "仅诊断；未验证硬件与自动安装",
+      "source": "https://docs.nvidia.com/datacenter/cloud-native/kubernetes/latest/k8s-device-plugin.html"
+    },
+    {
+      "id": "dpu",
+      "vendor": "DPU",
+      "name": "DPU（待适配）",
+      "models": [
+        "待确认具体型号"
+      ],
+      "architectures": [],
+      "systems": [
+        "待验证"
+      ],
+      "resources": [],
+      "package": null,
+      "automatic": false,
+      "runtime": "待验证",
+      "requirements": [
+        "需区分主机侧与 DPU 运行侧的软件和 CPU 架构"
+      ],
+      "validation": "尚未支持集成与修复，不执行安装",
+      "source": null
+    }
+  ]
+}
