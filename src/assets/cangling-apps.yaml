@@ -391,19 +391,6 @@ data:
         location ^~ /tilecache/ { proxy_pass http://cangling_tile/; }
         location /np4-images/ { root /var/www; }
         location ^~ /ib/ { proxy_pass http://cis_server/; proxy_request_buffering off; proxy_buffering off; }
-        location = /events/message {
-          proxy_pass http://cis_base/ws/message;
-          proxy_http_version 1.1;
-          proxy_set_header Host $http_host;
-          proxy_set_header X-Real-IP $remote_addr;
-          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-          proxy_set_header X-Forwarded-Proto $scheme;
-          proxy_set_header Upgrade $http_upgrade;
-          proxy_set_header Connection $connection_upgrade;
-          proxy_read_timeout 3600s;
-          proxy_send_timeout 3600s;
-          proxy_buffering off;
-        }
         location / {
           proxy_pass http://cis_base/;
           proxy_set_header Host $http_host;
