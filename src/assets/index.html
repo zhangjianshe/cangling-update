@@ -2485,7 +2485,7 @@
       const roleName = { standalone: "单机", master: "主节点", worker: "工作节点" }[st.role] || st.role;
       if (st.role === "standalone") {
         $("#main").innerHTML = `
-          <div class="title-row"><div><h2>主机节点</h2><div class="path">主机资产与远程终端</div></div><div class="row"><button type="button" class="btn" id="btn-host-trust">主机互信</button><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div></div>
+          <div class="title-row"><div><h2>主机节点</h2><div class="path">主机资产与远程终端</div></div><div class="row"><button type="button" class="btn" id="btn-host-trust">主机互信</button><button type="button" class="btn" id="btn-deploy-workers" ${st.role === "master" ? "" : 'disabled title="请在 master 主节点上部署工作节点"'}>部署工作节点</button><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div></div>
           <div id="flash" hidden></div>
           <div class="card" id="cluster-overview-card">
             ${clusterOverviewHeader()}
@@ -2504,6 +2504,7 @@
         bindClusterOverviewButton();
         bindHostinfoNoteButton();
         $("#btn-host-trust").onclick = startHostTrust;
+      $("#btn-deploy-workers").onclick = openWorkerDeploy;
         $("#btn-add-host").onclick = () => openHostForm();
         return;
       }
@@ -2528,7 +2529,7 @@
       $("#main").innerHTML = `
         <div class="title-row">
           <div><h2>主机节点</h2><div class="path">本机角色：${roleName}${st.name ? " · " + esc(st.name) : ""}${st.master_url ? " · master " + esc(st.master_url) : ""}</div></div>
-          <div class="row"><button type="button" class="btn" id="btn-host-trust">主机互信</button><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div>
+          <div class="row"><button type="button" class="btn" id="btn-host-trust">主机互信</button><button type="button" class="btn" id="btn-deploy-workers" ${st.role === "master" ? "" : 'disabled title="请在 master 主节点上部署工作节点"'}>部署工作节点</button><button type="button" class="btn primary" id="btn-add-host">＋ 添加主机</button></div>
         </div>
         <div id="flash" hidden></div>
         <div class="card" id="cluster-overview-card">
@@ -2549,9 +2550,54 @@
       const pickK3sDataDir = $("#btn-pick-k3s-data-dir");
       if (pickK3sDataDir) pickK3sDataDir.onclick = () => openDirPicker("cluster-k3s-data-dir", () => {}, "/");
       $("#btn-host-trust").onclick = startHostTrust;
+      $("#btn-deploy-workers").onclick = openWorkerDeploy;
       $("#btn-add-host").onclick = () => openHostForm();
       bindClusterOverviewButton();
       bindHostinfoNoteButton();
+    }
+
+    async function openWorkerDeploy() {
+      if (!state.clusterStatus || state.clusterStatus.role !== "master") {flash("err","请在 master 主节点上部署工作节点");return;}
+      closeDialog();
+      $("#dialog-modal").classList.add("resource-detail-modal");
+      $("#dialog-title").textContent="部署工作节点";
+      $("#dialog-body").innerHTML='<div id="worker-deploy" style="padding:16px 24px;overflow:auto;min-height:0;flex:1">正在读取主机信息…</div>';
+      $("#dialog").hidden=false;setDialogAction(null,null);
+      const root=$("#worker-deploy"),active=()=>$("#worker-deploy")===root;
+      try {
+        const [options,hosts]=await Promise.all([api("/api/hosts/deploy-workers"),api("/api/hosts")]);
+        if(!active())return;
+        const targets=hosts.filter(h=>h.kind!=="local"&&h.role!=="master");
+        root.innerHTML=`<p class="hint">通过 SSH 安装或更新 cangling-update v${esc(options.version)}，作为 worker 连接当前主节点。使用主机列表中保存的 SSH 端口、账号和密码或现有密钥，目标账号需有 root 权限。</p>
+          <div class="field"><label for="worker-master-url">主节点地址</label><input id="worker-master-url" type="text" value="${esc(options.master_url)}" style="width:100%"><div class="hint">填写目标节点能够访问的 HTTP 地址。工作节点服务端口为 ${Number(options.worker_port)}。</div></div>
+          <h3>选择工作节点</h3>
+          ${targets.length?`<label><input id="worker-select-all" type="checkbox"> 全选</label><table class="table"><thead><tr><th>选择</th><th>主机</th><th>SSH 地址</th><th>当前版本 / 角色</th></tr></thead><tbody>${targets.map(h=>`<tr><td><input type="checkbox" data-worker-host value="${esc(h.id)}"></td><td>${esc(h.name)}</td><td>${esc(h.username)}@${esc(h.host)}:${Number(h.ssh_port)}</td><td>${esc(h.version||"尚未安装")} / ${esc(h.role||"未加入")}</td></tr>`).join("")}</tbody></table>`:'<p class="hint">暂无可部署主机，请先添加其他主机的 SSH 连接信息。</p>'}
+          <div id="worker-deploy-result" style="white-space:pre-wrap" aria-live="polite"></div>`;
+        const all=root.querySelector("#worker-select-all");if(all)all.onchange=()=>root.querySelectorAll("[data-worker-host]").forEach(input=>input.checked=all.checked);
+        if(!targets.length)return;
+        let running=false;
+        setDialogAction("部署所选节点",async()=>{
+          if(running||!active())return;
+          const result=root.querySelector("#worker-deploy-result"),ids=Array.from(root.querySelectorAll("[data-worker-host]:checked")).map(input=>input.value),master=root.querySelector("#worker-master-url").value.trim();
+          if(!ids.length){result.textContent="请至少选择一台工作节点";result.className="flash err";return;}
+          running=true;setDialogAction(null,null);root.querySelectorAll("input").forEach(input=>input.disabled=true);
+          const button=$("#btn-deploy-workers"),init=$("#btn-cluster-action");if(button)button.disabled=true;if(init)init.disabled=true;
+          try {
+            const job=await api("/api/hosts/deploy-workers",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({host_ids:ids,master_url:master})});
+            result.className="hint";result.textContent="部署任务已提交，关闭窗口后会继续执行。";
+            while(true){
+              const current=await api("/api/jobs/"+encodeURIComponent(job.id));
+              if(active()){
+                result.className=current.error?"flash err":current.done?"flash ok":"hint";
+                result.textContent=current.error||current.message;
+              }
+              if(current.done){flash(current.error?"err":"ok",current.error||current.message);break;}
+              await new Promise(resolve=>setTimeout(resolve,1000));
+            }
+          }catch(e){if(active()){result.className="flash err";result.textContent=e.message;}flash("err",e.message);}
+          finally{running=false;if(button&&button.isConnected)button.disabled=false;if(init&&init.isConnected)init.disabled=false;if(active())setDialogAction("重新选择节点",openWorkerDeploy);}
+        });
+      }catch(e){if(active()){root.textContent=e.message;root.className="flash err";}}
     }
 
     async function startHostTrust() {

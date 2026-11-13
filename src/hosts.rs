@@ -277,7 +277,7 @@ fn run_host_script(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-fn prepare_askpass(
+pub(crate) fn prepare_askpass(
     command: &mut Command,
     password: Option<&str>,
     config_dir: &FsPath,
@@ -1036,4 +1036,64 @@ mod tests {
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+/// SSH deployment reads credentials only on the server; console responses never contain passwords.
+pub(crate) struct WorkerSshHost {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+}
+pub(crate) fn worker_deploy_hosts(
+    state: &AppState,
+    ids: &[String],
+) -> Result<Vec<WorkerSshHost>, AppError> {
+    let rows = {
+        let conn = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
+        sync_inventory(&conn, state)?;
+        let views = list_rows(&conn)?;
+        let mut rows = Vec::new();
+        for id in ids {
+            let view = views
+                .iter()
+                .find(|v| v.id == *id)
+                .ok_or_else(|| AppError::bad("所选主机已变化，请刷新列表"))?;
+            if view.kind == "local"
+                || view.role == "master"
+                || crate::hostinfo::list_ips().contains(&view.host)
+                || view
+                    .host
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback() || ip.is_unspecified())
+            {
+                return Err(AppError::bad(format!(
+                    "{} 是本机或主节点，不能部署为工作节点",
+                    view.name
+                )));
+            }
+            rows.push(get_row(&conn, id)?.ok_or_else(|| AppError::not_found("主机不存在"))?);
+        }
+        rows
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut hosts = Vec::new();
+    for row in rows {
+        if !seen.insert(row.host.to_ascii_lowercase()) {
+            return Err(AppError::bad("同一主机不能重复选择"));
+        }
+        hosts.push(WorkerSshHost {
+            name: row.name,
+            host: row.host,
+            port: row.ssh_port,
+            username: row.username,
+            password: if row.password_enc.is_empty() {
+                None
+            } else {
+                Some(decrypt_password(state, &row.password_enc)?)
+            },
+        });
+    }
+    Ok(hosts)
 }

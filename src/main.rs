@@ -17,6 +17,7 @@ mod docker;
 mod error;
 mod hostinfo;
 mod hosts;
+mod worker_deploy;
 mod images;
 mod jar_store;
 mod jar_upgrade;
