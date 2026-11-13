@@ -6409,6 +6409,7 @@
     }
 
     function drawJarUpgrade(data) {
+      const skippedNodes = (data.nodes || []).filter(node => !node.ok);
       const rows = (data.files || []).map(file => `<tr>
         <td><code>${esc(file.name)}</code></td>
         <td class="${file.present ? "jar-status-ok" : "jar-status-missing"}">${file.present ? "已就绪" : "缺失"}</td>
@@ -6417,7 +6418,7 @@
       </tr>`).join("");
       const nodeRows = (data.nodes || []).map(node => `<tr>
         <td>${esc(node.name)}</td><td><code>${esc(node.address)}</code></td>
-        <td class="${node.ok ? "jar-status-ok" : "jar-status-missing"}">${node.ok ? "通过" : "失败"}</td>
+        <td class="${node.ok ? "jar-status-ok" : "jar-status-missing"}">${node.ok ? (node.targets || []).length ? "通过" : "无需升级" : "跳过（检查失败）"}</td>
         <td>${esc(node.message || "—")}</td>
         <td>${(node.targets || []).map(target => `<div><code>${esc(target.container)}</code> ← ${esc(target.jar)}</div>`).join("") || "—"}</td>
       </tr>`).join("");
@@ -6427,6 +6428,8 @@
           <div class="row"><button class="btn" id="btn-jar-check" ${data.upgrading ? "disabled" : ""}>检查环境</button><button class="btn" id="btn-jar-refresh">刷新</button></div>
         </div>
         <div id="flash" hidden></div>
+        ${skippedNodes.length ? `<div class="flash" id="jar-upgrade-skipped">${skippedNodes.length} 个节点检查失败，将跳过：${skippedNodes.map(node => esc(node.name)).join("、")}。仅升级检查通过且匹配本批次 JAR 的目标。</div>` : ""}
+        <p class="hint">本批次可升级目标：${Number(data.eligible_targets || 0)} 个。${data.ready ? "已具备执行条件。" : "请上传匹配的 JAR、检查环境并生成升级脚本。"}</p>
         <div class="jar-upgrade-grid">
           <div class="card">
             <h3>待发布 JAR</h3>
@@ -6451,7 +6454,7 @@
         </div>
         <div class="card" style="margin-top:14px">
           <h3>环境检查结果</h3>
-          <p class="hint">${data.checked_at ? `检查时间：${esc(fmtDateTime(data.checked_at))}` : "尚未检查环境。检查失败的节点不会进入升级脚本。"}</p>
+          <p class="hint">${data.checked_at ? `检查时间：${esc(fmtDateTime(data.checked_at))}` : "尚未检查环境。检查失败的节点会保留原因并跳过，不阻断其他可升级目标。"}</p>
           <div class="table-scroll"><table><thead><tr><th>主机</th><th>地址</th><th>状态</th><th>说明</th><th>发现的容器</th></tr></thead><tbody>${nodeRows || '<tr><td colspan="5">尚无检查结果</td></tr>'}</tbody></table></div>
         </div>
         <div class="card" style="margin-top:14px">
@@ -6479,7 +6482,7 @@
         const data = await api("/api/jar-upgrade/check", { method: "POST" });
         drawJarUpgrade(data);
         const failed = (data.nodes || []).filter(node => !node.ok);
-        flash(failed.length ? "err" : "ok", failed.length ? `环境检查完成，${failed.length} 个节点失败，请处理后重新检查` : "环境检查通过，升级脚本已生成");
+        flash(failed.length ? "err" : "ok", failed.length ? `环境检查完成，${failed.length} 个节点检查失败并已排除；${data.ready ? "可升级其余匹配目标" : "请确认已有匹配 JAR 和可用升级目标"}` : "环境检查通过，升级脚本已生成");
       } catch (e) {
         flash("err", e.message);
         if (button) { button.disabled = false; button.textContent = "检查环境"; }
@@ -6604,10 +6607,23 @@
       xhr.send(form);
     }
 
+    function jarUpgradeConfirmation(data) {
+      const skipped = (data.nodes || []).filter(node => !node.ok).map(node => node.name);
+      return `确定调用最近一次环境检查生成的脚本，升级 ${Number(data.eligible_targets || 0)} 个匹配目标？`
+        + (skipped.length ? `\n以下节点检查失败，将跳过：${skipped.join("、")}。` : "");
+    }
+
     async function runJarUpgrade() {
-      if (!(await confirmDialog("确定调用最近一次环境检查生成的脚本，依次升级匹配的运行容器？"))) return;
-      const button = $("#btn-jar-run"); if (button) button.disabled = true;
+      const button = $("#btn-jar-run");
       try {
+        const current = await api("/api/jar-upgrade/status");
+        if (!current.ready || current.upgrading) {
+          drawJarUpgrade(current);
+          flash("err", current.upgrading ? "已有 JAR 升级任务正在执行" : "尚无检查通过且匹配本批次 JAR 的升级目标，或升级脚本尚未生成");
+          return;
+        }
+        if (!(await confirmDialog(jarUpgradeConfirmation(current)))) return;
+        if (button) button.disabled = true;
         const job = await api("/api/jar-upgrade/run", { method: "POST" });
         watchJarUpgrade(job.id);
       } catch (e) {

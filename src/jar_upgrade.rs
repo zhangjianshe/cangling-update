@@ -89,6 +89,8 @@ struct JarUpgradeStatus {
     incoming_dir: String,
     script: String,
     ready: bool,
+    eligible_targets: usize,
+    skipped_nodes: usize,
     upgrading: bool,
     files: Vec<JarFileStatus>,
     checked_at: Option<String>,
@@ -118,7 +120,10 @@ struct JarEnvironmentReport {
 }
 
 async fn load_status() -> Result<JarUpgradeStatus, AppError> {
-    let root = deploy_dir();
+    load_status_at(&deploy_dir()).await
+}
+
+async fn load_status_at(root: &Path) -> Result<JarUpgradeStatus, AppError> {
     let incoming = root.join("incoming");
     let script = root.join("upgrade-jars.sh");
     let mut files = Vec::with_capacity(REQUIRED_JARS.len());
@@ -141,11 +146,19 @@ async fn load_status() -> Result<JarUpgradeStatus, AppError> {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<JarEnvironmentReport>(&bytes).ok())
         .unwrap_or_default();
-    let environment_ready = !report.nodes.is_empty()
-        && report.nodes.iter().all(|node| node.ok)
-        && report.nodes.iter().any(|node| !node.targets.is_empty());
-    let ready = files.iter().any(|file| file.present)
-        && environment_ready
+    let eligible_targets = report
+        .nodes
+        .iter()
+        .filter(|node| node.ok)
+        .flat_map(|node| &node.targets)
+        .filter(|target| {
+            files
+                .iter()
+                .any(|file| file.present && file.name == target.jar)
+        })
+        .count();
+    let skipped_nodes = report.nodes.iter().filter(|node| !node.ok).count();
+    let ready = eligible_targets > 0
         && tokio::fs::metadata(&script)
             .await
             .is_ok_and(|item| item.is_file());
@@ -153,6 +166,8 @@ async fn load_status() -> Result<JarUpgradeStatus, AppError> {
         incoming_dir: incoming.display().to_string(),
         script: script.display().to_string(),
         ready,
+        eligible_targets,
+        skipped_nodes,
         upgrading: UPGRADING.load(Ordering::SeqCst),
         files,
         checked_at: (!report.checked_at.is_empty()).then_some(report.checked_at),
@@ -503,6 +518,21 @@ fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<Strin
     let mut script = String::from("#!/bin/sh\nset -eu\nRUN_ID=$(date +%Y%m%d-%H%M%S)\nINCOMING=");
     script.push_str(&shell_quote(&root.join("incoming").display().to_string()));
     script.push_str("\nUPDATED=0\n");
+    let skipped = hosts
+        .iter()
+        .filter(|node| !node.status.ok)
+        .collect::<Vec<_>>();
+    if !skipped.is_empty() {
+        let names = skipped
+            .iter()
+            .map(|node| node.status.name.as_str())
+            .collect::<Vec<_>>()
+            .join("、");
+        script.push_str(&format!(
+            "printf '%s\\n' {} >&2\n",
+            shell_quote(&format!("跳过检查失败节点（不会升级）：{names}"))
+        ));
+    }
     for node in hosts {
         if !node.status.ok {
             continue;
@@ -576,6 +606,12 @@ fn generate_upgrade_script(root: &Path, hosts: &[InspectedHost]) -> Result<Strin
         }
     }
     script.push_str("[ \"$UPDATED\" -gt 0 ] || { echo '没有发现与本次上传匹配的运行容器' >&2; exit 1; }\necho \"JAR 升级完成，共更新 $UPDATED 个容器\"\n");
+    if !skipped.is_empty() {
+        script.push_str(&format!(
+            "echo '已跳过 {} 个检查失败节点，未对其执行升级'\n",
+            skipped.len()
+        ));
+    }
     Ok(script)
 }
 
@@ -671,7 +707,7 @@ async fn run(
     let current = load_status().await?;
     if !current.ready {
         return Err(AppError::bad(
-            "至少需要一个待升级 JAR，并且升级脚本必须存在",
+            "请先上传 JAR 并检查环境：至少需要一个检查通过且匹配本批次 JAR 的目标，以及已生成的升级脚本",
         ));
     }
     if UPGRADING.swap(true, Ordering::SeqCst) {
@@ -685,7 +721,10 @@ async fn run(
         jobs.set(
             &job_id,
             "upgrade",
-            "正在同步 JAR 并滚动升级 19、18 节点…",
+            &format!(
+                "正在升级 {} 个匹配目标，跳过 {} 个检查失败节点…",
+                current.eligible_targets, current.skipped_nodes
+            ),
             0,
             0,
         );
@@ -1394,5 +1433,146 @@ mod tests {
         assert!(script.contains("cangling-core-cis-server-1"));
         assert!(script.contains("/opt/np4/jars/cis-server-1.0.0.jar"));
         assert!(script.contains("JAR 升级完成"));
+    }
+}
+
+#[cfg(test)]
+mod partial_upgrade_tests {
+    use super::*;
+
+    fn node(ok: bool, jar: &str, path: &Path) -> InspectedHost {
+        InspectedHost {
+            status: JarNodeStatus {
+                name: if ok {
+                    "business"
+                } else {
+                    "GPU 'not installed'"
+                }
+                .into(),
+                address: "test".into(),
+                ok,
+                message: if ok {
+                    "ready"
+                } else {
+                    "SSH unavailable; updater not installed"
+                }
+                .into(),
+                targets: vec![JarTarget {
+                    jar: jar.into(),
+                    container: if ok { "app" } else { "failed-app" }.into(),
+                    path: path.display().to_string(),
+                }],
+            },
+            kind: "local".into(),
+            host: String::new(),
+            port: 22,
+            username: "root".into(),
+        }
+    }
+    fn root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("cangling-jar-partial-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("incoming")).unwrap();
+        root
+    }
+    fn report(root: &Path, nodes: &[InspectedHost]) {
+        let report = JarEnvironmentReport {
+            checked_at: "test".into(),
+            nodes: nodes.iter().map(|n| n.status.clone()).collect(),
+        };
+        std::fs::write(
+            root.join("environment.json"),
+            serde_json::to_vec(&report).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("upgrade-jars.sh"),
+            generate_upgrade_script(root, nodes).unwrap(),
+        )
+        .unwrap();
+    }
+    #[tokio::test]
+    async fn unavailable_gpu_does_not_block_a_matching_business_target() {
+        let root = root();
+        let nodes = vec![
+            node(true, "cis-server-1.0.0.jar", &root.join("app.jar")),
+            node(false, "cis-server-1.0.0.jar", &root.join("failed.jar")),
+        ];
+        report(&root, &nodes);
+        std::fs::write(root.join("incoming/cis-server-1.0.0.jar"), b"uploaded").unwrap();
+        let status = load_status_at(&root).await.unwrap();
+        assert!(status.ready);
+        assert_eq!(status.eligible_targets, 1);
+        assert_eq!(status.skipped_nodes, 1);
+        assert!(!status.nodes[1].ok);
+        assert!(status.nodes[1].message.contains("SSH unavailable"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn all_failed_unmatched_upload_or_missing_script_still_blocks_execution() {
+        let root = root();
+        std::fs::write(root.join("incoming/cis-map-1.0.0.jar"), b"uploaded").unwrap();
+        report(
+            &root,
+            &[node(false, "cis-map-1.0.0.jar", &root.join("bad.jar"))],
+        );
+        assert!(!load_status_at(&root).await.unwrap().ready);
+        report(
+            &root,
+            &[node(true, "cis-server-1.0.0.jar", &root.join("app.jar"))],
+        );
+        assert!(!load_status_at(&root).await.unwrap().ready);
+        std::fs::write(root.join("incoming/cis-server-1.0.0.jar"), b"uploaded").unwrap();
+        assert!(load_status_at(&root).await.unwrap().ready);
+        std::fs::remove_file(root.join("upgrade-jars.sh")).unwrap();
+        assert!(!load_status_at(&root).await.unwrap().ready);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn generated_script_upgrades_only_passed_nodes_and_reports_exclusions() {
+        let root = root();
+        let app = root.join("app.jar");
+        let failed = root.join("failed.jar");
+        std::fs::write(&app, b"old").unwrap();
+        std::fs::write(&failed, b"do not touch").unwrap();
+        std::fs::write(root.join("incoming/cis-server-1.0.0.jar"), b"new").unwrap();
+        let nodes = vec![
+            node(true, "cis-server-1.0.0.jar", &app),
+            node(false, "cis-server-1.0.0.jar", &failed),
+        ];
+        let script = generate_upgrade_script(&root, &nodes).unwrap();
+        let path = root.join("upgrade.sh");
+        std::fs::write(&path, &script).unwrap();
+        let bin = root.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let docker = bin.join("docker");
+        std::fs::write(
+            &docker,
+            "#!/bin/sh\ncase \"$1\" in restart) exit 0;; inspect) echo true;; *) exit 99;; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg(&path)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    bin.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(std::fs::read(&app).unwrap(), b"new");
+        assert_eq!(std::fs::read(&failed).unwrap(), b"do not touch");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("GPU 'not installed'"));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("已跳过 1 个检查失败节点"));
+        assert!(!script.contains("docker restart 'failed-app'"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
