@@ -141,6 +141,15 @@ kind: Service
 metadata: {name: cangling-broker, namespace: cangling}
 spec: {selector: {app: cangling-broker}, ports: [{name: broker, port: 7500}, {name: web, port: 7501}, {name: mqtt, port: 7883}]}
 ---
+# Cross-cluster broker access through the node's broker port.
+apiVersion: v1
+kind: Service
+metadata: {name: cangling-broker-external, namespace: cangling}
+spec:
+  type: LoadBalancer
+  selector: {app: cangling-broker}
+  ports: [{name: broker, port: 7500, targetPort: 7500, protocol: TCP}]
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: cangling-tile, namespace: cangling}

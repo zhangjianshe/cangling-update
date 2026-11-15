@@ -71,6 +71,8 @@ make arm64
 
 建议把 musl 产物拷到固定目录再运行或安装服务，不要长期用 `target/debug/`，也不要把本机 `target/release/`（gnu）拷到 glibc 更旧的主机。
 
+苍灵应用部署模板包含 `cangling-broker-external` LoadBalancer Service，默认对外开放 TCP 7500，供其他集群通过节点地址连接；仅暴露 broker 端口，并随 broker 端口配置调整。K3s 需启用 ServiceLB，其他 Kubernetes 环境需提供 LoadBalancer 实现。
+
 ### GitHub Actions 发布
 
 仓库已配置 `.github/workflows/release.yml`，用 musl 静态编译：

@@ -1553,6 +1553,11 @@ fn render_manifest(config: &CanglingConfig) -> Result<(String, Vec<String>), App
         {
             patch_nginx_config(doc, config, &apps)?;
         }
+        if metadata_name(doc) == Some("cangling-broker-external")
+            && value_str(doc, &["kind"]) == Some("Service")
+        {
+            patch_service_ports(doc, apps["cangling-broker"])?;
+        }
         if let Some(name) = metadata_name(doc).map(ToOwned::to_owned) {
             if let Some(app) = apps.get(name.as_str()) {
                 patch_application_document(doc, app, config)?;
@@ -3363,6 +3368,39 @@ mod tests {
         broker.group = ApplicationGroup::Multi;
         broker.replicas = 2;
         assert!(render_manifest(&config).is_err());
+    }
+
+    #[test]
+    fn broker_external_service_tracks_namespace_and_broker_port() {
+        for port in [7500, 8500] {
+            let mut config = default_config();
+            config.namespace = "broker-test".into();
+            config
+                .applications
+                .iter_mut()
+                .find(|app| app.id == "cangling-broker")
+                .unwrap()
+                .ports[0] = port;
+            let (yaml, _) = render_manifest(&config).unwrap();
+            let service = serde_yaml::Deserializer::from_str(&yaml)
+                .map(|document| Value::deserialize(document).unwrap())
+                .find(|document| metadata_name(document) == Some("cangling-broker-external"))
+                .unwrap();
+            assert_eq!(
+                value_str(&service, &["metadata", "namespace"]),
+                Some("broker-test")
+            );
+            assert_eq!(value_str(&service, &["spec", "type"]), Some("LoadBalancer"));
+            assert_eq!(
+                value_str(&service, &["spec", "selector", "app"]),
+                Some("cangling-broker")
+            );
+            let ports = service["spec"]["ports"].as_sequence().unwrap();
+            assert_eq!(ports.len(), 1);
+            assert_eq!(ports[0]["port"].as_u64(), Some(u64::from(port)));
+            assert_eq!(ports[0]["targetPort"].as_u64(), Some(u64::from(port)));
+            assert_eq!(ports[0]["protocol"].as_str(), Some("TCP"));
+        }
     }
 
     #[test]
