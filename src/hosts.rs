@@ -606,6 +606,9 @@ async fn terminal(
 }
 
 fn sync_inventory(conn: &Connection, state: &AppState) -> Result<(), AppError> {
+    // /api/hosts can run before /api/cluster/nodes in the parallel UI refresh.
+    // Reconcile here as well so it never recreates stale duplicate host rows.
+    cluster::server::dedupe_nodes(conn)?;
     let now = chrono::Utc::now().to_rfc3339();
     let hostname = std::fs::read_to_string("/etc/hostname")
         .unwrap_or_else(|_| "本机".into())
@@ -682,10 +685,10 @@ fn sync_inventory(conn: &Connection, state: &AppState) -> Result<(), AppError> {
     Ok(())
 }
 
-fn cluster_host(addr: &str, info_json: &str) -> String {
+pub(crate) fn cluster_host(addr: &str, info_json: &str) -> String {
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(info_json) {
         if let Some(ip) = value.get("primary_ip").and_then(|v| v.as_str()) {
-            if IpAddr::from_str(ip).is_ok() {
+            if let Ok(ip) = IpAddr::from_str(ip) {
                 return ip.to_string();
             }
         }

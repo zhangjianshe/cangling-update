@@ -17,7 +17,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -479,35 +479,80 @@ fn upsert_node(
     Ok(())
 }
 
-/// 同一角色和地址只保留最后心跳最新的节点。Worker 重新安装后 node_id 会变化，
-/// 旧记录及其自动生成的主机条目必须一并移除，避免列表出现在线/离线两份。
-fn dedupe_nodes(conn: &Connection) -> rusqlite::Result<usize> {
+/// An agent's HTTP port can change during reinstall. Identify a machine by its
+/// IP and role, retain the latest heartbeat, and migrate SSH/storage references.
+pub(crate) fn dedupe_nodes(conn: &Connection) -> rusqlite::Result<usize> {
     let mut stmt = conn.prepare(
-        "SELECT id, role, addr FROM cluster_nodes ORDER BY last_seen DESC, registered_at DESC",
+        "SELECT id, role, addr, info_json FROM cluster_nodes
+         ORDER BY last_seen DESC, registered_at DESC, id ASC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
         ))
     })?;
-    let mut seen = HashSet::new();
+    let mut seen: HashMap<(String, String), String> = HashMap::new();
     let mut stale = Vec::new();
     for row in rows {
-        let (id, role, addr) = row?;
-        if !seen.insert((role, addr)) {
-            stale.push(id);
+        let (id, role, addr, info) = row?;
+        let host = crate::hosts::cluster_host(&addr, &info);
+        let identity = if !host.is_empty() {
+            host
+        } else if !addr.trim().is_empty() {
+            addr.trim().to_string()
+        } else {
+            id.clone()
+        };
+        match seen.entry((role, identity)) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                stale.push((id, entry.get().clone()));
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(id);
+            }
         }
     }
     drop(stmt);
-    for id in &stale {
-        conn.execute(
+    if stale.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    for (id, canonical) in &stale {
+        let host_id = format!("cluster:{canonical}");
+        // Copy credentials before removing an old auto-discovered host. Pair a
+        // saved password with its original SSH username rather than mixing users.
+        tx.execute(
+            "INSERT INTO managed_hosts
+             (id,name,host,ssh_port,username,password_enc,kind,cluster_node_id,created_at,updated_at)
+             SELECT ?2,name,host,ssh_port,username,password_enc,'cluster',?3,created_at,updated_at
+             FROM managed_hosts WHERE kind='cluster' AND cluster_node_id=?1
+             ORDER BY CASE WHEN password_enc='' THEN 1 ELSE 0 END,updated_at DESC LIMIT 1
+             ON CONFLICT(id) DO UPDATE SET
+               cluster_node_id=excluded.cluster_node_id,
+               username=CASE WHEN managed_hosts.password_enc='' AND
+                   (excluded.password_enc<>'' OR managed_hosts.username IN ('','root'))
+                 THEN excluded.username ELSE managed_hosts.username END,
+               password_enc=CASE WHEN managed_hosts.password_enc=''
+                 THEN excluded.password_enc ELSE managed_hosts.password_enc END,
+               ssh_port=CASE WHEN managed_hosts.ssh_port=22
+                 THEN excluded.ssh_port ELSE managed_hosts.ssh_port END",
+            params![id,host_id,canonical],
+        )?;
+        tx.execute(
+            "UPDATE storages SET host_id=?2 WHERE host_id IN
+             (SELECT id FROM managed_hosts WHERE kind='cluster' AND cluster_node_id=?1)",
+            params![id, host_id],
+        )?;
+        tx.execute(
             "DELETE FROM managed_hosts WHERE kind = 'cluster' AND cluster_node_id = ?1",
             params![id],
         )?;
-        conn.execute("DELETE FROM cluster_nodes WHERE id = ?1", params![id])?;
+        tx.execute("DELETE FROM cluster_nodes WHERE id = ?1", params![id])?;
     }
+    tx.commit()?;
     Ok(stale.len())
 }
 
@@ -638,4 +683,176 @@ fn is_online(last_seen: &str) -> bool {
     };
     let age = chrono::Utc::now().signed_duration_since(ts.with_timezone(&chrono::Utc));
     age.num_seconds() >= 0 && age.num_seconds() < OFFLINE_AFTER_SECS as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database() -> Connection {
+        crate::db::open(std::path::Path::new(":memory:")).unwrap()
+    }
+    fn node(conn: &Connection, id: &str, address: &str, role: &str, time: &str) {
+        upsert_node(
+            conn,
+            id,
+            "localhost.localdomain",
+            address,
+            "test",
+            role,
+            "{}",
+            time,
+        )
+        .unwrap();
+    }
+    fn host(conn: &Connection, node: &str, user: &str, password: &str, port: u16) {
+        conn.execute(
+            "INSERT INTO managed_hosts
+            (id,name,host,ssh_port,username,password_enc,kind,cluster_node_id,created_at,updated_at)
+            VALUES (?1,'localhost.localdomain','10.141.8.62',?2,?3,?4,'cluster',?5,'old','old')",
+            params![format!("cluster:{node}"), port, user, password, node],
+        )
+        .unwrap();
+    }
+    #[test]
+    fn changed_agent_port_merges_host_and_preserves_ssh_and_storage() {
+        let conn = database();
+        node(
+            &conn,
+            "old",
+            "10.141.8.62:80",
+            "worker",
+            "2026-11-16T10:00:00Z",
+        );
+        node(
+            &conn,
+            "new",
+            "10.141.8.62:5400",
+            "worker",
+            "2026-11-16T11:00:00Z",
+        );
+        host(&conn, "old", "operator", "encrypted-password", 2201);
+        host(&conn, "new", "root", "", 22);
+        conn.execute(
+            "INSERT INTO storages (id,name,host_id,created_at,updated_at)
+            VALUES ('share','share','cluster:old','old','old')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(dedupe_nodes(&conn).unwrap(), 1);
+        assert_eq!(dedupe_nodes(&conn).unwrap(), 0);
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM cluster_nodes", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let credentials = conn
+            .query_row(
+                "SELECT username,password_enc,ssh_port,cluster_node_id FROM managed_hosts",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, u16>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            credentials,
+            (
+                "operator".into(),
+                "encrypted-password".into(),
+                2201,
+                "new".into()
+            )
+        );
+        assert_eq!(
+            conn.query_row("SELECT host_id FROM storages", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "cluster:new"
+        );
+    }
+    #[test]
+    fn names_do_not_merge_distinct_hosts_or_roles_and_empty_addresses_stay_separate() {
+        let conn = database();
+        for (id, address, role) in [
+            ("a", "10.141.8.61:5400", "master"),
+            ("b", "10.141.8.62:80", "worker"),
+            ("c", "10.141.8.63:5400", "worker"),
+            ("d", "10.141.8.61:5400", "worker"),
+            ("e", "", "worker"),
+            ("f", "", "worker"),
+        ] {
+            node(&conn, id, address, role, "2026-11-16T10:00:00Z");
+        }
+        assert_eq!(dedupe_nodes(&conn).unwrap(), 0);
+    }
+    #[test]
+    fn failed_reconciliation_rolls_back_credentials_storage_and_nodes() {
+        let conn = database();
+        node(
+            &conn,
+            "old",
+            "10.141.8.62:80",
+            "worker",
+            "2026-11-16T10:00:00Z",
+        );
+        node(
+            &conn,
+            "new",
+            "10.141.8.62:5400",
+            "worker",
+            "2026-11-16T11:00:00Z",
+        );
+        host(&conn, "old", "operator", "encrypted-password", 22);
+        conn.execute_batch(
+            "CREATE TRIGGER prevent_delete BEFORE DELETE ON cluster_nodes
+            BEGIN SELECT RAISE(ABORT,'test failure'); END;",
+        )
+        .unwrap();
+        assert!(dedupe_nodes(&conn).is_err());
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM cluster_nodes", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row("SELECT id FROM managed_hosts", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "cluster:old"
+        );
+    }
+    #[test]
+    fn latest_node_without_host_record_receives_old_credentials() {
+        let conn = database();
+        node(
+            &conn,
+            "old",
+            "[2001:db8::1]:80",
+            "worker",
+            "2026-11-16T10:00:00Z",
+        );
+        node(
+            &conn,
+            "new",
+            "[2001:db8::1]:5400",
+            "worker",
+            "2026-11-16T11:00:00Z",
+        );
+        host(&conn, "old", "operator", "encrypted-password", 22);
+        assert_eq!(dedupe_nodes(&conn).unwrap(), 1);
+        assert_eq!(
+            conn.query_row("SELECT id FROM managed_hosts", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "cluster:new"
+        );
+    }
 }
