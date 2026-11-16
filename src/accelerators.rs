@@ -52,6 +52,7 @@ fn tool(name: &str) -> Option<PathBuf> {
             "/usr/bin",
             "/usr/sbin",
             "/usr/local/bin",
+            "/usr/local/sbin",
             "/usr/local/nvidia/toolkit",
             "/usr/local/Ascend/driver/tools",
             "/opt/hyhal/bin",
@@ -119,6 +120,10 @@ fn pci_devices(root: &Path) -> Vec<Value> {
         let p = e.path();
         let class = read(p.join("class"));
         let id = read(p.join("vendor"));
+        // Huawei's iBMC VGA adapter shares the Ascend vendor ID.
+        if id == "0x19e5" && read(p.join("device")) == "0x1711" {
+            continue;
+        }
         // Hygon DCUs use the processor/co-processor class rather than display/3D.
         // The same vendor also supplies host bridges and CPUs: vendor alone is insufficient.
         let hygon_dcu = id == "0x1d94" && class.starts_with("0x0b40");
@@ -201,6 +206,84 @@ fn apply_hygon(devices: &mut [Value], output: &str) -> usize {
             .or_else(|| number("VRAM Total Memory (B)").map(|v| v / (1024 * 1024)));
         if let Some(memory) = memory.filter(|v| *v > 0) {
             device["memoryMiB"] = json!(memory);
+        }
+        matched.insert(bus);
+    }
+    matched.len()
+}
+fn apply_ascend(devices: &mut [Value], output: &str) -> usize {
+    let version = output
+        .lines()
+        .find_map(|line| {
+            let (_, rest) = line.split_once("npu-smi ")?;
+            rest.split_whitespace().next()
+        })
+        .unwrap_or("");
+    let mut current: Option<(String, String, String)> = None;
+    let mut matched = BTreeSet::new();
+    for line in output.lines() {
+        let columns = line
+            .trim()
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect::<Vec<_>>();
+        if columns.len() < 3 {
+            continue;
+        }
+        let first = columns[0].split_whitespace().collect::<Vec<_>>();
+        if first.len() == 2
+            && first[0].parse::<u64>().is_ok()
+            && first[1].chars().next().is_some_and(|c| c.is_ascii_digit())
+            && !columns[1].contains(':')
+        {
+            current = Some((first[0].into(), first[1].into(), columns[1].into()));
+            continue;
+        }
+        let bus = normalized_bus(columns[1]);
+        let Some(device) = devices
+            .iter_mut()
+            .find(|d| d["vendor"] == "Ascend" && d["pciAddress"] == bus)
+        else {
+            continue;
+        };
+        let Some((id, model, health)) = &current else {
+            continue;
+        };
+        if first.len() != 2 || first[1].parse::<u64>().is_err() {
+            continue;
+        }
+        device["name"] = json!(format!("Ascend {model}"));
+        device["driverVersion"] = json!(version);
+        if !device["logicalDevices"].is_array() {
+            device["logicalDevices"] = json!([]);
+        }
+        let memory = columns[2]
+            .split_once('/')
+            .and_then(|(_, total)| total.trim().parse::<u64>().ok());
+        let logical = json!({"npuId":id,"chipId":first[0],"deviceId":first[1],"health":health,"memoryMiB":memory});
+        let entries = device["logicalDevices"].as_array_mut().unwrap();
+        if !entries.iter().any(|e| e["deviceId"] == logical["deviceId"]) {
+            entries.push(logical);
+        }
+        device["health"] = if device["logicalDevices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["health"] == "OK")
+        {
+            json!("OK")
+        } else {
+            json!("error")
+        };
+        let total: u64 = device["logicalDevices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|e| e["memoryMiB"].as_u64())
+            .sum();
+        if total > 0 {
+            device["memoryMiB"] = json!(total);
         }
         matched.insert(bus);
     }
@@ -290,7 +373,7 @@ fn collect_local() -> Value {
                     "--format=csv,noheader,nounits",
                 ],
             )),
-            "Ascend" => Some(("npu-smi", vec!["info", "-l"])),
+            "Ascend" => Some(("npu-smi", vec!["info"])),
             "Hygon" => Some((
                 "hy-smi",
                 vec![
@@ -310,6 +393,14 @@ fn collect_local() -> Value {
             if v == "NVIDIA" && result["status"] == "ok" {
                 apply_nvidia(&mut devices, result["output"].as_str().unwrap_or_default());
             }
+            let incomplete_ascend = v == "Ascend"
+                && result["status"] == "ok"
+                && (apply_ascend(&mut devices, result["output"].as_str().unwrap_or_default())
+                    != devices.iter().filter(|d| d["vendor"] == "Ascend").count()
+                    || devices
+                        .iter()
+                        .filter(|d| d["vendor"] == "Ascend")
+                        .any(|d| d["health"] != "OK"));
             let incomplete_hygon = v == "Hygon"
                 && result["status"] == "ok"
                 && apply_hygon(&mut devices, result["output"].as_str().unwrap_or_default())
@@ -322,7 +413,7 @@ fn collect_local() -> Value {
                     .any(|d| d["driverVersion"].is_null());
             checks.push(check(
                 "driver",
-                if incomplete_nvidia || incomplete_hygon {
+                if incomplete_nvidia || incomplete_hygon || incomplete_ascend {
                     "warning"
                 } else {
                     result["status"].as_str().unwrap_or("unknown")
@@ -357,7 +448,7 @@ fn collect_local() -> Value {
     let config_path = Path::new("/var/lib/rancher/k3s/agent/etc/containerd/config.toml");
     let mut runtimes = runtime_entries(&read(config_path));
     for r in &mut runtimes {
-        if r["executable"] == true && r["handler"] == "nvidia" {
+        if r["executable"] == true && matches!(r["handler"].as_str(), Some("nvidia" | "ascend")) {
             let result = probe(
                 Path::new(r["binary"].as_str().unwrap_or("")),
                 &["--version"],
@@ -404,7 +495,7 @@ fn collect_local() -> Value {
         "未启动测试容器，容器内设备访问尚未验证",
     ));
     checks.push(check("algorithm", "unknown", "尚未执行算法兼容性测试"));
-    json!({"platform":crate::repo::host_platform(),"deviceFiles":{"kfd":Path::new("/dev/kfd").exists(),"dtk2604":Path::new("/opt/dtk-26.04").is_dir()},"customRuntimeTemplate":(["config.toml.tmpl","config-v3.toml.tmpl"].iter().any(|n|Path::new("/var/lib/rancher/k3s/agent/etc/containerd").join(n).exists())),"observedAt":chrono::Utc::now().to_rfc3339(),"hostname":crate::hostinfo::hostname(),"ips":crate::hostinfo::list_ips(),"devices":devices,"tools":tools,"runtimeConfig":if config_path.is_file(){Some(config_path.display().to_string())}else{None},"runtimes":runtimes,"checks":checks})
+    json!({"platform":crate::repo::host_platform(),"deviceFiles":{"kfd":Path::new("/dev/kfd").exists(),"dtk2604":Path::new("/opt/dtk-26.04").is_dir(),"ascendDriver":Path::new("/usr/local/Ascend/driver").is_dir(),"davinciManager":Path::new("/dev/davinci_manager").exists(),"devmmSvm":Path::new("/dev/devmm_svm").exists(),"hisiHdc":Path::new("/dev/hisi_hdc").exists()},"customRuntimeTemplate":(["config.toml.tmpl","config-v3.toml.tmpl"].iter().any(|n|Path::new("/var/lib/rancher/k3s/agent/etc/containerd").join(n).exists())),"observedAt":chrono::Utc::now().to_rfc3339(),"hostname":crate::hostinfo::hostname(),"ips":crate::hostinfo::list_ips(),"devices":devices,"tools":tools,"runtimeConfig":if config_path.is_file(){Some(config_path.display().to_string())}else{None},"runtimes":runtimes,"checks":checks})
 }
 fn items(v: &Value) -> Vec<Value> {
     v["items"].as_array().cloned().unwrap_or_default()
@@ -640,6 +731,40 @@ pub(crate) async fn cluster_report(State(state): State<AppState>) -> Result<Json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn henan_ascend_smi_maps_twelve_logical_devices_to_six_pci_functions() {
+        let text = include_str!("../tests/fixtures/henan-ascend310p-smi.txt");
+        let mut devices = [
+            "0000:0c:00.0",
+            "0000:0f:00.0",
+            "0000:10:00.0",
+            "0000:8c:00.0",
+            "0000:8f:00.0",
+            "0000:90:00.0",
+        ]
+        .iter()
+        .map(|p| json!({"vendor":"Ascend","pciAddress":p}))
+        .collect::<Vec<_>>();
+        assert_eq!(apply_ascend(&mut devices, text), 6);
+        assert!(devices.iter().all(|d| d["name"] == "Ascend 310P3"
+            && d["health"] == "OK"
+            && d["driverVersion"] == "24.1.1.3"
+            && d["logicalDevices"].as_array().unwrap().len() == 2));
+        assert_eq!(
+            devices
+                .iter()
+                .map(|d| d["logicalDevices"].as_array().unwrap().len())
+                .sum::<usize>(),
+            12
+        );
+        let mut failed = vec![json!({"vendor":"Ascend","pciAddress":"0000:0c:00.0"})];
+        apply_ascend(&mut failed, &text.replacen("OK", "Alarm", 1));
+        assert_eq!(failed[0]["health"], "error");
+        let mut unknown = vec![json!({"vendor":"Ascend","pciAddress":"0000:0c:00.0"})];
+        assert_eq!(apply_ascend(&mut unknown, "npu-smi unavailable"), 0);
+        assert!(unknown[0]["health"].is_null());
+    }
     #[test]
     fn real_cluster_preserves_seven_cards_and_reports_operator_pull_failure() {
         let f: Value = serde_json::from_str(include_str!(
@@ -756,6 +881,11 @@ mod tests {
             fs::write(p.join("class"), class).unwrap();
             fs::write(p.join("device"), "0x1234").unwrap();
         }
+        let bmc = root.join("huawei-bmc");
+        fs::create_dir(&bmc).unwrap();
+        fs::write(bmc.join("vendor"), "0x19e5").unwrap();
+        fs::write(bmc.join("class"), "0x030000").unwrap();
+        fs::write(bmc.join("device"), "0x1711").unwrap();
         let d = pci_devices(&root);
         assert_eq!(d.len(), 3);
         assert_eq!(d[0]["vendor"], "NVIDIA");

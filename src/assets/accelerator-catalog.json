@@ -88,9 +88,10 @@
     {
       "id": "ascend-310p",
       "vendor": "Ascend",
-      "name": "昇腾 NPU（待适配）",
+      "name": "昇腾 Ascend 310P / 310P3",
       "models": [
-        "Ascend 310P"
+        "Ascend 310P",
+        "Ascend 310P3"
       ],
       "architectures": [
         "arm64"
@@ -101,14 +102,17 @@
       "resources": [
         "huawei.com/Ascend310P"
       ],
-      "package": null,
-      "automatic": false,
+      "package": "ascend-310p-arm64",
+      "automatic": true,
       "runtime": "ascend",
       "requirements": [
-        "首批只提供诊断和历史资料，不执行自动修复"
+        "Kylin V10 ARM64；驱动已绑定且 npu-smi info 中 310P/310P3 健康状态为 OK",
+        "Ascend 运行时已在 K3s containerd 注册，驱动目录与 davinci_manager/devmm_svm/hisi_hdc 已存在",
+        "正常节点不改动；异常插件仅重建目标 Pod；缺少插件时使用固定 v6.0.RC3 镜像、专用 RBAC 与 ascend RuntimeClass",
+        "运行时配置缺失时停止自动修复，不覆盖自定义模板；离线包附现场 v6.0.0.SPC1 运行时、24.1.1.3 驱动及 7.5.0.9.220 固件安装器"
       ],
-      "validation": "河南等历史站点有部署记录；历史软件包仍保留在 platforms/kylin/arm/v10/rpm/npu；本功能未验证",
-      "source": "https://www.hiascend.com/document"
+      "validation": "河南 10.141.8.62 已确认 6 个 PCIe 设备、12 个健康逻辑设备，v6.0.RC3 插件已注册 huawei.com/Ascend310P=12；不以此替代算法验证",
+      "source": "https://gitee.com/ascend/ascend-device-plugin"
     },
     {
       "id": "nvidia-arm64",

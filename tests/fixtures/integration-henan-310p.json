@@ -1,0 +1,198 @@
+{
+  "nodes": [
+    {
+      "name": "localhost.localdomain-269cb157",
+      "ready": true,
+      "nodeInfo": {
+        "architecture": "arm64"
+      },
+      "resources": [
+        {
+          "name": "huawei.com/Ascend310P",
+          "capacity": 12,
+          "allocatable": 12,
+          "requested": 0
+        }
+      ],
+      "components": [
+        {
+          "name": "ascend-device-plugin310p-daemonset-mm787",
+          "uid": "fixture-pod",
+          "namespace": "kube-system",
+          "status": "ok",
+          "images": [
+            "ascend-k8sdeviceplugin:v6.0.RC3"
+          ],
+          "owners": [
+            {
+              "kind": "DaemonSet",
+              "name": "ascend-device-plugin310p-daemonset",
+              "controller": true
+            }
+          ],
+          "message": ""
+        }
+      ],
+      "hostDiagnostics": {
+        "platform": "kylin-arm-v10-rpm",
+        "devices": [
+          {
+            "vendor": "Ascend",
+            "pciAddress": "0000:0c:00.0",
+            "name": "Ascend 310P3",
+            "driver": "devdrv_device_driver",
+            "driverVersion": "24.1.1.3",
+            "health": "OK",
+            "logicalDevices": [
+              {
+                "deviceId": "0",
+                "health": "OK"
+              },
+              {
+                "deviceId": "1",
+                "health": "OK"
+              }
+            ]
+          },
+          {
+            "vendor": "Ascend",
+            "pciAddress": "0000:0f:00.0",
+            "name": "Ascend 310P3",
+            "driver": "devdrv_device_driver",
+            "driverVersion": "24.1.1.3",
+            "health": "OK",
+            "logicalDevices": [
+              {
+                "deviceId": "2",
+                "health": "OK"
+              },
+              {
+                "deviceId": "3",
+                "health": "OK"
+              }
+            ]
+          },
+          {
+            "vendor": "Ascend",
+            "pciAddress": "0000:10:00.0",
+            "name": "Ascend 310P3",
+            "driver": "devdrv_device_driver",
+            "driverVersion": "24.1.1.3",
+            "health": "OK",
+            "logicalDevices": [
+              {
+                "deviceId": "4",
+                "health": "OK"
+              },
+              {
+                "deviceId": "5",
+                "health": "OK"
+              }
+            ]
+          },
+          {
+            "vendor": "Ascend",
+            "pciAddress": "0000:8c:00.0",
+            "name": "Ascend 310P3",
+            "driver": "devdrv_device_driver",
+            "driverVersion": "24.1.1.3",
+            "health": "OK",
+            "logicalDevices": [
+              {
+                "deviceId": "6",
+                "health": "OK"
+              },
+              {
+                "deviceId": "7",
+                "health": "OK"
+              }
+            ]
+          },
+          {
+            "vendor": "Ascend",
+            "pciAddress": "0000:8f:00.0",
+            "name": "Ascend 310P3",
+            "driver": "devdrv_device_driver",
+            "driverVersion": "24.1.1.3",
+            "health": "OK",
+            "logicalDevices": [
+              {
+                "deviceId": "8",
+                "health": "OK"
+              },
+              {
+                "deviceId": "9",
+                "health": "OK"
+              }
+            ]
+          },
+          {
+            "vendor": "Ascend",
+            "pciAddress": "0000:90:00.0",
+            "name": "Ascend 310P3",
+            "driver": "devdrv_device_driver",
+            "driverVersion": "24.1.1.3",
+            "health": "OK",
+            "logicalDevices": [
+              {
+                "deviceId": "10",
+                "health": "OK"
+              },
+              {
+                "deviceId": "11",
+                "health": "OK"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "vendor": "Ascend",
+            "name": "npu-smi",
+            "result": {
+              "status": "ok"
+            }
+          }
+        ],
+        "runtimes": [
+          {
+            "handler": "ascend",
+            "binary": "/usr/local/Ascend/Ascend-Docker-Runtime/ascend-docker-runtime",
+            "executable": true,
+            "versionProbe": {
+              "status": "ok"
+            }
+          }
+        ],
+        "deviceFiles": {
+          "ascendDriver": true,
+          "davinciManager": true,
+          "devmmSvm": true,
+          "hisiHdc": true
+        },
+        "customRuntimeTemplate": true
+      }
+    }
+  ],
+  "runtimeClasses": [],
+  "warnings": [],
+  "components": [
+    {
+      "name": "ascend-device-plugin310p-daemonset-mm787",
+      "uid": "fixture-pod",
+      "namespace": "kube-system",
+      "status": "ok",
+      "images": [
+        "ascend-k8sdeviceplugin:v6.0.RC3"
+      ],
+      "owners": [
+        {
+          "kind": "DaemonSet",
+          "name": "ascend-device-plugin310p-daemonset",
+          "controller": true
+        }
+      ],
+      "message": ""
+    }
+  ]
+}

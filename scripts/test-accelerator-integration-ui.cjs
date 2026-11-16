@@ -14,4 +14,10 @@ assert.match(rendered,/href="\/update\/accelerators\/supported"/);assert.match(r
 assert.equal(new URL('../api/k3s/accelerator-integration/catalog','https://host/update/accelerators/supported').pathname,'/update/api/k3s/accelerator-integration/catalog');
 assert.equal(new URL('../','https://host/update/accelerators/supported').pathname,'/update/');
 assert.match(html,/id="k3s-integrate">GPU\/NPU\/DCU 集成/);
+const chooseStart=html.indexOf('const chooseProfile=');
+const chooseSource=html.slice(chooseStart,html.indexOf('const clear=',chooseStart));
+const henan=JSON.parse(fs.readFileSync(path.join(__dirname,'../tests/fixtures/integration-henan-310p.json'),'utf8'));
+const selection=vm.createContext({nodes:henan.nodes,nodeInput:{value:henan.nodes[0].name},profileInput:{value:''}});
+vm.runInContext(chooseSource+'\nchooseProfile();',selection);
+assert.equal(selection.profileInput.value,'ascend-310p');
 console.log('Integration UI: scripts parse, plan output is escaped, support links and API retain reverse-proxy prefix.');

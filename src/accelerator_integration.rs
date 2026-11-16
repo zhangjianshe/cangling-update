@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::{path::PathBuf, time::Duration};
 
 const LOCK: &str = "accelerator-integration";
-const PACKAGES: &[&str] = &["nvidia-amd64", "hygon-dcu-amd64"];
+const PACKAGES: &[&str] = &["nvidia-amd64", "hygon-dcu-amd64", "ascend-310p-arm64"];
 fn array(v: &Value) -> &[Value] {
     v.as_array().map(Vec::as_slice).unwrap_or(&[])
 }
@@ -140,10 +140,11 @@ struct Plan {
 }
 fn plugin(c: &Value, vendor: &str) -> bool {
     let text = format!("{} {}", string(&c["name"]), c["images"]).to_lowercase();
-    let vendor_match = if vendor == "NVIDIA" {
-        text.contains("nvidia")
-    } else {
-        text.contains("hygon") || text.contains("dcu") || text.contains("hcu")
+    let vendor_match = match vendor {
+        "NVIDIA" => text.contains("nvidia"),
+        "Ascend" => text.contains("ascend") || text.contains("huawei"),
+        "Hygon" => text.contains("hygon") || text.contains("dcu") || text.contains("hcu"),
+        _ => false,
     };
     vendor_match && (text.contains("device-plugin") || text.contains("deviceplugin"))
 }
@@ -209,6 +210,41 @@ fn inspect(
             .push("驱动未绑定或厂商查询工具失败；请先修复主机驱动。".into());
     }
     let resources = array(&node["resources"]);
+    if vendor == "Ascend" {
+        if host["platform"] != "kylin-arm-v10-rpm" {
+            plan.blockers
+                .push("Ascend 310P 离线方案目前仅验证 Kylin V10 ARM64。".into());
+        }
+        if devices.iter().any(|d| {
+            !string(&d["name"]).contains("310P")
+                || d["health"] != "OK"
+                || array(&d["logicalDevices"]).is_empty()
+        }) {
+            plan.blockers.push(
+                "此方案仅适配健康状态可确认的 Ascend 310P/310P3；不安装其他昇腾型号插件。".into(),
+            );
+        }
+        if resources.iter().any(|r| {
+            string(&r["name"]).starts_with("huawei.com/")
+                && !array(&p["resources"]).contains(&r["name"])
+        }) {
+            plan.blockers
+                .push("存在其他昇腾资源类型，不自动切换 310/310P/910 插件。".into());
+        }
+        if !["ascendDriver", "davinciManager", "devmmSvm", "hisiHdc"]
+            .iter()
+            .all(|k| host["deviceFiles"][*k] == true)
+        {
+            plan.blockers.push("Ascend 驱动目录或 /dev/davinci_manager、devmm_svm、hisi_hdc 不完整；请先修复主机驱动。".into());
+        }
+        if !array(&host["runtimes"]).iter().any(|r| {
+            r["handler"] == "ascend"
+                && r["executable"] == true
+                && r["versionProbe"]["status"] == "ok"
+        }) {
+            plan.blockers.push("缺少已验证的 Ascend containerd 运行时；离线包提供现场运行时安装器，请先合并本节点 K3s 运行时配置。".into());
+        }
+    }
     if vendor == "Hygon"
         && resources.iter().any(|r| {
             string(&r["name"]).starts_with("hygon.com/")
@@ -226,6 +262,19 @@ fn inspect(
         .iter()
         .filter(|r| array(&p["resources"]).contains(&r["name"]))
         .collect::<Vec<_>>();
+    if vendor == "Ascend" && !selected.is_empty() {
+        let logical = devices
+            .iter()
+            .map(|d| array(&d["logicalDevices"]).len() as u64)
+            .sum::<u64>();
+        let capacity = selected
+            .iter()
+            .filter_map(|r| r["capacity"].as_u64())
+            .sum::<u64>();
+        if logical > 0 && capacity != logical {
+            plan.blockers.push(format!("驱动发现 {logical} 个逻辑设备，但 K3s 注册容量为 {capacity}；请先检查设备插件日志和虚拟化配置。"));
+        }
+    }
     let registered = selected
         .iter()
         .any(|r| r["allocatable"].as_u64().unwrap_or(0) > 0);
@@ -319,6 +368,23 @@ fn inspect(
                 plan.blockers.push(
                     "离线包缺失或未完整拉取 Git LFS；请同步 cangling-repo/accelerators。".into(),
                 );
+            }
+            if vendor == "Ascend" {
+                let class = array(&report["runtimeClasses"])
+                    .iter()
+                    .find(|r| r["name"] == "ascend");
+                plan.create_runtime_class = class.is_none();
+                if class.is_some_and(|r| r["handler"] != "ascend")
+                    || array(&report["warnings"])
+                        .iter()
+                        .any(|w| string(w).contains("读取 RuntimeClass 失败"))
+                {
+                    plan.blockers.push(
+                        "无法确认 ascend RuntimeClass，或其 handler 不匹配；未覆盖现有配置。"
+                            .into(),
+                    );
+                }
+                plan.actions.push("使用现有 Ascend 运行时，为目标节点创建设备插件专用 ServiceAccount/RBAC；不改写自定义 containerd 模板，不重装驱动和固件。".into());
             }
             if selection.profile_id == "hygon-dcu" {
                 plan.warnings.push("海光插件需要 privileged、hostNetwork，以及 /dev、/sys、DTK 和 kubelet 设备插件目录挂载。".into());
@@ -724,7 +790,59 @@ fn scoped_manifest(mut value: Value, node: &str, profile: &str) -> Value {
     value["spec"]["selector"]["matchLabels"] = labels.clone();
     value["spec"]["template"]["metadata"]["labels"] = labels;
     value["spec"]["template"]["spec"]["affinity"] = json!({"nodeAffinity":{"requiredDuringSchedulingIgnoredDuringExecution":{"nodeSelectorTerms":[{"matchFields":[{"key":"metadata.name","operator":"In","values":[node]}]}]}}});
+    if profile == "ascend-310p" {
+        value["spec"]["template"]["spec"]["serviceAccountName"] = json!(name);
+        value["spec"]["template"]["spec"]["runtimeClassName"] = json!("ascend");
+        value["spec"]["template"]["spec"]
+            .as_object_mut()
+            .unwrap()
+            .remove("nodeSelector");
+    }
     value
+}
+fn scoped_ascend_rbac(mut bundle: Value, manifest: &Value) -> Result<Value, AppError> {
+    let name = string(&manifest["metadata"]["name"]);
+    let entries = bundle["items"]
+        .as_array_mut()
+        .ok_or_else(|| AppError::bad("Ascend RBAC 模板无效"))?;
+    let mut kinds = std::collections::BTreeSet::new();
+    for item in entries {
+        let kind = string(&item["kind"]).to_string();
+        if !matches!(
+            kind.as_str(),
+            "ServiceAccount" | "ClusterRole" | "ClusterRoleBinding"
+        ) || !kinds.insert(kind.clone())
+        {
+            return Err(AppError::bad("Ascend RBAC 模板类型或数量无效"));
+        }
+        item["metadata"]["name"] = json!(name);
+        if kind == "ServiceAccount" {
+            item["metadata"]["namespace"] = json!("kube-system");
+        }
+        if kind == "ClusterRoleBinding" {
+            item["subjects"] =
+                json!([{"kind":"ServiceAccount","name":name,"namespace":"kube-system"}]);
+            item["roleRef"] =
+                json!({"kind":"ClusterRole","name":name,"apiGroup":"rbac.authorization.k8s.io"});
+        }
+    }
+    if kinds.len() != 3 {
+        return Err(AppError::bad("Ascend RBAC 模板不完整"));
+    }
+    Ok(bundle)
+}
+fn verified_template(dir: &std::path::Path, filename: &str) -> Result<Value, AppError> {
+    let bytes = std::fs::read(dir.join(filename))?;
+    let sums = std::fs::read_to_string(dir.join("SHA256SUMS"))?;
+    let expected = sums.lines().find_map(|l| {
+        l.split_once(' ')
+            .filter(|(_, n)| n.trim_start_matches([' ', '*']) == filename)
+            .map(|(h, _)| h)
+    });
+    if expected != Some(hash(&bytes).as_str()) {
+        return Err(AppError::bad(format!("{filename} SHA-256 校验失败")));
+    }
+    serde_json::from_slice(&bytes).map_err(|e| AppError::bad(e.to_string()))
 }
 async fn execute(s: &AppState, p: &Plan, id: &str) -> Result<(), AppError> {
     if p.actions.is_empty() {
@@ -823,21 +941,19 @@ async fn execute_inner(s: &AppState, p: &Plan, id: &str, target: &Target) -> Res
             return Err(AppError::bad("离线包已变化，请重新生成计划"));
         }
         let dir = package_dir(s, package);
-        let bytes = std::fs::read(dir.join("plugin.json"))?;
-        let sums = std::fs::read_to_string(dir.join("SHA256SUMS"))?;
-        let expected = sums.lines().find_map(|l| {
-            l.split_once(' ')
-                .filter(|(_, n)| n.trim_start_matches([' ', '*']) == "plugin.json")
-                .map(|(h, _)| h)
-        });
-        if expected != Some(hash(&bytes).as_str()) {
-            return Err(AppError::bad("插件模板 SHA-256 校验失败"));
-        }
         let manifest = scoped_manifest(
-            serde_json::from_slice(&bytes).map_err(|e| AppError::bad(e.to_string()))?,
+            verified_template(&dir, "plugin.json")?,
             &p.node_name,
             &p.profile_id,
         );
+        let rbac = if p.profile_id == "ascend-310p" {
+            Some(scoped_ascend_rbac(
+                verified_template(&dir, "rbac.json")?,
+                &manifest,
+            )?)
+        } else {
+            None
+        };
         let name = string(&manifest["metadata"]["name"]);
         let existing = kubectl(vec![
             "get".into(),
@@ -871,7 +987,11 @@ async fn execute_inner(s: &AppState, p: &Plan, id: &str, target: &Target) -> Res
         )
         .await?;
         if p.create_runtime_class {
-            create_manifest(s,id,"runtime-class.json",&json!({"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":"nvidia"},"handler":"nvidia"})).await?;
+            let runtime = profile(&p.profile_id)?["runtime"].clone();
+            create_manifest(s,id,"runtime-class.json",&json!({"apiVersion":"node.k8s.io/v1","kind":"RuntimeClass","metadata":{"name":runtime},"handler":runtime})).await?;
+        }
+        if let Some(rbac) = rbac {
+            create_manifest(s, id, "rbac.json", &rbac).await?;
         }
         s.jobs
             .set(id, "apply", "部署限定到目标节点的设备插件", 2, 4);
@@ -914,6 +1034,90 @@ async fn execute_inner(s: &AppState, p: &Plan, id: &str, target: &Target) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn henan() -> Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/integration-henan-310p.json"
+        ))
+        .unwrap()
+    }
+    fn ascend_plan(report: &Value, stamp: Option<String>) -> Plan {
+        inspect(
+            report,
+            &Selection {
+                node_name: "localhost.localdomain-269cb157".into(),
+                profile_id: "ascend-310p".into(),
+            },
+            &profile("ascend-310p").unwrap(),
+            stamp,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn healthy_henan_ascend_is_noop_without_offline_payloads_or_runtime_class() {
+        let p = ascend_plan(&henan(), None);
+        assert!(p.blockers.is_empty(), "{:?}", p.blockers);
+        assert!(p.actions.is_empty());
+        assert!(!p.create_runtime_class && !p.runtime_repair);
+        let mut partial = henan();
+        partial["nodes"][0]["resources"][0]["capacity"] = json!(6);
+        assert!(!ascend_plan(&partial, None).blockers.is_empty());
+    }
+    #[test]
+    fn ascend_failed_plugin_only_recreates_failed_daemonset_pod_and_busy_node_blocks() {
+        let mut r = henan();
+        r["nodes"][0]["components"][0]["status"] = json!("error");
+        let p = ascend_plan(&r, None);
+        assert!(p.blockers.is_empty(), "{:?}", p.blockers);
+        assert_eq!(p.pods.len(), 1);
+        assert!(!p.runtime_repair);
+        r["nodes"][0]["resources"][0]["requested"] = json!(1);
+        assert!(!ascend_plan(&r, None).blockers.is_empty());
+    }
+    #[test]
+    fn ascend_new_install_requires_existing_runtime_health_model_and_correct_architecture() {
+        let mut r = henan();
+        r["nodes"][0]["components"] = json!([]);
+        r["nodes"][0]["resources"] = json!([]);
+        let p = ascend_plan(&r, Some("a".repeat(64)));
+        assert!(p.blockers.is_empty(), "{:?}", p.blockers);
+        assert!(p.create_runtime_class);
+        assert!(!p.runtime_repair);
+        assert!(!ascend_plan(&r, None).blockers.is_empty());
+        for (key, value) in [("health", json!("Alarm")), ("name", json!("Ascend 910B4"))] {
+            let mut wrong = r.clone();
+            wrong["nodes"][0]["hostDiagnostics"]["devices"][0][key] = value;
+            assert!(!ascend_plan(&wrong, Some("a".repeat(64)))
+                .blockers
+                .is_empty());
+        }
+        r["nodes"][0]["hostDiagnostics"]["runtimes"] = json!([]);
+        assert!(!ascend_plan(&r, Some("a".repeat(64))).blockers.is_empty());
+        let mut wrong = henan();
+        wrong["nodes"][0]["nodeInfo"]["architecture"] = json!("amd64");
+        assert!(!ascend_plan(&wrong, None).blockers.is_empty());
+    }
+    #[test]
+    fn ascend_manifest_scopes_runtime_service_account_and_rbac_to_target() {
+        let template = json!({"metadata":{},"spec":{"template":{"spec":{"nodeSelector":{"accelerator":"huawei-Ascend310P"}},"metadata":{}},"selector":{}}});
+        let manifest = scoped_manifest(template, "worker-a", "ascend-310p");
+        let name = manifest["metadata"]["name"].clone();
+        assert_eq!(
+            manifest["spec"]["template"]["spec"]["runtimeClassName"],
+            "ascend"
+        );
+        assert_eq!(
+            manifest["spec"]["template"]["spec"]["serviceAccountName"],
+            name
+        );
+        assert!(manifest["spec"]["template"]["spec"]
+            .get("nodeSelector")
+            .is_none());
+        let bundle = json!({"items":[{"kind":"ServiceAccount","metadata":{}},{"kind":"ClusterRole","metadata":{}},{"kind":"ClusterRoleBinding","metadata":{}}]});
+        let rbac = scoped_ascend_rbac(bundle, &manifest).unwrap();
+        assert_eq!(rbac["items"][2]["roleRef"]["name"], name);
+        assert_eq!(rbac["items"][2]["subjects"][0]["name"], name);
+        assert!(scoped_ascend_rbac(json!({"items":[]}), &manifest).is_err());
+    }
     fn selection(id: &str) -> Selection {
         Selection {
             node_name: "worker-a".into(),

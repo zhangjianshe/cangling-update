@@ -3275,7 +3275,7 @@
         const nodeInput=root.querySelector("#integration-node"), profileInput=root.querySelector("#integration-profile"), check=root.querySelector("#integration-check"), result=root.querySelector("#integration-result");
         let generation=0, running=false;
         const chooseProfile=()=>{const node=nodes.find(n=>n.name===nodeInput.value), host=node&&node.hostDiagnostics;const devices=host&&host.devices||[];const resources=node&&node.resources||[];
-          profileInput.value=devices.some(d=>d.vendor==="Hygon")?(resources.some(r=>/hygon\.com\/hcu/.test(r.name))?"hygon-hcu":"hygon-dcu"):(node&&node.nodeInfo&&node.nodeInfo.architecture==="arm64"?"nvidia-arm64":"nvidia");};
+          profileInput.value=devices.some(d=>d.vendor==="Ascend")?"ascend-310p":devices.some(d=>d.vendor==="Hygon")?(resources.some(r=>/hygon\.com\/hcu/.test(r.name))?"hygon-hcu":"hygon-dcu"):(node&&node.nodeInfo&&node.nodeInfo.architecture==="arm64"?"nvidia-arm64":"nvidia");};
         const clear=()=>{generation++;result.innerHTML="";setDialogAction(null,null);};
         chooseProfile();nodeInput.onchange=()=>{chooseProfile();clear();};profileInput.onchange=clear;
         check.disabled=!nodes.length;
