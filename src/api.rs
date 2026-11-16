@@ -208,6 +208,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::jar_upgrade::routes())
         .merge(crate::nginx_stats::routes())
         .merge(crate::certificate_manager::routes())
+        .merge(crate::tunnel_keys::routes())
         .merge(crate::self_upgrade::routes())
         .route(
             "/api/storages",

@@ -36,6 +36,7 @@ mod state;
 mod storage;
 mod term;
 mod tunnel;
+mod tunnel_keys;
 mod update;
 
 use anyhow::{bail, Context};

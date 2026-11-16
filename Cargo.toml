@@ -6,6 +6,7 @@ description = "Single-binary docker-compose update console with backup and rollb
 rust-version = "1.74"
 
 [dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
 axum = { version = "0.8", features = ["multipart", "macros", "ws"] }
