@@ -277,6 +277,18 @@ async fn try_psql(
     database: &str,
     sql: &str,
 ) -> Result<String> {
+    try_psql_output(docker, dir, service, conn, database, sql, false).await
+}
+
+async fn try_psql_output(
+    docker: &Docker,
+    dir: &Path,
+    service: &str,
+    conn: &PgConn,
+    database: &str,
+    sql: &str,
+    include_messages: bool,
+) -> Result<String> {
     if !is_safe_sql_name(database) {
         bail!("无效的数据库名：{database}");
     }
@@ -297,6 +309,18 @@ async fn try_psql(
     cmd.push("ON_ERROR_STOP=1".into());
     cmd.push("-tAc".into());
     cmd.push(sql.to_string());
+    if include_messages {
+        // psql sends NOTICE/WARNING to stderr. Merge inside the container only for
+        // textual SQL results; JSON queries must keep their stdout parseable.
+        let mut with_messages = vec![
+            "sh".into(),
+            "-c".into(),
+            "exec \"$@\" 2>&1".into(),
+            "psql-messages".into(),
+        ];
+        with_messages.extend(cmd);
+        cmd = with_messages;
+    }
     if dir.starts_with(K3S_DB_ROOT) {
         if conn.container_user.is_some() {
             bail!("kubectl exec 不支持切换容器用户");
@@ -721,7 +745,10 @@ pub async fn query(
             truncated,
         });
     }
-    let raw = psql(docker, dir, service, &conn, database, sql).await?;
+    let raw = try_psql_output(docker, dir, service, &conn, database, sql, true)
+        .await
+        .map_err(|error| AppError::bad(error.to_string()))?;
+    let truncated = raw.lines().filter(|line| !line.is_empty()).count() > MAX_LIMIT as usize;
     Ok(QueryResult {
         columns: vec!["output".into()],
         rows: raw
@@ -731,7 +758,7 @@ pub async fn query(
             .map(|l| vec![serde_json::Value::String(l.to_string())])
             .collect(),
         command: Some(raw.trim().to_string()),
-        truncated: false,
+        truncated,
     })
 }
 
