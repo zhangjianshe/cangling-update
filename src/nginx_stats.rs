@@ -3,7 +3,7 @@ use crate::state::AppState;
 use axum::extract::{Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Datelike, Local, Timelike};
+use chrono::{DateTime, Datelike, FixedOffset, Local, NaiveDateTime, TimeZone, Timelike, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -62,6 +62,19 @@ pub const LOADBALANCE_LOG_DIR: &str = "/opt/cangling/loadbalance/logs";
 
 pub fn ensure_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(SCHEMA)?;
+    // Compare instants rather than RFC3339 strings, including historical logs
+    // collected on hosts using different UTC offsets.
+    for table in [
+        "nginx_traffic_buckets",
+        "nginx_bucket_clients",
+        "nginx_bucket_upstreams",
+        "nginx_bucket_paths",
+        "nginx_bucket_devices",
+    ] {
+        conn.execute_batch(&format!(
+            "CREATE INDEX IF NOT EXISTS {table}_instant ON {table}(julianday(bucket_start));"
+        ))?;
+    }
     Ok(())
 }
 
@@ -865,21 +878,49 @@ struct ReportDiagnostics {
     lock_wait_ms: u128,
     query_ms: u128,
 }
+fn beijing_timezone() -> FixedOffset {
+    FixedOffset::east_opt(8 * 3600).unwrap()
+}
+
+fn report_time(value: &str) -> Result<DateTime<FixedOffset>, AppError> {
+    if let Ok(time) = DateTime::parse_from_rfc3339(value) {
+        return Ok(time.with_timezone(&beijing_timezone()));
+    }
+    let time = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").map_err(|_| {
+        AppError::bad(
+            "统计时间格式无效，应为 YYYY-MM-DDTHH:MM:SS（北京时间）或带时区的 RFC3339 时间",
+        )
+    })?;
+    Ok(beijing_timezone()
+        .from_local_datetime(&time)
+        .single()
+        .unwrap())
+}
+
 async fn report(
     State(state): State<AppState>,
     Query(q): Query<ReportQuery>,
 ) -> Result<Json<Report>, AppError> {
-    let today = Local::now().format("%Y-%m-%d").to_string();
-    let from = q.from.unwrap_or_else(|| format!("{today}T00:00:00"));
-    let to = q.to.unwrap_or_else(|| format!("{today}T23:59:59"));
+    let today = Utc::now()
+        .with_timezone(&beijing_timezone())
+        .format("%Y-%m-%d")
+        .to_string();
+    let from = report_time(&q.from.unwrap_or_else(|| format!("{today}T00:00:00")))?;
+    let to = report_time(&q.to.unwrap_or_else(|| format!("{today}T23:59:59")))?;
+    if from > to {
+        return Err(AppError::bad("统计开始时间不能晚于结束时间"));
+    }
+    let (from, to) = (from.to_rfc3339(), to.to_rfc3339());
     let started = Instant::now();
     let c = state.db.lock().map_err(|_| AppError::internal("db lock"))?;
     let lock_wait_ms = started.elapsed().as_millis();
-    let mut st=c.prepare("SELECT b.bucket_start,b.requests,b.response_bytes,b.status_1xx,b.status_2xx,b.status_3xx,b.status_4xx,b.status_5xx,(SELECT COUNT(*) FROM nginx_bucket_clients x WHERE x.bucket_start=b.bucket_start),CASE WHEN b.request_time_count=0 THEN 0 ELSE b.request_time_sum/b.request_time_count END,b.slow_requests FROM nginx_traffic_buckets b WHERE b.bucket_start>=?1 AND b.bucket_start<=?2 ORDER BY b.bucket_start")?;
+    let mut st=c.prepare("SELECT b.bucket_start,b.requests,b.response_bytes,b.status_1xx,b.status_2xx,b.status_3xx,b.status_4xx,b.status_5xx,(SELECT COUNT(*) FROM nginx_bucket_clients x WHERE x.bucket_start=b.bucket_start),CASE WHEN b.request_time_count=0 THEN 0 ELSE b.request_time_sum/b.request_time_count END,b.slow_requests FROM nginx_traffic_buckets b WHERE julianday(b.bucket_start)>=julianday(?1) AND julianday(b.bucket_start)<=julianday(?2) ORDER BY julianday(b.bucket_start)")?;
     let buckets = st
         .query_map(params![from, to], |r| {
             Ok(Bucket {
-                start: r.get(0)?,
+                start: report_time(&r.get::<_, String>(0)?)
+                    .map_err(|_| rusqlite::Error::InvalidQuery)?
+                    .to_rfc3339(),
                 requests: r.get(1)?,
                 response_bytes: r.get(2)?,
                 status: [r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?],
@@ -890,7 +931,7 @@ async fn report(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let grouped = |table: &str, column: &str, limit: i64| -> Result<Vec<NamedCount>, AppError> {
-        let sql=format!("SELECT {column},SUM(requests) n FROM {table} WHERE bucket_start>=?1 AND bucket_start<=?2 GROUP BY {column} ORDER BY n DESC LIMIT {limit}");
+        let sql=format!("SELECT {column},SUM(requests) n FROM {table} WHERE julianday(bucket_start)>=julianday(?1) AND julianday(bucket_start)<=julianday(?2) GROUP BY {column} ORDER BY n DESC LIMIT {limit}");
         let mut s = c.prepare(&sql)?;
         let rows = s.query_map(params![from, to], |r| {
             Ok(NamedCount {
@@ -902,11 +943,11 @@ async fn report(
         Ok(values)
     };
     let (client_rows, unique_clients) = c.query_row(
-        "SELECT COUNT(*),COUNT(DISTINCT client_ip) FROM nginx_bucket_clients WHERE bucket_start>=?1 AND bucket_start<=?2",
+        "SELECT COUNT(*),COUNT(DISTINCT client_ip) FROM nginx_bucket_clients WHERE julianday(bucket_start)>=julianday(?1) AND julianday(bucket_start)<=julianday(?2)",
         params![from, to],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    let totals=c.query_row("SELECT COALESCE(SUM(requests),0),COALESCE(SUM(response_bytes),0),COALESCE(SUM(status_1xx),0),COALESCE(SUM(status_2xx),0),COALESCE(SUM(status_3xx),0),COALESCE(SUM(status_4xx),0),COALESCE(SUM(status_5xx),0),CASE WHEN COALESCE(SUM(request_time_count),0)=0 THEN 0 ELSE SUM(request_time_sum)/SUM(request_time_count) END,COALESCE(SUM(slow_requests),0) FROM nginx_traffic_buckets WHERE bucket_start>=?1 AND bucket_start<=?2",params![from,to],|r|Ok(Totals{requests:r.get(0)?,response_bytes:r.get(1)?,status:[r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?],avg_request_time:r.get(7)?,slow_requests:r.get(8)?,unique_clients}))?;
+    let totals=c.query_row("SELECT COALESCE(SUM(requests),0),COALESCE(SUM(response_bytes),0),COALESCE(SUM(status_1xx),0),COALESCE(SUM(status_2xx),0),COALESCE(SUM(status_3xx),0),COALESCE(SUM(status_4xx),0),COALESCE(SUM(status_5xx),0),CASE WHEN COALESCE(SUM(request_time_count),0)=0 THEN 0 ELSE SUM(request_time_sum)/SUM(request_time_count) END,COALESCE(SUM(slow_requests),0) FROM nginx_traffic_buckets WHERE julianday(bucket_start)>=julianday(?1) AND julianday(bucket_start)<=julianday(?2)",params![from,to],|r|Ok(Totals{requests:r.get(0)?,response_bytes:r.get(1)?,status:[r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?],avg_request_time:r.get(7)?,slow_requests:r.get(8)?,unique_clients}))?;
     let mut platform_counts = HashMap::new();
     let mut os_version_counts = HashMap::new();
     let mut network_counts = HashMap::new();
@@ -914,7 +955,7 @@ async fn report(
     let mut android_model_counts = HashMap::new();
     let mut client_app_counts = HashMap::new();
     let mut device_rows = 0_i64;
-    let mut statement = c.prepare("SELECT platform,os_version,device_model,network_type,client_app,requests FROM nginx_bucket_devices WHERE bucket_start>=?1 AND bucket_start<=?2")?;
+    let mut statement = c.prepare("SELECT platform,os_version,device_model,network_type,client_app,requests FROM nginx_bucket_devices WHERE julianday(bucket_start)>=julianday(?1) AND julianday(bucket_start)<=julianday(?2)")?;
     let rows = statement.query_map(params![from, to], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -983,6 +1024,59 @@ async fn report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_dates_use_beijing_and_respect_explicit_offsets() {
+        let midnight = report_time("2026-11-17T00:00:00").unwrap();
+        assert_eq!(midnight.to_rfc3339(), "2026-11-17T00:00:00+08:00");
+        assert_eq!(
+            midnight.with_timezone(&Utc).to_rfc3339(),
+            "2026-11-16T16:00:00+00:00"
+        );
+        assert_eq!(
+            report_time("2026-11-17T03:57:00+00:00")
+                .unwrap()
+                .to_rfc3339(),
+            "2026-11-17T11:57:00+08:00"
+        );
+        assert!(report_time("invalid").is_err());
+    }
+
+    #[test]
+    fn beijing_day_selects_existing_utc_and_offset_buckets_without_reimport() {
+        let c = Connection::open_in_memory().unwrap();
+        ensure_schema(&c).unwrap();
+        for (start, requests) in [
+            ("2026-11-16T15:30:00+00:00", 100),
+            ("2026-11-16T16:00:00+00:00", 1),
+            ("2026-11-17T00:30:00+08:00", 2),
+            ("2026-11-17T15:30:00+00:00", 3),
+            ("2026-11-17T16:00:00+00:00", 100),
+        ] {
+            c.execute(
+                "INSERT INTO nginx_traffic_buckets(bucket_start,requests) VALUES(?1,?2)",
+                params![start, requests],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO nginx_bucket_clients(bucket_start,client_ip) VALUES(?1,'client')",
+                [start],
+            )
+            .unwrap();
+        }
+        let from = report_time("2026-11-17T00:00:00").unwrap().to_rfc3339();
+        let to = report_time("2026-11-17T23:59:59").unwrap().to_rfc3339();
+        let n: i64 = c.query_row("SELECT SUM(requests) FROM nginx_traffic_buckets WHERE julianday(bucket_start)>=julianday(?1) AND julianday(bucket_start)<=julianday(?2)",params![from,to],|r|r.get(0)).unwrap();
+        assert_eq!(n, 6);
+        let clients: i64 = c.query_row("SELECT COUNT(*) FROM nginx_bucket_clients WHERE julianday(bucket_start)>=julianday(?1) AND julianday(bucket_start)<=julianday(?2)",params![from,to],|r|r.get(0)).unwrap();
+        assert_eq!(clients, 3);
+        let total: i64 = c
+            .query_row("SELECT SUM(requests) FROM nginx_traffic_buckets", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(total, 206); // Querying never rewrites or duplicates stored data.
+    }
 
     #[test]
     fn upstream_targets_follow_configuration_instead_of_fixed_hosts_or_ports() {
