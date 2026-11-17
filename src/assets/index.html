@@ -3654,6 +3654,7 @@
       "IB_CACHE_PATH": "CIS 本地缓存目录",
       "IM_THEME": "即时通信消息主题",
       "SERVER_URL": "应用服务访问地址",
+      "MINIPRO_BASE_URL": "小程序入口地址",
       "AI_IM_PATH": "即时通信数据目录",
       "CL_BASE_PATH": "基础服务共享数据目录",
       "CL_SERVER_URL": "基础服务访问地址",
@@ -3691,7 +3692,7 @@
     const CANGLING_ENVIRONMENT_GROUPS = [
       { id: "database", title: "数据库", hint: "PostgreSQL / PostGIS 连接与 Schema", names: ["JDBC_DRIVER_NAME", "JDBC_URL_PREFIX", "JDBC_DEFAULT_DB", "JDBC_SCHEMA", "POSTGIS_USER", "POSTGIS_MVT_USER"] },
       { id: "messaging", title: "消息服务", hint: "Broker、Kafka 及 MQTT 端口", prefixes: ["CL_BROKER_"], names: ["HOST_KAFKA", "KAFKA_PORT"] },
-      { id: "services", title: "服务地址", hint: "CIS、地图、GeoServer 与前端访问地址", names: ["AI_MAP", "HOST_GEOSERVER_URL", "MAP_FRONT", "CL_SERVER_URL", "SERVER_URL"] },
+      { id: "services", title: "服务地址", hint: "CIS、地图、GeoServer 与前端访问地址", names: ["AI_MAP", "HOST_GEOSERVER_URL", "MAP_FRONT", "CL_SERVER_URL", "SERVER_URL", "MINIPRO_BASE_URL"] },
       { id: "runtime", title: "CIS 运行参数", hint: "命名空间、主题、功能开关与部署自动值", names: ["TZ", "HOST", "AI_K8S_NAMESPACE", "AI_THEME", "IM_THEME", "ENABLE_DOC", "CIS_MONGO_MIGRATION_ENABLED", "KAFKA_RELAY_ENABLED", "CONSOLE_LOG_LEVEL", "WEB_PORT"] },
       { id: "storage", title: "存储路径", hint: "共享、本地缓存与应用数据目录", names: ["DATA_PATH", "VOLUME_DEFAULT_PATH", "IB_CACHE_PATH", "AI_IM_PATH", "CL_BASE_PATH"] },
       { id: "tile", title: "地图与瓦片", hint: "cangling-map 与 cangling-tile 配置", names: ["TILE_CACHE_URL"], prefixes: ["CANGLING_TILE_"] },
@@ -3853,6 +3854,35 @@
       return state.canglingConfig && (state.canglingConfig.applications || []).find((app) => app.id === "cangling-nginx");
     }
 
+    function canglingHostEnvironmentInput() {
+      const rows = document.querySelectorAll('#cangling-environment-rows [data-cangling-kv-row]');
+      const row = Array.from(rows).find(row => row.querySelector('[data-cangling-kv-key]').value.trim() === 'HOST');
+      return row?.querySelector('[data-cangling-kv-value]');
+    }
+
+    function setCanglingHostIp(address) {
+      const config = state.canglingConfig;
+      const input = canglingHostEnvironmentInput();
+      const host = input ? input.value.trim() : config.environment?.HOST;
+      if (host === undefined || host === config.hostIp) {
+        config.environment = { ...(config.environment || {}), HOST: address };
+        if (input) input.value = address;
+      }
+      config.hostIp = address;
+    }
+
+    async function saveCanglingConfig(config) {
+      const saved = await api('/api/cangling/apps/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config),
+      });
+      state.canglingConfig = saved;
+      const input = canglingHostEnvironmentInput();
+      if (input && saved.environment?.HOST !== undefined) input.value = saved.environment.HOST;
+      return saved;
+    }
+
     function updateCanglingHostMode() {
       const input = $("#cangling-hostIp");
       const follow = $("#cangling-host-auto");
@@ -3884,7 +3914,7 @@
         const currentEntry = canglingEntryApplication();
         const currentSelected = canglingSelectedNodes(currentEntry && currentEntry.node)[0];
         if (!state.canglingHostAuto || syncId !== state.canglingHostSync || currentSelected !== selected) return;
-        state.canglingConfig.hostIp = node.address;
+        setCanglingHostIp(node.address);
         if (input) input.value = node.address;
         if (status) status.textContent = `已跟随统一入口节点 ${node.nodeId} · ${node.address}`;
       } catch (error) {
@@ -5213,7 +5243,7 @@
       const hostAuto = $("#cangling-host-auto");
       const hostRefresh = $("#cangling-host-refresh");
       if (hostInput) hostInput.oninput = () => {
-        if (!state.canglingHostAuto) config.hostIp = hostInput.value.trim();
+        if (!state.canglingHostAuto) setCanglingHostIp(hostInput.value.trim());
       };
       if (hostAuto) hostAuto.onchange = () => {
         state.canglingHostAuto = hostAuto.checked;
@@ -5287,11 +5317,7 @@
       if (!(await confirmDialog("恢复苍灵应用的默认部署配置？当前页面中的修改将丢失。", { confirmText: "恢复默认值" }))) return;
       try {
         state.canglingConfig = await api("/api/cangling/apps/defaults");
-        await api("/api/cangling/apps/config", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(state.canglingConfig),
-        });
+        await saveCanglingConfig(state.canglingConfig);
         state.canglingHostAuto = true;
         renderCanglingAppsForm();
         flash("ok", "已恢复并保存默认部署配置");
@@ -5651,11 +5677,7 @@
       if (download) download.disabled = true;
       try {
         const config = readCanglingConfig();
-        await api("/api/cangling/apps/config", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(config),
-        });
+        await saveCanglingConfig(config);
         const result = await api("/api/cangling/apps/apply", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

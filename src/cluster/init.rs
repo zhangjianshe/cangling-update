@@ -68,7 +68,11 @@ http {
   keepalive_timeout 65s;
   keepalive_requests 10000;
   client_max_body_size 0;
-  access_log /var/log/nginx/access.log;
+  log_format cangling '$remote_addr - $remote_user [$time_local] "$request" '
+    '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+    '"$http_x_forwarded_for" upstream=$upstream_addr cache=$upstream_cache_status '
+    'rt=$request_time urt=$upstream_response_time uct=$upstream_connect_time';
+  access_log /var/log/nginx/access.log cangling buffer=64k flush=1s;
   error_log /var/log/nginx/error.log warn;
   server {
     listen 7800;

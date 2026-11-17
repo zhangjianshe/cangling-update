@@ -28,6 +28,12 @@
 
 统计数据写入 `config/cangling.db`，以本机时区的半小时为时间桶，保存请求次数、响应字节、1XX-5XX、独立客户端 IP、请求耗时、URL 与 `upstream=` 后端分布。页面查询和图表只读取 SQLite，不再重新扫描历史日志。若要展示真实客户端和后端分布，access log 应包含 X-Forwarded-For 字段以及 `upstream=$upstream_addr rt=$request_time`。
 
+部署模板由前置 loadbalance 统一记录访问日志，使用包含 X-Forwarded-For、上游地址、缓存状态和请求/上游耗时的 `cangling` 格式；业务 `cangling-nginx` 配置 `access_log off`，保留 `error_log /var/log/nginx/error.log warn`（警告及更严重级别）。统计只采集 loadbalance 日志，避免同一请求重复计数。此时后端分布显示 loadbalance 的直接上游，即业务 Nginx 地址，不包含业务 Nginx 内部的各服务分布。
+
+应用此模板前，必须确认外部业务请求实际经过 loadbalance。K3s LoadBalancer/hostPort 不应占用 loadbalance 的宿主机入口端口（默认 7800），否则入站流量可能被 NAT 直接转入 K3s，绕过访问日志。迁移已有部署时，应先恢复入口链路并验证 loadbalance 日志持续写入，再关闭业务 Nginx 的访问日志；模板修改不会自动变更已有容器或 ConfigMap。前置代理单独直连 5400 的 `/update` 请求也不会计入 loadbalance 日志。
+
+集群初始化创建使用 host 网络、监听 7800 的 Docker loadbalance；苍灵应用部署成功后，会重新读取 `cangling-nginx` Service 的 ClusterIP 和端口并重载 loadbalance 上游。业务 Nginx 模板显式使用 ClusterIP。应用 YAML 保存/部署校验会拒绝占用宿主机 7800 的 LoadBalancer、externalIPs、nodePort、hostPort 和 hostNetwork 配置，也会拒绝将 `cangling-nginx` 改为外部 Service，避免重新生成绕过 loadbalance 的入口。此校验不限制直接在服务器上执行的 kubectl 命令。
+
 终端维度功能启用前已经被主采集器读过的日志，可用独立脚本安全回填。脚本会暂时关闭自动采集开关，快照主采集器的 inode/偏移游标，在单独的工作数据库中解析普通及 `.gz` 日志，最后只原子替换 `nginx_bucket_devices`；不会重复累计请求量、流量或状态码。日志在回填期间新增的内容仍由主采集器恢复后继续处理。
 
 ```bash

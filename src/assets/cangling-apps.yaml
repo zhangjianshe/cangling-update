@@ -53,6 +53,7 @@ data:
   IB_CACHE_PATH: /opt/cangling/local/ibcache
   IM_THEME: base
   SERVER_URL: https://app.cangling.cn/
+  MINIPRO_BASE_URL: https://base.cangling.cn/train/
   AI_IM_PATH: /mnt/cangling/storage/imdata
   CL_BASE_PATH: /mnt/cangling/cangling-share/storage/cldata
   CL_SERVER_URL: http://192.168.3.121:7600/
@@ -337,6 +338,8 @@ data:
     error_log /var/log/nginx/error.log warn;
     events { worker_connections 2048; multi_accept on; use epoll; }
     http {
+      # 访问日志由前置 loadbalance 统一记录；部署时须确保业务流量经过该入口。
+      access_log off;
       include /etc/nginx/mime.types;
       default_type application/octet-stream;
       sendfile on;
@@ -420,6 +423,7 @@ apiVersion: v1
 kind: Service
 metadata: {name: cangling-nginx, namespace: cangling}
 spec:
+  type: ClusterIP
   selector: {app: cangling-nginx}
   ports: [{port: 7600, targetPort: 7600}]
 ---
@@ -428,7 +432,7 @@ kind: Deployment
 metadata: {name: cangling-nginx, namespace: cangling}
 spec:
   replicas: 1
-  strategy: {type: Recreate}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxSurge: 1, maxUnavailable: 0}}
   selector: {matchLabels: {app: cangling-nginx}}
   template:
     metadata: {labels: {app: cangling-nginx}}
@@ -440,6 +444,7 @@ spec:
           image: hub.cangling.cn/cangling/nginx-rtmp:v4.2.35
           imagePullPolicy: IfNotPresent
           ports: [{containerPort: 7600}]
+          readinessProbe: {tcpSocket: {port: 7600}, periodSeconds: 2, failureThreshold: 3}
           volumeMounts:
             - {name: config, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true}
             - {name: html, mountPath: /var/www/html}

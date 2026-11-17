@@ -290,6 +290,7 @@ pub(crate) fn load_saved_config(
         .map_err(|error| AppError::internal(format!("解析旧版集群与存储配置失败：{error}")))?;
     let mut config = default_config();
     settings.apply_to(&mut config);
+    resolve_host_environment(&mut config);
     validate_config(&config)?;
     Ok(config)
 }
@@ -342,6 +343,11 @@ fn migrate_builtin_application_ports(config: &mut CanglingConfig) {
 }
 
 fn migrate_environment_variables(config: &mut CanglingConfig) {
+    resolve_host_environment(config);
+    config
+        .environment
+        .entry("MINIPRO_BASE_URL".into())
+        .or_insert_with(|| "https://base.cangling.cn/train/".into());
     if config.environment.get("CL_BASE_PATH").is_some_and(|value| {
         value == &format!("{TEMPLATE_SHARED_ROOT}/np4/cldata")
             || value == &format!("{}/np4/cldata", config.shared_root)
@@ -408,8 +414,9 @@ async fn saved_config(
 
 async fn save_config(
     State(state): State<crate::state::AppState>,
-    Json(config): Json<CanglingConfig>,
+    Json(mut config): Json<CanglingConfig>,
 ) -> Result<Json<CanglingConfig>, AppError> {
+    resolve_host_environment(&mut config);
     validate_config(&config)?;
     let bytes = serde_json::to_vec_pretty(&config)
         .map_err(|error| AppError::internal(format!("序列化苍灵应用配置失败：{error}")))?;
@@ -886,6 +893,7 @@ fn validate_apply_yaml(yaml: &str) -> Result<usize, AppError> {
                 return Err(AppError::bad(format!("Kubernetes 资源缺少 {field} 字段")));
             }
         }
+        validate_loadbalance_entry(&value)?;
         resources += 1;
     }
     if resources == 0 {
@@ -894,6 +902,54 @@ fn validate_apply_yaml(yaml: &str) -> Result<usize, AppError> {
         ));
     }
     Ok(resources)
+}
+
+// Port 7800 belongs to the host-network Docker loadbalance. Kubernetes NAT
+// can otherwise intercept traffic before it reaches the listening Nginx.
+fn validate_loadbalance_entry(value: &Value) -> Result<(), AppError> {
+    if value_str(value, &["kind"]) == Some("Service") {
+        let spec = &value["spec"];
+        let public = value_str(spec, &["type"]) == Some("LoadBalancer")
+            || spec["externalIPs"]
+                .as_sequence()
+                .is_some_and(|v| !v.is_empty());
+        let ports = spec["ports"].as_sequence();
+        let reserved = ports.is_some_and(|ports| {
+            ports.iter().any(|p| {
+                (public && p["port"].as_u64() == Some(7800)) || p["nodePort"].as_u64() == Some(7800)
+            })
+        });
+        let bypass = metadata_name(value) == Some("cangling-nginx")
+            && (value_str(spec, &["type"]).unwrap_or("ClusterIP") != "ClusterIP" || public);
+        if reserved || bypass {
+            return Err(AppError::bad("7800 由 Docker loadbalance 独占，业务入口必须通过 loadbalance 转发到 cangling-nginx ClusterIP；请移除冲突的外部 Service 配置"));
+        }
+    }
+    if let Some(map) = value.as_mapping() {
+        let host_network_port = value["hostNetwork"].as_bool() == Some(true)
+            && ["containers", "initContainers"].iter().any(|field| {
+                value[*field].as_sequence().is_some_and(|containers| {
+                    containers.iter().any(|c| {
+                        c["ports"].as_sequence().is_some_and(|ports| {
+                            ports
+                                .iter()
+                                .any(|p| p["containerPort"].as_u64() == Some(7800))
+                        })
+                    })
+                })
+            });
+        if value["hostPort"].as_u64() == Some(7800) || host_network_port {
+            return Err(AppError::bad("宿主机 7800 端口由 Docker loadbalance 独占，不能配置 Kubernetes hostPort/hostNetwork 7800"));
+        }
+        for child in map.values() {
+            validate_loadbalance_entry(child)?;
+        }
+    } else if let Some(items) = value.as_sequence() {
+        for child in items {
+            validate_loadbalance_entry(child)?;
+        }
+    }
+    Ok(())
 }
 
 fn find_kubectl() -> Option<(PathBuf, bool)> {
@@ -1502,6 +1558,9 @@ fn image_with_prefix(prefix: &str, image: &str) -> String {
 }
 
 fn render_manifest(config: &CanglingConfig) -> Result<(String, Vec<String>), AppError> {
+    let mut resolved = config.clone();
+    resolve_host_environment(&mut resolved);
+    let config = &resolved;
     validate_config(config)?;
     let expected = default_config();
     let expected_ids: HashSet<&str> = expected
@@ -1994,6 +2053,18 @@ fn patch_namespace(doc: &mut Value, namespace: &str) {
     replace_named_string(doc, "namespace", DEFAULT_NAMESPACE, namespace);
 }
 
+fn resolve_host_environment(config: &mut CanglingConfig) {
+    if config
+        .environment
+        .get("HOST")
+        .map_or(true, |host| host == DEFAULT_HOST_IP)
+    {
+        config
+            .environment
+            .insert("HOST".into(), config.host_ip.clone());
+    }
+}
+
 fn patch_environment(
     doc: &mut Value,
     config: &CanglingConfig,
@@ -2017,7 +2088,6 @@ fn patch_environment(
     let cis_map = port("cis-map", 0)?;
     let web = port("cangling-nginx", 0)?;
     for (name, value) in [
-        ("HOST", config.host_ip.clone()),
         ("HOST_KAFKA", config.host_ip.clone()),
         ("WEB_PORT", web.to_string()),
         ("DATA_PATH", config.shared_root.clone()),
@@ -2869,6 +2939,40 @@ mod tests {
     }
 
     #[test]
+    fn host_environment_is_resolved_before_display_save_and_render() {
+        let mut config = default_config();
+        config.host_ip = "10.0.0.150".into();
+        migrate_environment_variables(&mut config);
+        assert_eq!(config.environment["HOST"], "10.0.0.150");
+        for host in ["10.0.0.150", "broker.example.com", DEFAULT_HOST_IP] {
+            config.environment.insert("HOST".into(), host.into());
+            resolve_host_environment(&mut config);
+            let saved = serde_json::to_vec(&config).unwrap();
+            let mut loaded: CanglingConfig = serde_json::from_slice(&saved).unwrap();
+            migrate_environment_variables(&mut loaded);
+            assert_eq!(loaded.environment["HOST"], config.environment["HOST"]);
+            let (yaml, _) = render_manifest(&loaded).unwrap();
+            let docs: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
+                .map(|doc| Value::deserialize(doc).unwrap())
+                .collect();
+            let env = docs
+                .iter()
+                .find(|d| metadata_name(d) == Some("cangling-env"))
+                .unwrap();
+            assert_eq!(
+                value_str(env, &["data", "HOST"]),
+                Some(config.environment["HOST"].as_str())
+            );
+            if host == "broker.example.com" {
+                assert_eq!(loaded.environment["HOST"], host);
+            }
+        }
+        config.environment.remove("HOST");
+        resolve_host_environment(&mut config);
+        assert_eq!(config.environment["HOST"], "10.0.0.150");
+    }
+
+    #[test]
     fn environment_migration_removes_unused_keys_and_renames_tile_settings() {
         let mut config = default_config();
         config
@@ -2967,6 +3071,48 @@ mod tests {
         assert!(validate_apply_yaml("").is_err());
         assert!(validate_apply_yaml("kind: ConfigMap\nmetadata:\n  name: sample\n").is_err());
         assert!(validate_apply_yaml("- one\n- two\n").is_err());
+    }
+
+    #[test]
+    fn deployment_reserves_host_7800_for_docker_loadbalance() {
+        let (yaml, _) = render_manifest(&default_config()).unwrap();
+        assert!(validate_apply_yaml(&yaml).is_ok());
+        let docs: Vec<Value> = serde_yaml::Deserializer::from_str(&yaml)
+            .map(|doc| Value::deserialize(doc).unwrap())
+            .collect();
+        let nginx = docs
+            .iter()
+            .find(|d| {
+                metadata_name(d) == Some("cangling-nginx")
+                    && value_str(d, &["kind"]) == Some("Service")
+            })
+            .unwrap();
+        assert_eq!(value_str(nginx, &["spec", "type"]), Some("ClusterIP"));
+        assert!(docs
+            .iter()
+            .all(|d| metadata_name(d) != Some("cangling-nginx-entry")));
+
+        for spec in [
+            "type: LoadBalancer\n  ports: [{port: 7800, targetPort: 7600}]",
+            "externalIPs: [10.0.0.150]\n  ports: [{port: 7800}]",
+            "type: NodePort\n  ports: [{port: 7600, nodePort: 7800}]",
+        ] {
+            let yaml = format!("apiVersion: v1\nkind: Service\nmetadata: {{name: alternate-entry}}\nspec:\n  {spec}\n");
+            assert!(validate_apply_yaml(&yaml).is_err(), "{yaml}");
+        }
+        for spec in [
+            "containers: [{name: nginx, ports: [{containerPort: 7600, hostPort: 7800}]}]",
+            "hostNetwork: true\n  containers: [{name: nginx, ports: [{containerPort: 7800}]}]",
+        ] {
+            let yaml = format!(
+                "apiVersion: v1\nkind: Pod\nmetadata: {{name: alternate-entry}}\nspec:\n  {spec}\n"
+            );
+            assert!(validate_apply_yaml(&yaml).is_err(), "{yaml}");
+        }
+        let bypass = "apiVersion: v1\nkind: Service\nmetadata: {name: cangling-nginx}\nspec: {type: LoadBalancer, ports: [{port: 7600}]}";
+        assert!(validate_apply_yaml(bypass).is_err());
+        let mqtt = "apiVersion: v1\nkind: Service\nmetadata: {name: cangling-broker-external}\nspec: {type: LoadBalancer, ports: [{port: 7500}]}";
+        assert!(validate_apply_yaml(mqtt).is_ok());
     }
 
     #[test]
