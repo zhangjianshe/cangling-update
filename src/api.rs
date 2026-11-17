@@ -61,6 +61,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/create-directory", post(create_directory))
         .route("/api/install-resources", get(install_resources_list))
         .route(
+            "/api/install-resources/refresh",
+            post(install_resources_refresh),
+        )
+        .route(
             "/api/install-resources/content",
             get(install_resource_file_get),
         )
@@ -1781,6 +1785,12 @@ async fn install_resources_list(
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
     Ok(Json(entries))
+}
+
+async fn install_resources_refresh(
+    State(state): State<AppState>,
+) -> Result<Json<crate::repo::RepoRefreshResult>, AppError> {
+    crate::repo::refresh_resources(&state.paths).await.map(Json)
 }
 
 async fn install_resource_file_get(

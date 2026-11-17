@@ -6495,6 +6495,7 @@
         <div id="flash" hidden></div>
         <div class="title-row">
           <div><h2>安装资源</h2><div class="path">浏览 cangling-repo 提供的多架构离线安装资源</div></div>
+          <button class="btn primary" id="install-resources-update" type="button">资源更新</button>
         </div>
         <div class="card" id="install-resources-panel">
           <div class="repo-browse">
@@ -6517,7 +6518,29 @@
         </div>`;
       $("#install-resources-up").onclick = installResourcesUp;
       $("#install-resources-refresh").onclick = loadInstallResources;
+      $("#install-resources-update").onclick = updateInstallResources;
       await loadInstallResources();
+    }
+
+    async function updateInstallResources() {
+      const button = $("#install-resources-update");
+      if (!button) return;
+      if (!(await confirmDialog("将使用 cangling-keeper 相同的仓库帐号更新 cangling-repo。更新完成前继续使用当前资源，是否继续？", { confirmText: "资源更新" }))) return;
+      button.disabled = true;
+      button.textContent = "更新中…";
+      flash("ok", "正在拉取仓库及 Git LFS 资源，文件较大时可能需要较长时间…");
+      try {
+        const result = await api("/api/install-resources/refresh", { method: "POST" });
+        installResources.path = "";
+        resetInstallResourcePreview();
+        flash("ok", `资源更新完成：${result.branch} · ${String(result.commit || "").slice(0, 12)}`);
+        await loadInstallResources();
+      } catch (error) {
+        flash("err", "资源更新失败：" + error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "资源更新";
+      }
     }
 
     async function loadInstallResources() {
