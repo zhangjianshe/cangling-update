@@ -1,7 +1,7 @@
 //! 集群初始化：master 一键安装本机与各 worker 的基线软件（全部来自程序目录下的 `cangling-repo/`）。
 //!
-//! master 角色：禁用 Swap，安装 git、samba、CIFS/NFS、docker、k3s-server（含 Traefik 端口 8020/8443）、k9s。
-//! worker 角色：禁用 Swap，安装 git、samba、CIFS/NFS、docker、k3s-agent（携带 K3S_URL/K3S_TOKEN 加入集群）。
+//! master 角色：禁用 Swap，安装 git/git-lfs、samba、CIFS/NFS、docker、k3s-server（含 Traefik 端口 8020/8443）、k9s。
+//! worker 角色：禁用 Swap，安装 git/git-lfs、samba、CIFS/NFS、docker、k3s-agent（携带 K3S_URL/K3S_TOKEN 加入集群）。
 
 use crate::cluster::Role;
 use crate::db;
@@ -27,6 +27,7 @@ use uuid::Uuid;
 pub const MASTER_SOFTWARE: &[&str] = &[
     "禁用 Swap",
     "git",
+    "git-lfs",
     "samba",
     "cifs-utils",
     "nfs-common",
@@ -39,6 +40,7 @@ pub const MASTER_SOFTWARE: &[&str] = &[
 pub const WORKER_SOFTWARE: &[&str] = &[
     "禁用 Swap",
     "git",
+    "git-lfs",
     "samba",
     "cifs-utils",
     "nfs-common",
@@ -1787,6 +1789,17 @@ mod tests {
         assert!(!WORKER_SOFTWARE.contains(&"nfs-server"));
         assert!(MASTER_SOFTWARE.contains(&"nfs-common"));
         assert!(WORKER_SOFTWARE.contains(&"nfs-common"));
+    }
+
+    #[test]
+    fn git_lfs_is_repaired_on_every_cluster_node_after_git() {
+        for software in [MASTER_SOFTWARE, WORKER_SOFTWARE] {
+            assert!(software.contains(&"git-lfs"));
+            assert!(
+                software.iter().position(|item| *item == "git")
+                    < software.iter().position(|item| *item == "git-lfs")
+            );
+        }
     }
 
     #[test]
