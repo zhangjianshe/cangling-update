@@ -6525,15 +6525,15 @@
     async function updateInstallResources() {
       const button = $("#install-resources-update");
       if (!button) return;
-      if (!(await confirmDialog("将使用 cangling-keeper 相同的仓库帐号更新 cangling-repo。更新完成前继续使用当前资源，是否继续？", { confirmText: "资源更新" }))) return;
+      if (!(await confirmDialog("将从网盘同步 cangling-repo 安装资源。支持断点续传和 SHA-256 校验，完整同步后切换；同步失败继续保留当前资源，是否继续？", { confirmText: "资源更新" }))) return;
       button.disabled = true;
       button.textContent = "更新中…";
-      flash("ok", "正在拉取仓库及 Git LFS 资源，文件较大时可能需要较长时间…");
+      flash("ok", "正在同步网盘资源（支持断点续传），文件较大时可能需要较长时间…");
       try {
         const result = await api("/api/install-resources/refresh", { method: "POST" });
         installResources.path = "";
         resetInstallResourcePreview();
-        flash("ok", `资源更新完成：${result.branch} · ${String(result.commit || "").slice(0, 12)}`);
+        flash("ok", `网盘资源同步完成：${result.totalFiles} 文件 · 下载 ${result.downloaded} · 复用 ${result.skipped} · 续传 ${result.resumed}`);
         await loadInstallResources();
       } catch (error) {
         flash("err", "资源更新失败：" + error.message);

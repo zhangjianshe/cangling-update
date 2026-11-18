@@ -366,7 +366,7 @@ fn inspect(
             }
             if plan.package_stamp.is_none() {
                 plan.blockers.push(
-                    "离线包缺失或未完整拉取 Git LFS；请同步 cangling-repo/accelerators。".into(),
+                    "离线包缺失或网盘资源未完整同步；请同步 cangling-repo/accelerators。".into(),
                 );
             }
             if vendor == "Ascend" {

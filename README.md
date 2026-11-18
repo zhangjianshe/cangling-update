@@ -250,7 +250,7 @@ repo/
 
 `cangling-zot` 项目升级面板提供“检查环境”按钮。该操作以主节点 IP 为 `hub.cangling.cn` 地址，幂等更新本机及所有 k3s 工作节点的 `/etc/hosts`，把项目中的 `ca/cangling-ca.crt` 写入 `/etc/rancher/k3s/cangling-ca.crt`，并在保留其它仓库配置的前提下向 `/etc/rancher/k3s/registries.yaml` 注入 `hub.cangling.cn` mirror 与 CA 配置，随后重启 `k3s` / `k3s-agent`。离线或执行失败的节点会在操作结果中单独列出。
 
-> 离线安装集独立维护在 `git@git.cangling.cn:operation/cangling-repo.git`。由维护中心「软件同步」写入 `repo/cangling-repo/`，本程序不再克隆或拉取。
+> 离线安装集改为从 `https://soft.cangling.cn:22002` 的网盘目录同步下载，不再依赖 `cangling-repo.git` 或 Git LFS。安装资源页的「资源更新」直接同步网盘，完整校验后替换程序目录旁的 `cangling-repo/`；同步失败保留旧资源。
 >
 > 本仓库的 `repo-templates/` 只保留安装脚本模板与下载脚本（fetch-*.sh），用于向 cangling-repo 补充新离线包。仍兼容旧布局（平台目录直接放在 `repo/` 下）。
 
@@ -720,3 +720,10 @@ sudo cangling-update port-forward \
 
 
 Powered by imagebot.cn
+
+
+### 网盘安装资源同步
+
+程序内置 cangling-repo 网盘地址、目录 ID 和只读 key；可用 `CANGLING_DRIVE_URL`、`CANGLING_DRIVE_DIRECTORY`、`CANGLING_DRIVE_TOKEN` 覆盖，不再读取旧的 `CANGLING_REPO_*` Git 凭证。读取 key 只放在请求头中，拒绝 HTTP 重定向；非本机地址必须使用 HTTPS。
+
+同步会递归分页读取目录，对已有文件校验 SHA-256 后复用，下载到同一磁盘的隐藏暂存目录，支持 Range 断点续传。完成后再次核对远端快照和全部文件摘要，再切换当前资源目录；远端已删除的文件、旧 Git 元数据和本地额外文件仅在成功切换后移除。下载失败或中断保留当前可用资源及断点，重新点击「资源更新」即可继续。Linux 下自动恢复脚本、ELF 程序的执行权限。同步锁跨进程生效，异常退出后的发布记录会在下次同步时恢复。

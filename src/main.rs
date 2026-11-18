@@ -30,6 +30,7 @@ mod paths;
 mod port_forward;
 mod progress;
 mod repo;
+mod drive_sync;
 mod self_upgrade;
 mod service;
 mod state;

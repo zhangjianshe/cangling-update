@@ -24,8 +24,7 @@ use crate::state::AppState;
 use axum::http::{header, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -81,7 +80,7 @@ const PLATFORMS: &[Platform] = &[
     },
 ];
 
-/// keeper 同步的 Git 离线安装集（原 repo-templates）。
+/// keeper / 本程序从网盘同步的离线安装集。
 pub const CANGLING_REPO_SET: &str = "cangling-repo";
 /// keeper 同步的维护中心 Manifest 集。
 pub const NP4_SET: &str = "np4";
@@ -91,9 +90,6 @@ pub const NP4_UPDATE_VERSION: &str = "latest";
 /// 初始化/检查集群及安装资源浏览共用的仓库目录名。
 pub const INSTALL_RESOURCES_DIR: &str = "cangling-repo";
 
-const DEFAULT_GIT_URL: &str = "https://code.cangling.cn:22002/operation/cangling-repo.git";
-const DEFAULT_GIT_USER: &str = "cangling-update";
-const DEFAULT_GIT_TOKEN: &str = "94894bb4dbedb33707c868872081bd6e8c02bc8b";
 static REPO_REFRESHING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Serialize)]
@@ -102,6 +98,10 @@ pub struct RepoRefreshResult {
     pub commit: String,
     pub branch: String,
     pub root: String,
+    pub downloaded: u64,
+    pub skipped: u64,
+    pub resumed: u64,
+    pub total_files: u64,
 }
 
 struct RefreshGuard;
@@ -307,242 +307,18 @@ pub fn repo_root(paths: &AppPaths) -> PathBuf {
     paths.exe_dir.join(INSTALL_RESOURCES_DIR)
 }
 
-/// 从官方仓库刷新安装资源。Git 元数据保存在 config/repo-cache 下，发布目录
-/// 只包含资源文件，不保留 `.git`，便于直接复制为离线安装包。
+/// From the authenticated drive directory. The previous resource snapshot remains
+/// available until every download and SHA-256 verification succeeds.
 pub async fn refresh_resources(paths: &AppPaths) -> Result<RepoRefreshResult, AppError> {
     if REPO_REFRESHING.swap(true, Ordering::AcqRel) {
         return Err(AppError::conflict("安装资源正在更新，请稍后再试"));
     }
     let _guard = RefreshGuard;
-    let paths = paths.clone();
-    tokio::task::spawn_blocking(move || refresh_resources_blocking(&paths))
-        .await
-        .map_err(|error| AppError::internal(format!("资源更新任务异常：{error}")))?
-}
-
-fn refresh_resources_blocking(paths: &AppPaths) -> Result<RepoRefreshResult, AppError> {
-    let url = std::env::var("CANGLING_REPO_URL").unwrap_or_else(|_| DEFAULT_GIT_URL.into());
-    let user = std::env::var("CANGLING_REPO_USERNAME").unwrap_or_else(|_| DEFAULT_GIT_USER.into());
-    let token = std::env::var("CANGLING_REPO_TOKEN").unwrap_or_else(|_| DEFAULT_GIT_TOKEN.into());
-    let requested_branch = std::env::var("CANGLING_REPO_BRANCH").unwrap_or_default();
-    let auth_url = git_auth_url(&url, &user, &token)?;
-    let cache_parent = paths.config_dir.join("repo-cache");
-    let bare = cache_parent.join("cangling-repo.git");
-    std::fs::create_dir_all(&cache_parent)
-        .map_err(|error| AppError::internal(format!("无法创建仓库缓存目录：{error}")))?;
-
-    if !bare.join("HEAD").is_file() {
-        if bare.exists() {
-            std::fs::remove_dir_all(&bare).map_err(|error| {
-                AppError::internal(format!("无法清理不完整仓库缓存：{error}"))
-            })?;
-        }
-        run_git(
-            None,
-            &["clone", "--bare", "--depth", "1", "--no-tags", &auth_url, &bare.to_string_lossy()],
-            &token,
-        )?;
-        run_git(
-            Some(&bare),
-            &["remote", "set-url", "origin", &url],
-            &token,
-        )?;
-    }
-
-    let branch = if requested_branch.trim().is_empty() {
-        run_git(Some(&bare), &["symbolic-ref", "--short", "HEAD"], &token)?
-            .trim_start_matches("refs/heads/")
-            .to_string()
-    } else {
-        requested_branch.trim().to_string()
-    };
-    if branch.is_empty() || branch.contains(|c: char| c.is_whitespace() || c == ':' || c == '\\') {
-        return Err(AppError::bad("cangling-repo 分支名无效"));
-    }
-    let refspec = format!("+refs/heads/{branch}:refs/heads/{branch}");
-    run_git(
-        Some(&bare),
-        &["fetch", "--depth", "1", "--no-tags", &auth_url, &refspec],
-        &token,
-    )?;
-    run_git(Some(&bare), &["symbolic-ref", "HEAD", &format!("refs/heads/{branch}")], &token)?;
-    let commit = run_git(Some(&bare), &["rev-parse", "HEAD"], &token)?;
-
-    let root = repo_root(paths);
-    let parent = root
-        .parent()
-        .ok_or_else(|| AppError::internal("安装资源目录无父目录"))?;
-    let id = uuid::Uuid::new_v4().to_string();
-    let staging = parent.join(format!(".{INSTALL_RESOURCES_DIR}.staging-{id}"));
-    let previous = parent.join(format!(".{INSTALL_RESOURCES_DIR}.previous-{id}"));
-    run_git(
-        None,
-        &["clone", "--no-checkout", &bare.to_string_lossy(), &staging.to_string_lossy()],
-        &token,
-    )?;
-    let staged = (|| -> Result<(), AppError> {
-        run_git(Some(&staging), &["checkout", "--force", &branch], &token)?;
-        run_git(Some(&staging), &["remote", "set-url", "origin", &auth_url], &token)?;
-        if root.is_dir() {
-            seed_lfs_cache_from_existing(&staging, &root, &token)?;
-        }
-        run_git(Some(&staging), &["lfs", "pull", "origin", &branch], &token)?;
-        run_git(Some(&staging), &["remote", "set-url", "origin", &url], &token)?;
-        std::fs::remove_dir_all(staging.join(".git"))
-            .map_err(|error| AppError::internal(format!("无法移除临时 Git 元数据：{error}")))?;
-        Ok(())
-    })();
-    if let Err(error) = staged {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(error);
-    }
-
-    if root.exists() {
-        std::fs::rename(&root, &previous)
-            .map_err(|error| AppError::internal(format!("无法暂存当前安装资源：{error}")))?;
-    }
-    if let Err(error) = std::fs::rename(&staging, &root) {
-        if previous.exists() {
-            let _ = std::fs::rename(&previous, &root);
-        }
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(AppError::internal(format!("无法发布新安装资源：{error}")));
-    }
-    if previous.exists() {
-        let _ = std::fs::remove_dir_all(&previous);
-    }
-    Ok(RepoRefreshResult {
-        commit,
-        branch,
-        root: root.display().to_string(),
-    })
-}
-
-fn git_auth_url(url: &str, user: &str, token: &str) -> Result<String, AppError> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| AppError::bad("cangling-repo 地址必须是 HTTP(S) URL"))?;
-    if !matches!(scheme, "http" | "https") {
-        return Err(AppError::bad("cangling-repo 地址必须是 HTTP(S) URL"));
-    }
-    let encode = |value: &str| {
-        value.bytes().fold(String::new(), |mut out, byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                out.push(byte as char);
-            } else {
-                out.push_str(&format!("%{byte:02X}"));
-            }
-            out
-        })
-    };
-    Ok(format!("{scheme}://{}:{}@{}", encode(user), encode(token), rest.rsplit_once('@').map_or(rest, |(_, tail)| tail)))
-}
-
-fn run_git(cwd: Option<&FsPath>, args: &[&str], token: &str) -> Result<String, AppError> {
-    let mut command = std::process::Command::new("git");
-    if let Some(cwd) = cwd {
-        command.arg("-C").arg(cwd);
-    }
-    let output = command
-        .args(["-c", "http.version=HTTP/1.1", "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60"])
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_LFS_SKIP_SMUDGE", "1")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| AppError::internal(format!("无法执行 git：{error}")))?;
-    if !output.status.success() {
-        let mut message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if !token.is_empty() {
-            message = message.replace(token, "***");
-        }
-        return Err(AppError::internal(if message.is_empty() {
-            format!("git 命令失败（退出码 {:?}）", output.status.code())
-        } else {
-            message
-        }));
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn seed_lfs_cache_from_existing(
-    staging: &FsPath,
-    existing: &FsPath,
-    token: &str,
-) -> Result<(), AppError> {
-    let listing = run_git(Some(staging), &["lfs", "ls-files", "-l"], token)?;
-    for line in listing.lines() {
-        let mut fields = line.splitn(3, ' ');
-        let Some(oid) = fields.next() else { continue };
-        let _marker = fields.next();
-        let Some(relative) = fields.next() else { continue };
-        let relative = relative.trim();
-        if oid.len() != 64
-            || !oid.bytes().all(|byte| byte.is_ascii_hexdigit())
-            || relative.is_empty()
-        {
-            continue;
-        }
-        let relative_path = FsPath::new(relative);
-        if relative_path.is_absolute()
-            || relative_path
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            continue;
-        }
-        let source = existing.join(relative_path);
-        if !source.is_file() || sha256_file(&source)? != oid.to_ascii_lowercase() {
-            continue;
-        }
-        let object = staging
-            .join(".git/lfs/objects")
-            .join(&oid[0..2])
-            .join(&oid[2..4])
-            .join(oid);
-        if object.is_file() {
-            continue;
-        }
-        if let Some(parent) = object.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                AppError::internal(format!("无法创建 LFS 缓存目录：{error}"))
-            })?;
-        }
-        if std::fs::hard_link(&source, &object).is_err() {
-            std::fs::copy(&source, &object).map_err(|error| {
-                AppError::internal(format!("无法复用已有资源 {}：{error}", source.display()))
-            })?;
-        }
-        let target = staging.join(relative_path);
-        if target.is_file() {
-            std::fs::remove_file(&target).map_err(|error| {
-                AppError::internal(format!("无法替换临时资源 {}：{error}", target.display()))
-            })?;
-            if std::fs::hard_link(&source, &target).is_err() {
-                std::fs::copy(&source, &target).map_err(|error| {
-                    AppError::internal(format!("无法复用已有资源 {}：{error}", source.display()))
-                })?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn sha256_file(path: &FsPath) -> Result<String, AppError> {
-    let mut file = std::fs::File::open(path)
-        .map_err(|error| AppError::internal(format!("无法读取 {}：{error}", path.display())))?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|error| AppError::internal(format!("无法校验 {}：{error}", path.display())))?;
-        if count == 0 {
-            break;
-        }
-        digest.update(&buffer[..count]);
-    }
-    Ok(format!("{:x}", digest.finalize()))
+    let root=repo_root(paths);
+    let report=crate::drive_sync::synchronize(&crate::drive_sync::Config::default(),&root,|progress|{
+        tracing::info!(phase=progress.phase,current=progress.current,total=progress.total,file=%progress.path,bytes_done=progress.bytes_done,bytes_total=progress.bytes_total,overall_done=progress.overall_done,overall_total=progress.overall_total,"网盘资源同步");
+    }).await.map_err(AppError::internal)?;
+    Ok(RepoRefreshResult {commit:report.snapshot,branch:"HTTP 网盘".into(),root:root.display().to_string(),downloaded:report.downloaded,skipped:report.skipped,resumed:report.resumed,total_files:report.total})
 }
 
 pub fn packages_root(repo: &FsPath) -> PathBuf {
