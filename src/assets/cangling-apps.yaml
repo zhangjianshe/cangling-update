@@ -130,7 +130,7 @@ spec:
       nodeSelector: {kubernetes.io/hostname: n01}
       containers:
         - name: cangling-broker
-          image: hub.cangling.cn/cangling/cangling-broker:0.1.73
+          image: hub.cangling.cn/cangling/cangling-broker:0.1.75
           imagePullPolicy: IfNotPresent
           envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
           ports: [{name: broker, containerPort: 7500}, {name: web, containerPort: 7501}, {name: mqtt, containerPort: 7883}]
@@ -165,7 +165,7 @@ spec:
       nodeSelector: {kubernetes.io/hostname: n01}
       containers:
         - name: cangling-tile
-          image: hub.cangling.cn/cangling/cangling-tile:0.1.21
+          image: hub.cangling.cn/cangling/cangling-tile:0.1.23
           imagePullPolicy: IfNotPresent
           envFrom: [{configMapRef: {name: cangling-env}}, {secretRef: {name: cangling-secret}}]
           ports: [{containerPort: 7601}]
@@ -481,7 +481,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: cangling-map
-          image: hub.cangling.cn/cangling/cangling-map:0.1.25
+          image: hub.cangling.cn/cangling/cangling-map:0.1.27
           imagePullPolicy: IfNotPresent
           env:
             - {name: MAP_SERVER_ADDRESS, value: "0.0.0.0:3000"}

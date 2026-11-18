@@ -298,13 +298,14 @@ pub(crate) fn load_saved_config(
 fn migrate_builtin_image_versions(config: &mut CanglingConfig) {
     for app in &mut config.applications {
         app.image = match app.image.as_str() {
-            "cangling-broker:0.1.60" => "cangling-broker:0.1.73".into(),
-            "cangling-tile:0.1.20" => "cangling-tile:0.1.21".into(),
+            "cangling-broker:0.1.60" | "cangling-broker:0.1.73" => "cangling-broker:0.1.75".into(),
+            "cangling-tile:0.1.20" | "cangling-tile:0.1.21" => "cangling-tile:0.1.23".into(),
             "cangling-map:0.1.11"
             | "cangling-map:0.1.21"
             | "cangling-map:0.1.22"
             | "cangling-map:0.1.23"
-            | "cangling-map:0.1.24" => "cangling-map:0.1.25".into(),
+            | "cangling-map:0.1.24"
+            | "cangling-map:0.1.25" => "cangling-map:0.1.27".into(),
             _ => continue,
         };
     }
@@ -1323,7 +1324,7 @@ fn default_config() -> CanglingConfig {
             "消息代理",
             ApplicationGroup::Single,
             WorkloadKind::Deployment,
-            "cangling-broker:0.1.73",
+            "cangling-broker:0.1.75",
             &[7500, 7501, 7883],
             "/opt/cangling-core/broker",
         ),
@@ -1332,7 +1333,7 @@ fn default_config() -> CanglingConfig {
             "瓦片缓存",
             ApplicationGroup::Single,
             WorkloadKind::Deployment,
-            "cangling-tile:0.1.21",
+            "cangling-tile:0.1.23",
             &[7601],
             "/opt/cangling/local/tiledata",
         ),
@@ -1341,7 +1342,7 @@ fn default_config() -> CanglingConfig {
             "地图服务",
             ApplicationGroup::Single,
             WorkloadKind::Deployment,
-            "cangling-map:0.1.25",
+            "cangling-map:0.1.27",
             &[3000],
             "/opt/cangling/local/cangling-map",
         ),
@@ -3126,6 +3127,35 @@ mod tests {
     }
 
     #[test]
+    fn builtin_image_migration_preserves_custom_versions() {
+        let mut config = default_config();
+        for (id, old) in [
+            ("cangling-broker", "cangling-broker:0.1.73"),
+            ("cangling-map", "cangling-map:0.1.25"),
+            ("cangling-tile", "cangling-tile:0.1.21"),
+        ] {
+            config
+                .applications
+                .iter_mut()
+                .find(|app| app.id == id)
+                .unwrap()
+                .image = old.into();
+        }
+        migrate_builtin_image_versions(&mut config);
+        for expected in default_config().applications {
+            let actual = config
+                .applications
+                .iter()
+                .find(|app| app.id == expected.id)
+                .unwrap();
+            assert_eq!(actual.image, expected.image);
+        }
+        config.applications[1].image = "custom.example/broker:stable".into();
+        migrate_builtin_image_versions(&mut config);
+        assert_eq!(config.applications[1].image, "custom.example/broker:stable");
+    }
+
+    #[test]
     fn defaults_describe_current_topology() {
         let config = default_config();
         assert_eq!(config.image_prefix, DEFAULT_IMAGE_PREFIX);
@@ -3196,13 +3226,13 @@ mod tests {
             .unwrap();
         assert_eq!(map.group, ApplicationGroup::Single);
         assert_eq!(map.replicas, 1);
-        assert_eq!(map.image, "cangling-map:0.1.25");
+        assert_eq!(map.image, "cangling-map:0.1.27");
         let tile = config
             .applications
             .iter()
             .find(|app| app.id == "cangling-tile")
             .unwrap();
-        assert_eq!(tile.image, "cangling-tile:0.1.21");
+        assert_eq!(tile.image, "cangling-tile:0.1.23");
         let broker = config
             .applications
             .iter()
