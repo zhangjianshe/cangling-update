@@ -403,8 +403,73 @@ async fn preflight(
     Ok(Json(result))
 }
 
-async fn list() -> Result<Json<JarList>, AppError> {
+static SEED_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Seed the default JAR set only when no uploaded JAR exists. Branch directories
+/// are intentionally excluded: they contain alternative builds of the same names.
+pub(crate) async fn seed_from_repo(exe_dir: &Path, incoming: &Path) -> Result<(), AppError> {
+    let _guard = SEED_LOCK.lock().await;
+    let source = exe_dir.join("cangling-repo/apps/jars");
+    let incoming = incoming.to_path_buf();
+    tokio::task::spawn_blocking(move || seed_empty_jar_directory(&source, &incoming))
+        .await
+        .map_err(|error| AppError::internal(format!("初始化 JAR 上传目录失败：{error}")))?
+}
+
+fn seed_empty_jar_directory(source: &Path, incoming: &Path) -> Result<(), AppError> {
+    std::fs::create_dir_all(incoming)?;
+    for item in std::fs::read_dir(incoming)? {
+        let item = item?;
+        if item.file_type()?.is_file() && is_jar_name(&item.file_name().to_string_lossy()) {
+            return Ok(());
+        }
+    }
+    let entries = match std::fs::read_dir(source) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut sources = Vec::new();
+    for item in entries {
+        let item = item?;
+        let name = item.file_name().to_string_lossy().into_owned();
+        if !item.file_type()?.is_file() || !is_jar_name(&name) { continue; }
+        let file = std::fs::File::open(item.path())?;
+        let size = file.metadata()?.len();
+        if size == 0 || size > MAX_JAR_BYTES { continue; }
+        sources.push((name, file, size));
+    }
+    if sources.is_empty() { return Ok(()); }
+    sources.sort_by(|a, b| a.0.cmp(&b.0));
+    let staging = incoming.join(format!(".seed-{}", Uuid::new_v4()));
+    std::fs::create_dir(&staging)?;
+    let result = (|| {
+        // Stage every complete copy before making any of this set visible.
+        for (name, file, size) in &mut sources {
+            let mut copy = std::fs::File::create(staging.join(&name))?;
+            if std::io::copy(file, &mut copy)? != *size {
+                return Err(AppError::internal(format!("资源 JAR 复制不完整：{name}")));
+            }
+            copy.sync_all()?;
+        }
+        for (name, _, _) in &sources {
+            // Link the staged copy, never the resource source. This atomically
+            // refuses to replace an upload that arrived while copying.
+            match std::fs::hard_link(staging.join(name), incoming.join(name)) {
+                Ok(()) => tracing::info!(file = %name, "从安装资源初始化上传 JAR"),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(staging);
+    result
+}
+
+async fn list(State(state): State<AppState>) -> Result<Json<JarList>, AppError> {
     let jar_dir = crate::jar_upgrade::incoming_dir();
+    seed_from_repo(&state.paths.exe_dir, &jar_dir).await?;
     tokio::fs::create_dir_all(&jar_dir).await?;
     let mut entries = tokio::fs::read_dir(&jar_dir).await?;
     let mut files = Vec::new();
@@ -535,6 +600,7 @@ async fn sync_all(
     State(state): State<AppState>,
     body: Option<Json<JarSyncRequest>>,
 ) -> Result<Json<JobProgress>, AppError> {
+    seed_from_repo(&state.paths.exe_dir, &crate::jar_upgrade::incoming_dir()).await?;
     let files = if let Some(Json(request)) = body {
         let mut files = Vec::new();
         for name in request.files {
@@ -886,5 +952,68 @@ mod online_tests {
         damaged[offset] ^= 0xff;
         std::fs::write(&path, damaged).unwrap();
         assert!(validate_downloaded_jar(&path).await.is_err());
+    }
+}
+
+#[cfg(test)]
+mod seed_tests {
+    use super::*;
+    struct Temp(PathBuf);
+    impl Temp {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("seed-jars-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+    }
+    impl Drop for Temp {
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
+
+    #[tokio::test]
+    async fn seeds_default_jars_only_and_copies_independent_content() {
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let temp = Temp::new();
+        let source = temp.0.join("cangling-repo/apps/jars");
+        let incoming = temp.0.join("incoming");
+        std::fs::create_dir_all(source.join("gansu")).unwrap();
+        std::fs::write(source.join("cis-server-1.0.0.jar"), b"default").unwrap();
+        std::fs::write(source.join("np4-base-server-1.0.0.jar"), b"base").unwrap();
+        std::fs::write(source.join("gansu/cis-server-1.0.0.jar"), b"gansu").unwrap();
+        std::fs::write(source.join("empty.jar"), b"").unwrap();
+        std::fs::write(source.join("README.md"), b"readme").unwrap();
+        symlink(source.join("cis-server-1.0.0.jar"), source.join("linked.jar")).unwrap();
+        seed_from_repo(&temp.0, &incoming).await.unwrap();
+        assert_eq!(std::fs::read(incoming.join("cis-server-1.0.0.jar")).unwrap(), b"default");
+        assert_eq!(std::fs::read(incoming.join("np4-base-server-1.0.0.jar")).unwrap(), b"base");
+        assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 2);
+        assert_ne!(std::fs::metadata(source.join("cis-server-1.0.0.jar")).unwrap().ino(), std::fs::metadata(incoming.join("cis-server-1.0.0.jar")).unwrap().ino());
+        std::fs::write(source.join("cis-server-1.0.0.jar"), b"changed").unwrap();
+        seed_from_repo(&temp.0, &incoming).await.unwrap();
+        assert_eq!(std::fs::read(incoming.join("cis-server-1.0.0.jar")).unwrap(), b"default");
+    }
+
+    #[test]
+    fn existing_jar_prevents_seeding_even_when_other_files_are_missing() {
+        let temp = Temp::new();
+        let source = temp.0.join("source"); let incoming = temp.0.join("incoming");
+        std::fs::create_dir_all(&source).unwrap(); std::fs::create_dir_all(&incoming).unwrap();
+        std::fs::write(source.join("new.jar"), b"resource").unwrap();
+        std::fs::write(incoming.join("user.jar"), b"uploaded").unwrap();
+        seed_empty_jar_directory(&source, &incoming).unwrap();
+        assert!(!incoming.join("new.jar").exists());
+        assert_eq!(std::fs::read(incoming.join("user.jar")).unwrap(), b"uploaded");
+    }
+
+    #[tokio::test]
+    async fn missing_resources_are_harmless_and_parallel_first_reads_seed_once() {
+        let temp = Temp::new(); let incoming = temp.0.join("incoming");
+        seed_from_repo(&temp.0, &incoming).await.unwrap();
+        assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 0);
+        let source = temp.0.join("cangling-repo/apps/jars"); std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("app.jar"), b"app").unwrap();
+        let (a,b) = tokio::join!(seed_from_repo(&temp.0, &incoming), seed_from_repo(&temp.0, &incoming));
+        a.unwrap();b.unwrap();
+        assert_eq!(std::fs::read_dir(&incoming).unwrap().count(), 1);
     }
 }

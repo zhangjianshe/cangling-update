@@ -5336,7 +5336,7 @@
           openCanglingImageImportDialog(active.id);
           return;
         }
-        if (!(await confirmDialog("将从程序目录下的 cangling-repo 按各节点 CPU 架构导入苍灵应用离线镜像。镜像会依次导入所有在线 K3s 节点，是否继续？", { confirmText: "导入镜像" }))) return;
+        if (!(await confirmDialog("将从 cangling-repo/apps/base-images/linux 按各节点 CPU 架构选择 amd64 或 arm64 目录导入离线镜像。镜像会依次导入所有在线 K3s 节点，是否继续？", { confirmText: "导入镜像" }))) return;
         if (button) button.textContent = "正在启动…";
         const started = await api("/api/cangling/apps/images/import", { method: "POST" });
         openCanglingImageImportDialog(started.job_id);
@@ -6694,7 +6694,7 @@
         <div class="card">
           <h3>本地镜像包</h3>
           <div class="row" style="margin-bottom:12px;flex-wrap:nowrap;overflow-x:auto">
-            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 /opt/cangling/images" style="width:350px;min-width:350px;flex:0 0 350px" />
+            <input id="images-dir" type="text" value="${esc(savedDir)}" placeholder="默认 cangling-repo/apps/base-images/linux/本机架构" style="width:350px;min-width:350px;flex:0 0 350px" />
             <button class="btn" id="btn-images-dir">浏览目录</button>
             <input id="images-file" type="file" accept=".tar,.gz,.tgz,application/x-tar,application/gzip" hidden />
             <button class="btn primary" id="btn-images-upload">上传镜像包</button>

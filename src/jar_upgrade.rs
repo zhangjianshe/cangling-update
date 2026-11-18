@@ -178,6 +178,7 @@ async fn load_status_at(root: &Path) -> Result<JarUpgradeStatus, AppError> {
 }
 
 async fn status(State(state): State<AppState>) -> Result<Json<JarUpgradeStatus>, AppError> {
+    crate::jar_store::seed_from_repo(&state.paths.exe_dir, &incoming_dir()).await?;
     let mut status = load_status().await?;
     let id = state
         .active_jar_upgrade_job

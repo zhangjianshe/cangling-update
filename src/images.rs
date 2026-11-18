@@ -128,7 +128,7 @@ async fn start_cangling_app_image_import(
     }
     let mut plans = Vec::new();
     for (id, name, arch) in targets {
-        let directory = root.join(&arch);
+        let directory = app_image_directory(&repo, &arch)?;
         let packages = package_names(&directory).await?;
         if packages.is_empty() {
             return Err(AppError::not_found(format!(
@@ -196,8 +196,34 @@ async fn package_names(directory: &FsPath) -> Result<Vec<String>, AppError> {
         .into_iter()
         .map(|package| package.name)
         .collect::<Vec<_>>();
+    if let Some(arch) = directory.file_name().and_then(|name| name.to_str()) {
+        for project in ["cangling-broker", "cangling-map", "cangling-tile"] {
+            let stable = format!("{project}-linux-{arch}.tar.gz");
+            if packages.contains(&stable) {
+                packages.retain(|name| {
+                    let version = name.strip_prefix(&format!("{project}-")).unwrap_or("");
+                    let version = version.strip_prefix('v').unwrap_or(version);
+                    !(version.starts_with(|c: char| c.is_ascii_digit())
+                        && name.ends_with(&format!("-linux-{arch}.tar.gz")))
+                });
+            }
+        }
+    }
     packages.sort();
     Ok(packages)
+}
+
+fn app_image_directory(repo: &FsPath, raw_arch: &str) -> Result<PathBuf, AppError> {
+    let arch = normalize_arch(raw_arch)
+        .ok_or_else(|| AppError::bad(format!("不支持的 CPU 架构：{raw_arch}")))?;
+    Ok(repo.join(CANGLING_APP_IMAGE_DIR).join(arch))
+}
+
+fn default_image_directory(exe_dir: &FsPath, configured: &FsPath) -> Result<PathBuf, AppError> {
+    if configured != FsPath::new("/opt/cangling/images") {
+        return Ok(configured.to_path_buf());
+    }
+    app_image_directory(&exe_dir.join("cangling-repo"), std::env::consts::ARCH)
 }
 
 fn normalize_arch(raw: &str) -> Option<&'static str> {
@@ -270,11 +296,10 @@ pub fn cluster_routes() -> Router<AppState> {
 }
 
 fn selected_dir(state: &AppState, raw: Option<&str>) -> Result<PathBuf, AppError> {
-    let path = raw
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| state.images_dir.clone());
+    let path = match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => default_image_directory(&state.paths.exe_dir, &state.images_dir)?,
+    };
     if !path.is_absolute() {
         return Err(AppError::bad("镜像目录必须是绝对路径"));
     }
@@ -1193,6 +1218,32 @@ async fn download_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn offline_image_directories_follow_target_architecture() {
+        let repo = FsPath::new("/srv/app/cangling-repo");
+        assert_eq!(app_image_directory(repo, "x86_64").unwrap(), repo.join("apps/base-images/linux/amd64"));
+        assert_eq!(app_image_directory(repo, "aarch64").unwrap(), repo.join("apps/base-images/linux/arm64"));
+        assert!(app_image_directory(repo, "../../amd64").is_err());
+        assert_eq!(default_image_directory(FsPath::new("/srv/app"), FsPath::new("/opt/cangling/images")).unwrap(), app_image_directory(repo, std::env::consts::ARCH).unwrap());
+        assert_eq!(default_image_directory(FsPath::new("/srv/app"), FsPath::new("/custom/images")).unwrap(), PathBuf::from("/custom/images"));
+    }
+
+    #[tokio::test]
+    async fn stable_images_replace_versioned_candidates_without_crossing_architectures() {
+        let root = std::env::temp_dir().join(format!("app-images-{}", Uuid::new_v4()));
+        let amd64 = app_image_directory(&root, "amd64").unwrap();
+        let arm64 = app_image_directory(&root, "arm64").unwrap();
+        std::fs::create_dir_all(&amd64).unwrap();
+        std::fs::create_dir_all(&arm64).unwrap();
+        for name in ["cangling-map-linux-amd64.tar.gz", "cangling-map-0.1.25-linux-amd64.tar.gz", "cangling-broker-v0.1.73-linux-amd64.tar.gz", "gdal-base-v4.2.35-linux-amd64.tar.gz", "cangling-map-linux-amd64.tar.gz.sha256"] {
+            std::fs::write(amd64.join(name), b"archive").unwrap();
+        }
+        std::fs::write(arm64.join("cangling-map-linux-arm64.tar.gz"), b"arm").unwrap();
+        assert_eq!(package_names(&amd64).await.unwrap(), vec!["cangling-broker-v0.1.73-linux-amd64.tar.gz", "cangling-map-linux-amd64.tar.gz", "gdal-base-v4.2.35-linux-amd64.tar.gz"]);
+        assert_eq!(package_names(&arm64).await.unwrap(), vec!["cangling-map-linux-arm64.tar.gz"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn validates_archive_names() {
         assert!(archive_name("images.tar.gz").is_ok());
