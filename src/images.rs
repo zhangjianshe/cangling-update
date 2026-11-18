@@ -149,6 +149,7 @@ async fn start_cangling_app_image_import(
         let _guard = run_state.image_import_lock.lock().await;
         let total = plans.iter().map(|plan| plan.4.len()).sum::<usize>() as u64;
         let mut completed = 0u64;
+        let mut skipped_packages = 0u64;
         for (id, name, arch, directory, packages) in plans {
             for filename in packages {
                 run_state.jobs.set(
@@ -158,7 +159,7 @@ async fn start_cangling_app_image_import(
                     completed,
                     total,
                 );
-                if let Err(error) = import_cluster(
+                let skipped = match import_cluster(
                     &run_state,
                     &directory,
                     &filename,
@@ -168,23 +169,40 @@ async fn start_cangling_app_image_import(
                 )
                 .await
                 {
-                    run_state.jobs.finish_err(&job_id, &error.to_string());
-                    clear_active_image_job(&run_state, &job_id);
-                    return;
+                    Ok(skipped) => skipped,
+                    Err(error) => {
+                        run_state.jobs.finish_err(&job_id, &error.to_string());
+                        clear_active_image_job(&run_state, &job_id);
+                        return;
+                    }
+                };
+                if skipped {
+                    skipped_packages += 1;
                 }
                 completed += 1;
                 run_state.jobs.set(
                     &job_id,
                     "import-app-images",
-                    &format!("{name} 已导入 {filename}"),
+                    &format!(
+                        "{name} {} {filename}",
+                        if skipped {
+                            "镜像已存在，跳过"
+                        } else {
+                            "已导入"
+                        }
+                    ),
                     completed,
                     total,
                 );
             }
         }
-        run_state
-            .jobs
-            .finish_ok(&job_id, "苍灵应用镜像已按架构导入全部在线节点");
+        run_state.jobs.finish_ok(
+            &job_id,
+            &format!(
+                "苍灵应用镜像处理完成：导入 {} 项，已存在并跳过 {skipped_packages} 项",
+                total - skipped_packages
+            ),
+        );
         clear_active_image_job(&run_state, &job_id);
     });
     Ok(Json(ImportStarted { job_id: job.id }))
@@ -891,7 +909,7 @@ async fn import_cluster(
     selected: &[String],
     job_id: &str,
     finish_job: bool,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let targets = target_nodes(state, selected)?;
     if targets.is_empty() {
         return Err(AppError::bad("没有可导入的在线节点"));
@@ -900,6 +918,7 @@ async fn import_cluster(
     let self_id = crate::cluster::load_or_create_node_id(&state.paths);
     let token = state.cluster.token.as_deref().unwrap_or("");
     let master = master_addr(state).unwrap_or_else(|_| format!("127.0.0.1:{}", state.port));
+    let mut skipped = 0u64;
     for (idx, (id, name, addr)) in targets.into_iter().enumerate() {
         if finish_job {
             state.jobs.set(
@@ -911,7 +930,9 @@ async fn import_cluster(
             );
         }
         if id == self_id || state.cluster.role == Role::Standalone {
-            import_file(&dir.join(filename)).await?;
+            if import_file(&dir.join(filename)).await? {
+                skipped += 1;
+            }
         } else {
             let source_url = format!(
                 "http://{master}/api/cluster/images/archive/{}?directory={}",
@@ -965,6 +986,9 @@ async fn import_cluster(
                     if let Some(error) = progress.error {
                         return Err(AppError::internal(format!("节点 {name} 导入失败: {error}")));
                     }
+                    if progress.message.starts_with("已跳过") {
+                        skipped += 1;
+                    }
                     break;
                 }
             }
@@ -980,11 +1004,15 @@ async fn import_cluster(
         }
     }
     if finish_job {
-        state
-            .jobs
-            .finish_ok(job_id, &format!("{filename} 已导入全部所选节点"));
+        state.jobs.finish_ok(
+            job_id,
+            &format!(
+                "{filename} 处理完成：导入 {} 个节点，已存在并跳过 {skipped} 个节点",
+                total - skipped
+            ),
+        );
     }
-    Ok(())
+    Ok(skipped == total)
 }
 
 async fn worker_images() -> Result<Json<Vec<InstalledImage>>, AppError> {
@@ -1039,7 +1067,7 @@ async fn worker_import(
     let job_id = job.id.clone();
     let run_state = state.clone();
     tokio::spawn(async move {
-        let result: Result<(), AppError> = async {
+        let result: Result<bool, AppError> = async {
             download_to(
                 &body.source_url,
                 &token,
@@ -1055,12 +1083,18 @@ async fn worker_import(
                 0,
                 0,
             );
-            import_file(&target).await?;
-            Ok(())
+            import_file(&target).await
         }
         .await;
         match result {
-            Ok(()) => run_state.jobs.finish_ok(&job_id, "镜像传输并导入完成"),
+            Ok(skipped) => run_state.jobs.finish_ok(
+                &job_id,
+                if skipped {
+                    "已跳过：相同标签和内容的镜像已存在"
+                } else {
+                    "镜像传输并导入完成"
+                },
+            ),
             Err(err) => {
                 let _ = tokio::fs::remove_file(&temp).await;
                 run_state.jobs.finish_err(&job_id, &err.to_string());
@@ -1081,9 +1115,106 @@ async fn worker_job(
         .ok_or_else(|| AppError::not_found("节点镜像任务不存在"))
 }
 
-async fn import_file(path: &FsPath) -> Result<(), AppError> {
+#[derive(Debug, Deserialize)]
+struct ArchiveManifest {
+    #[serde(rename = "Config")]
+    config: String,
+    #[serde(rename = "RepoTags", default)]
+    tags: Option<Vec<String>>,
+}
+
+// Stream archives without extracting paths or retaining layer contents in memory.
+fn archive_images(path: &FsPath) -> anyhow::Result<Vec<(String, String)>> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let file = std::fs::File::open(path)?;
+    let reader: Box<dyn Read> = if is_gzip_archive(path) {
+        Box::new(flate2::read::GzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
+    let mut archive = tar::Archive::new(reader);
+    let mut manifests = Vec::<ArchiveManifest>::new();
+    let mut configs = std::collections::HashMap::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let name = entry
+            .path()?
+            .to_string_lossy()
+            .trim_start_matches("./")
+            .to_string();
+        if !entry.header().entry_type().is_file() || entry.size() > 4 * 1024 * 1024 {
+            continue;
+        }
+        if name == "manifest.json" {
+            manifests = serde_json::from_reader(&mut entry)?;
+        } else if name.ends_with(".json") || name.starts_with("blobs/sha256/") {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes)?;
+            configs.insert(name, format!("sha256:{:x}", Sha256::digest(&bytes)));
+        }
+    }
+    let mut result = Vec::new();
+    for manifest in manifests {
+        let Some(id) = configs.get(manifest.config.trim_start_matches("./")) else {
+            return Ok(Vec::new());
+        };
+        let tags = manifest.tags.unwrap_or_default();
+        if tags.is_empty() {
+            return Ok(Vec::new());
+        }
+        for tag in tags {
+            result.push((tag, id.clone()));
+        }
+    }
+    Ok(result)
+}
+
+fn archive_is_installed(images: &[(String, String)], installed: &serde_json::Value) -> bool {
+    !images.is_empty()
+        && images.iter().all(|(tag, id)| {
+            installed
+                .get("images")
+                .and_then(|v| v.as_array())
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row.get("id").and_then(|v| v.as_str()) == Some(id.as_str())
+                            && row
+                                .get("repoTags")
+                                .and_then(|v| v.as_array())
+                                .is_some_and(|tags| {
+                                    tags.iter().any(|v| v.as_str() == Some(tag.as_str()))
+                                })
+                    })
+                })
+        })
+}
+
+async fn image_archive_already_installed(path: &FsPath) -> bool {
+    let path = path.to_path_buf();
+    let images = match tokio::task::spawn_blocking(move || archive_images(&path)).await {
+        Ok(Ok(images)) if !images.is_empty() => images,
+        _ => return false, // Unsupported metadata must never suppress a normal import.
+    };
+    let output = match tokio::process::Command::new("k3s")
+        .args(["crictl", "images", "--output", "json"])
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return false,
+    };
+    serde_json::from_slice(&output.stdout)
+        .is_ok_and(|installed| archive_is_installed(&images, &installed))
+}
+
+async fn import_file(path: &FsPath) -> Result<bool, AppError> {
+    if image_archive_already_installed(path).await {
+        return Ok(true);
+    }
     if is_gzip_archive(path) {
-        return import_gzip_file(path).await;
+        import_gzip_file(path).await?;
+        return Ok(false);
     }
     let output = tokio::process::Command::new("k3s")
         .args(["ctr", "images", "import"])
@@ -1097,7 +1228,7 @@ async fn import_file(path: &FsPath) -> Result<(), AppError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    Ok(())
+    Ok(false)
 }
 
 fn is_gzip_archive(path: &FsPath) -> bool {
@@ -1218,6 +1349,71 @@ async fn download_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn archive_skip_requires_every_tag_and_matching_content() {
+        let images = vec![("hub.example/map:1.0".into(), "sha256:abc".into())];
+        let installed =
+            serde_json::json!({"images":[{"id":"sha256:abc","repoTags":["hub.example/map:1.0"]}]});
+        assert!(archive_is_installed(&images, &installed));
+        assert!(!archive_is_installed(
+            &[("hub.example/map:1.0".into(), "sha256:changed".into())],
+            &installed
+        ));
+        assert!(!archive_is_installed(
+            &[("hub.example/map:2.0".into(), "sha256:abc".into())],
+            &installed
+        ));
+        let mut multiple = images.clone();
+        multiple.push(("hub.example/tile:1.0".into(), "sha256:def".into()));
+        assert!(!archive_is_installed(&multiple, &installed));
+        assert!(!archive_is_installed(&[], &installed));
+        assert!(!archive_is_installed(&images, &serde_json::json!({})));
+    }
+
+    #[test]
+    fn docker_archive_metadata_is_read_from_tar_and_gzip_without_extraction() {
+        use sha2::{Digest, Sha256};
+        use std::io::Write;
+        let config = br#"{"architecture":"amd64","os":"linux"}"#;
+        let digest = format!("sha256:{:x}", Sha256::digest(config));
+        for config_path in ["config.json", "blobs/sha256/config"] {
+            let mut archive = tar::Builder::new(Vec::new());
+            let manifest = serde_json::to_vec(&serde_json::json!([{"Config":config_path,"RepoTags":["hub.example/map:1.0"],"Layers":[]}])).unwrap();
+            // Modern docker save can put manifest after the configuration blob.
+            for (name, bytes) in [
+                (config_path, config.as_slice()),
+                ("manifest.json", manifest.as_slice()),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                archive.append_data(&mut header, name, bytes).unwrap();
+            }
+            let bytes = archive.into_inner().unwrap();
+            for gzip in [false, true] {
+                let path = std::env::temp_dir().join(format!(
+                    "image-precheck-{}{}",
+                    Uuid::new_v4(),
+                    if gzip { ".tar.gz" } else { ".tar" }
+                ));
+                if gzip {
+                    let mut encoder =
+                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+                    encoder.write_all(&bytes).unwrap();
+                    std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+                } else {
+                    std::fs::write(&path, &bytes).unwrap();
+                }
+                assert_eq!(
+                    archive_images(&path).unwrap(),
+                    vec![("hub.example/map:1.0".into(), digest.clone())]
+                );
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn offline_image_directories_follow_target_architecture() {
         let repo = FsPath::new("/srv/app/cangling-repo");
