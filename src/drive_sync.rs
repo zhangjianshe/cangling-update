@@ -133,6 +133,7 @@ pub struct Progress {
     pub bytes_total: u64,
     pub overall_done: u64,
     pub overall_total: u64,
+    pub network_bytes: u64,
 }
 fn valid_id(v: &str) -> bool {
     v.len() == 32
@@ -433,7 +434,7 @@ async fn download(
     base: &Url,
     entry: &Entry,
     part: &Path,
-    mut progress: impl FnMut(u64),
+    mut progress: impl FnMut(u64, u64),
 ) -> Result<bool, String> {
     if fs::symlink_metadata(part).is_ok_and(|m| m.file_type().is_symlink() || !m.is_file()) {
         return Err("下载暂存文件异常".into());
@@ -504,7 +505,7 @@ async fn download(
                             }
                             file.write_all(&chunk).map_err(io)?;
                             count += chunk.len() as u64;
-                            progress(count);
+                            progress(count, chunk.len() as u64);
                         }
                         Ok(Ok(None)) => break,
                         _ => {
@@ -568,6 +569,7 @@ pub async fn synchronize(
     safe_dir(&tree)?;
     let parts = work.join("parts");
     safe_dir(&parts)?;
+    let mut network_bytes = 0u64;
     emit(Progress {
         phase: "manifest",
         path: "正在读取网盘目录清单…".into(),
@@ -577,6 +579,7 @@ pub async fn synchronize(
         bytes_total: 0,
         overall_done: 0,
         overall_total: 0,
+        network_bytes,
     });
     let entries = enumerate(&client, &base, &config.directory).await?;
     let revision = snapshot(&entries)?;
@@ -638,8 +641,20 @@ pub async fn synchronize(
                 entry.sha256.as_deref().unwrap(),
                 entry.size
             ));
+            emit(Progress {
+                phase: "download",
+                path: remote.path.to_string_lossy().into_owned(),
+                current,
+                total,
+                bytes_done: 0,
+                bytes_total: entry.size,
+                overall_done: done,
+                overall_total: bytes,
+                network_bytes,
+            });
             let mut last = Instant::now() - Duration::from_secs(1);
-            let resumed = download(&client, &base, entry, &part, |n| {
+            let resumed = download(&client, &base, entry, &part, |n, received| {
+                network_bytes += received;
                 if last.elapsed() >= Duration::from_millis(200) || n == entry.size {
                     last = Instant::now();
                     emit(Progress {
@@ -651,6 +666,7 @@ pub async fn synchronize(
                         bytes_total: entry.size,
                         overall_done: done + n,
                         overall_total: bytes,
+                        network_bytes,
                     });
                 }
             })
@@ -672,6 +688,7 @@ pub async fn synchronize(
             bytes_total: entry.size,
             overall_done: done,
             overall_total: bytes,
+            network_bytes,
         });
     }
     emit(Progress {
@@ -683,6 +700,7 @@ pub async fn synchronize(
         bytes_total: 0,
         overall_done: bytes,
         overall_total: bytes,
+        network_bytes,
     });
     if snapshot(&enumerate(&client, &base, &config.directory).await?)? != revision {
         return Err("网盘目录在同步期间发生变化，请再次同步；当前资源保持不变".into());
@@ -720,6 +738,7 @@ pub async fn synchronize(
         bytes_total: 0,
         overall_done: bytes,
         overall_total: bytes,
+        network_bytes,
     });
     Ok(report)
 }
@@ -969,14 +988,20 @@ mod tests {
         fs::create_dir(&dest).unwrap();
         fs::write(dest.join("obsolete"), b"old").unwrap();
         fs::write(dest.join("one.bin"), &fixture.files[&"c".repeat(32)]).unwrap();
-        let report = synchronize(&fixture.config, &dest, |_| {}).await.unwrap();
+        let mut events = Vec::new();
+        let report = synchronize(&fixture.config, &dest, |p| events.push(p)).await.unwrap();
+        let final_progress = events.last().unwrap();
+        assert_eq!(final_progress.overall_done, report.bytes);
+        assert_eq!(final_progress.network_bytes, report.bytes - fixture.files[&"c".repeat(32)].len() as u64);
         assert_eq!(report.total, 3);
         assert_eq!(report.skipped, 1);
         assert_eq!(report.downloaded, 2);
         assert!(!dest.join("obsolete").exists());
         assert!(dest.join("nested/empty-dir").is_dir());
         assert!(completed(&dest));
-        let second = synchronize(&fixture.config, &dest, |_| {}).await.unwrap();
+        events.clear();
+        let second = synchronize(&fixture.config, &dest, |p| events.push(p)).await.unwrap();
+        assert!(events.iter().all(|p| p.network_bytes == 0));
         assert_eq!(second.downloaded, 0);
         assert_eq!(second.skipped, 3);
         #[cfg(unix)]
@@ -1050,13 +1075,13 @@ mod tests {
         let (client, url) = fixture.config.client().unwrap();
         fs::write(&part, &fixture.files[&"c".repeat(32)][..17]).unwrap();
         fixture.mode.store(3, Ordering::SeqCst);
-        download(&client, &url, &entry, &part, |_| {})
+        download(&client, &url, &entry, &part, |_, _| {})
             .await
             .unwrap();
         assert!(matches(&part, &entry));
         fs::write(&part, &fixture.files[&"c".repeat(32)][..17]).unwrap();
         fixture.mode.store(5, Ordering::SeqCst);
-        assert!(download(&client, &url, &entry, &part, |_| {})
+        assert!(download(&client, &url, &entry, &part, |_, _| {})
             .await
             .unwrap_err()
             .contains("范围"));
@@ -1151,7 +1176,7 @@ mod tests {
         let tmp = Temp::new();
         let partial = tmp.0.join("live.part");
         fs::write(&partial, &first).unwrap();
-        assert!(download(&client, &url, &file.entry, &partial, |_| {})
+        assert!(download(&client, &url, &file.entry, &partial, |_, _| {})
             .await
             .unwrap());
         assert!(matches(&partial, &file.entry));

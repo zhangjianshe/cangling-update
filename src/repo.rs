@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::path::{Path as FsPath, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 struct Platform {
@@ -90,9 +90,10 @@ pub const NP4_UPDATE_VERSION: &str = "latest";
 /// 初始化/检查集群及安装资源浏览共用的仓库目录名。
 pub const INSTALL_RESOURCES_DIR: &str = "cangling-repo";
 
-static REPO_REFRESHING: AtomicBool = AtomicBool::new(false);
+static RESOURCE_SYNC: LazyLock<Mutex<ResourceSyncState>> =
+    LazyLock::new(|| Mutex::new(ResourceSyncState::default()));
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoRefreshResult {
     pub commit: String,
@@ -104,12 +105,67 @@ pub struct RepoRefreshResult {
     pub total_files: u64,
 }
 
-struct RefreshGuard;
-
-impl Drop for RefreshGuard {
-    fn drop(&mut self) {
-        REPO_REFRESHING.store(false, Ordering::Release);
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceSyncState {
+    pub running: bool,
+    pub phase: String,
+    pub path: String,
+    pub current: u64,
+    pub total: u64,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub overall_done: u64,
+    pub overall_total: u64,
+    pub speed: f64,
+    pub error: Option<String>,
+    pub result: Option<RepoRefreshResult>,
+    #[serde(skip)]
+    sample: Option<(Instant, u64)>,
+    #[serde(skip)]
+    received_at: Option<Instant>,
+}
+impl ResourceSyncState {
+    fn progress(&mut self, p: crate::drive_sync::Progress) {
+        let now = Instant::now();
+        if let Some((since, bytes)) = self.sample {
+            if p.network_bytes > bytes {
+                self.received_at = Some(now);
+            }
+            if now.duration_since(since).as_secs_f64() >= 0.5 {
+                self.speed = p.network_bytes.saturating_sub(bytes) as f64
+                    / now.duration_since(since).as_secs_f64();
+                self.sample = Some((now, p.network_bytes));
+            }
+        } else {
+            self.sample = Some((now, p.network_bytes));
+        }
+        self.phase = p.phase.into();
+        self.path = p.path;
+        self.current = p.current;
+        self.total = p.total;
+        self.bytes_done = p.bytes_done;
+        self.bytes_total = p.bytes_total;
+        self.overall_done = p.overall_done;
+        self.overall_total = p.overall_total;
+        if self.phase != "download" {
+            self.speed = 0.0;
+        }
     }
+}
+pub fn resource_sync_status() -> ResourceSyncState {
+    let mut state = RESOURCE_SYNC
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if !state.running
+        || state
+            .received_at
+            .is_none_or(|t| t.elapsed() > Duration::from_secs(3))
+    {
+        state.speed = 0.0;
+    }
+    state
 }
 
 /// 安装脚本执行超时（安装可能比普通脚本更久）。
@@ -309,16 +365,66 @@ pub fn repo_root(paths: &AppPaths) -> PathBuf {
 
 /// From the authenticated drive directory. The previous resource snapshot remains
 /// available until every download and SHA-256 verification succeeds.
-pub async fn refresh_resources(paths: &AppPaths) -> Result<RepoRefreshResult, AppError> {
-    if REPO_REFRESHING.swap(true, Ordering::AcqRel) {
+pub fn start_resource_refresh(paths: &AppPaths) -> Result<ResourceSyncState, AppError> {
+    start_resource_refresh_with(repo_root(paths), crate::drive_sync::Config::default())
+}
+
+fn start_resource_refresh_with(
+    root: PathBuf,
+    config: crate::drive_sync::Config,
+) -> Result<ResourceSyncState, AppError> {
+    let mut state = RESOURCE_SYNC.lock().unwrap_or_else(|e| e.into_inner());
+    if state.running {
         return Err(AppError::conflict("安装资源正在更新，请稍后再试"));
     }
-    let _guard = RefreshGuard;
-    let root=repo_root(paths);
-    let report=crate::drive_sync::synchronize(&crate::drive_sync::Config::default(),&root,|progress|{
-        tracing::info!(phase=progress.phase,current=progress.current,total=progress.total,file=%progress.path,bytes_done=progress.bytes_done,bytes_total=progress.bytes_total,overall_done=progress.overall_done,overall_total=progress.overall_total,"网盘资源同步");
-    }).await.map_err(AppError::internal)?;
-    Ok(RepoRefreshResult {commit:report.snapshot,branch:"HTTP 网盘".into(),root:root.display().to_string(),downloaded:report.downloaded,skipped:report.skipped,resumed:report.resumed,total_files:report.total})
+    *state = ResourceSyncState {
+        running: true,
+        phase: "manifest".into(),
+        sample: Some((Instant::now(), 0)),
+        ..Default::default()
+    };
+    let initial = state.clone();
+    // The task belongs to the server, not the HTTP connection or browser page.
+    tokio::spawn(async move {
+        let task = tokio::spawn(async move {
+            crate::drive_sync::synchronize(&config, &root, |progress| {
+                tracing::info!(phase=progress.phase,current=progress.current,total=progress.total,file=%progress.path,bytes_done=progress.bytes_done,bytes_total=progress.bytes_total,overall_done=progress.overall_done,overall_total=progress.overall_total,"网盘资源同步");
+                RESOURCE_SYNC
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .progress(progress);
+            })
+            .await
+            .map(|report| RepoRefreshResult {
+                commit: report.snapshot,
+                branch: "HTTP 网盘".into(),
+                root: root.display().to_string(),
+                downloaded: report.downloaded,
+                skipped: report.skipped,
+                resumed: report.resumed,
+                total_files: report.total,
+            })
+        })
+        .await;
+        let mut state = RESOURCE_SYNC.lock().unwrap_or_else(|e| e.into_inner());
+        state.running = false;
+        state.speed = 0.0;
+        match task {
+            Ok(Ok(result)) => {
+                state.phase = "complete".into();
+                state.result = Some(result);
+            }
+            Ok(Err(error)) => {
+                state.phase = "error".into();
+                state.error = Some(error);
+            }
+            Err(error) => {
+                state.phase = "error".into();
+                state.error = Some(format!("同步任务异常：{error}"));
+            }
+        }
+    });
+    Ok(initial)
 }
 
 pub fn packages_root(repo: &FsPath) -> PathBuf {
@@ -1119,5 +1225,82 @@ mod tests {
         assert!(unsafe_rel(FsPath::new("a/../../evil")));
         assert!(!unsafe_rel(FsPath::new("a/b.txt")));
         assert!(!unsafe_rel(FsPath::new("install.sh")));
+    }
+}
+
+#[cfg(test)]
+mod resource_progress_tests {
+    use super::*;
+
+    #[test]
+    fn network_speed_excludes_reused_and_resumed_bytes() {
+        let now = Instant::now();
+        let mut state = ResourceSyncState {
+            running: true,
+            sample: Some((now - Duration::from_secs(1), 0)),
+            ..Default::default()
+        };
+        let mut p = crate::drive_sync::Progress {
+            phase: "download",
+            path: "big.iso".into(),
+            current: 1,
+            total: 2,
+            bytes_done: 900_001_000,
+            bytes_total: 1_000_000_000,
+            overall_done: 900_001_000,
+            overall_total: 2_000_000_000,
+            network_bytes: 1000,
+        };
+        state.progress(p.clone());
+        assert!(state.speed > 0.0 && state.speed <= 1000.0);
+        assert_eq!(state.path, "big.iso");
+        p.phase = "skip";
+        p.overall_done = 1_500_000_000;
+        state.progress(p);
+        assert_eq!(state.speed, 0.0);
+    }
+
+    #[tokio::test]
+    async fn background_sync_survives_request_and_preserves_result() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route("/api/v1/drive/entries", axum::routing::get(|| async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            axum::Json(serde_json::json!({"code":200,"success":true,"data":{"page":1,"pageSize":100,"total":0,"entries":[]}}))
+        }));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let directory =
+            std::env::temp_dir().join(format!("resource-progress-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.join("cangling-repo");
+        let config = crate::drive_sync::Config {
+            server: format!("http://{address}"),
+            directory: "a".repeat(32),
+            token: "test-key".into(),
+        };
+        assert!(
+            start_resource_refresh_with(root.clone(), config.clone())
+                .unwrap()
+                .running
+        );
+        assert!(start_resource_refresh_with(root.clone(), config).is_err());
+        // No request future is kept alive while the server-owned task works.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while resource_sync_status().running {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let status = resource_sync_status();
+        assert!(status.error.is_none(), "{:?}", status.error);
+        assert_eq!(status.phase, "complete");
+        assert_eq!(status.result.unwrap().total_files, 0);
+        assert!(root.is_dir());
+        assert!(resource_sync_status().result.is_some());
+        server.abort();
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

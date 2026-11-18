@@ -62,7 +62,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/install-resources", get(install_resources_list))
         .route(
             "/api/install-resources/refresh",
-            post(install_resources_refresh),
+            post(install_resources_refresh).get(install_resources_refresh_status),
         )
         .route(
             "/api/install-resources/content",
@@ -1789,8 +1789,12 @@ async fn install_resources_list(
 
 async fn install_resources_refresh(
     State(state): State<AppState>,
-) -> Result<Json<crate::repo::RepoRefreshResult>, AppError> {
-    crate::repo::refresh_resources(&state.paths).await.map(Json)
+) -> Result<Json<crate::repo::ResourceSyncState>, AppError> {
+    crate::repo::start_resource_refresh(&state.paths).map(Json)
+}
+
+async fn install_resources_refresh_status() -> Json<crate::repo::ResourceSyncState> {
+    Json(crate::repo::resource_sync_status())
 }
 
 async fn install_resource_file_get(

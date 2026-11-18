@@ -727,3 +727,20 @@ Powered by imagebot.cn
 程序内置 cangling-repo 网盘地址、目录 ID 和只读 key；可用 `CANGLING_DRIVE_URL`、`CANGLING_DRIVE_DIRECTORY`、`CANGLING_DRIVE_TOKEN` 覆盖，不再读取旧的 `CANGLING_REPO_*` Git 凭证。读取 key 只放在请求头中，拒绝 HTTP 重定向；非本机地址必须使用 HTTPS。
 
 同步会递归分页读取目录，对已有文件校验 SHA-256 后复用，下载到同一磁盘的隐藏暂存目录，支持 Range 断点续传。完成后再次核对远端快照和全部文件摘要，再切换当前资源目录；远端已删除的文件、旧 Git 元数据和本地额外文件仅在成功切换后移除。下载失败或中断保留当前可用资源及断点，重新点击「资源更新」即可继续。Linux 下自动恢复脚本、ELF 程序的执行权限。同步锁跨进程生效，异常退出后的发布记录会在下次同步时恢复。
+
+### 发布到网盘
+
+标签 release 继续上传 GitHub Release 和软件仓库，同时将程序写入
+`cangling-repo/binaries/linux/{amd64,arm64}`；Keeper Windows 程序写入
+`binaries/windows/amd64/cangling-keeper.exe`。Linux 程序分别保留
+`cangling-update`、`cangling-keeper` 文件名。两个 GitHub 仓库均需配置
+Actions Secret `WRITE_TOKEN`（该目录的读、写、删除权限），凭证不写入工作流源码。
+
+所有平台程序校验成功后，update 才更新 `binaries/VERSION`；Keeper 更新
+`binaries/KEEPER_SHA256SUMS` 和 `binaries/KEEPER_VERSION`。重复运行会跳过相同
+SHA-256 的文件。现有网盘 API 无同名覆盖接口，更新单个文件需先删除旧条目再上传，
+会存在短暂不可用窗口；上传失败时不更新版本标记，可重跑发布任务。
+
+安装资源同步由服务端后台任务执行。页面显示当前文件、字节进度和实际网络下载速度，
+每秒查询状态；切换页面或刷新浏览器后自动恢复显示。复用及断点已有字节不计入下载速度。
+任务状态保留至服务进程退出；服务重启后可重新发起同步，继续利用已下载的暂存文件。

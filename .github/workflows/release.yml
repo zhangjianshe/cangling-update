@@ -86,6 +86,14 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Download binaries
         uses: actions/download-artifact@v4
         with:
@@ -144,3 +152,12 @@ jobs:
             -F "os=linux" \
             -F "arch=arm64" \
             -F "file=@dist/version.txt"
+
+      - name: Test drive release uploader
+        run: python scripts/test-upload-drive-release.py
+
+      - name: Publish binaries to cangling-repo drive
+        env:
+          WRITE_TOKEN: ${{ secrets.WRITE_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python scripts/upload-drive-release.py --project cangling-update --version "$RELEASE_TAG"

@@ -1726,7 +1726,7 @@
     const REPO_ICON_FILE = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5C2 14.216 2.784 15 3.75 15h8.5A1.75 1.75 0 0 0 14 13.25V5.06a1.75 1.75 0 0 0-.513-1.237l-2.31-2.31A1.75 1.75 0 0 0 9.94 1Zm6.5 1.56L12.44 4.75h-1.69a.5.5 0 0 1-.5-.5ZM3.5 2.75a.25.25 0 0 1 .25-.25h5v1.75c0 1.105.895 2 2 2h1.75v7a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25Z"/></svg>';
     const composePoll = { timer: null, inflight: false };
     const projectFiles = { path: "", selected: "", editor: null, resizeObs: null, loadedProject: "" };
-    const installResources = { path: "", selected: "", updating: false, updateKind: "", updateMessage: "" };
+    const installResources = { path: "", selected: "", updating: false, updateKind: "", updateMessage: "", progress: null, timer: null, generation: 0 };
     const composeCanvas = { yaml: "", projectId: "", resizeObs: null, editor: null, etag: "", dirty: false, statusTimer: null };
     const metaPoll = { timer: null, inflight: false };
     const clusterPoll = { timer: null, inflight: false };
@@ -2388,6 +2388,7 @@
     }
 
     function route() {
+      stopInstallResourcesPoll();
       stopComposePoll();
       stopClusterPoll();
       stopK3sPoll();
@@ -6521,7 +6522,7 @@
       $("#install-resources-refresh").onclick = loadInstallResources;
       $("#install-resources-update").onclick = updateInstallResources;
       renderInstallResourcesUpdateState();
-      await loadInstallResources();
+      await Promise.all([loadInstallResources(), pollInstallResourcesUpdate()]);
     }
 
     function renderInstallResourcesUpdateState() {
@@ -6536,6 +6537,66 @@
         status.hidden = !installResources.updateMessage;
         status.className = installResources.updateKind === "err" ? "card bad" : "card hint";
         status.textContent = installResources.updateMessage;
+        const p = installResources.progress;
+        if (installResources.updating && p) {
+          const phases = { manifest: "读取目录清单", download: "下载中", skip: "复用文件", verify: "校验资源", complete: "正在完成切换" };
+          const percent = p.overallTotal ? Math.min(100, p.overallDone / p.overallTotal * 100) : 0;
+          const progress = document.createElement("progress");
+          progress.max = 100;
+          if (p.overallTotal) progress.value = percent;
+          progress.style.cssText = "display:block;width:100%;margin:10px 0";
+          progress.setAttribute("aria-label", "资源同步整体进度");
+          status.appendChild(progress);
+          const detail = document.createElement("div");
+          detail.style.overflowWrap = "anywhere";
+          detail.textContent = `${phases[p.phase] || "处理中"} · ${p.current}/${p.total} 文件 · ${p.overallTotal ? percent.toFixed(1) + "% · " + fmtBytes(p.overallDone) + " / " + fmtBytes(p.overallTotal) : "正在计算总大小"} · 下载速度 ${fmtBytes(p.speed || 0)}/s`;
+          status.appendChild(detail);
+          if (p.path) {
+            const file = document.createElement("div");
+            file.style.overflowWrap = "anywhere";
+            file.textContent = `当前文件：${p.path}${p.bytesTotal ? " · " + fmtBytes(p.bytesDone) + " / " + fmtBytes(p.bytesTotal) : ""}`;
+            status.appendChild(file);
+          }
+        }
+      }
+    }
+
+    function stopInstallResourcesPoll() {
+      clearTimeout(installResources.timer);
+      installResources.timer = null;
+      installResources.generation++;
+    }
+
+    function applyInstallResourcesUpdateStatus(status) {
+      installResources.progress = status;
+      installResources.updating = status.running;
+      installResources.updateKind = status.error ? "err" : "ok";
+      installResources.updateMessage = status.running ? "正在同步网盘安装资源…" : status.error ? "资源更新失败：" + status.error : status.result ?
+        `网盘资源同步完成：${status.result.totalFiles} 文件 · 下载 ${status.result.downloaded} · 复用 ${status.result.skipped} · 续传 ${status.result.resumed}` : "";
+      renderInstallResourcesUpdateState();
+    }
+
+    async function pollInstallResourcesUpdate() {
+      const generation = installResources.generation;
+      if ((location.hash || "#/") !== "#/install-resources") return;
+      clearTimeout(installResources.timer);
+      try {
+        const status = await api("/api/install-resources/refresh");
+        if (generation !== installResources.generation) return;
+        const wasRunning = installResources.updating;
+        applyInstallResourcesUpdateStatus(status);
+        if (wasRunning && !status.running && status.result) {
+          installResources.path = "";
+          resetInstallResourcePreview();
+          await loadInstallResources();
+        }
+      } catch (error) {
+        if (generation !== installResources.generation) return;
+        installResources.updateMessage = "暂时无法获取同步状态，正在重试：" + error.message;
+        renderInstallResourcesUpdateState();
+      }
+      if (generation === installResources.generation && (location.hash || "#/") === "#/install-resources") {
+        installResources.timer = setTimeout(pollInstallResourcesUpdate, 1000);
       }
     }
 
@@ -6543,25 +6604,20 @@
       if (installResources.updating) return;
       if (!(await confirmDialog("将从网盘同步 cangling-repo 安装资源。支持断点续传和 SHA-256 校验，完整同步后切换；同步失败继续保留当前资源，是否继续？", { confirmText: "资源更新" }))) return;
       if (installResources.updating) return;
+      stopInstallResourcesPoll();
       installResources.updating = true;
+      installResources.progress = null;
       installResources.updateKind = "ok";
-      installResources.updateMessage = "正在同步网盘资源（支持断点续传），文件较大时可能需要较长时间…";
+      installResources.updateMessage = "正在启动网盘资源同步…";
       renderInstallResourcesUpdateState();
       try {
-        const result = await api("/api/install-resources/refresh", { method: "POST" });
-        installResources.path = "";
-        installResources.updateKind = "ok";
-        installResources.updateMessage = `网盘资源同步完成：${result.totalFiles} 文件 · 下载 ${result.downloaded} · 复用 ${result.skipped} · 续传 ${result.resumed}`;
-        if ((location.hash || "#/") === "#/install-resources") {
-          resetInstallResourcePreview();
-          await loadInstallResources();
-        }
+        await api("/api/install-resources/refresh", { method: "POST" });
       } catch (error) {
-        installResources.updateKind = "err";
-        installResources.updateMessage = "资源更新失败：" + error.message;
-      } finally {
-        installResources.updating = false;
+        installResources.updateMessage = "启动请求未确认，正在核对服务端状态：" + error.message;
         renderInstallResourcesUpdateState();
+      } finally {
+        // Re-query even after a connection error: the server may already have started the job.
+        await pollInstallResourcesUpdate();
       }
     }
 
