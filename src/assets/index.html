@@ -6337,9 +6337,11 @@
       try {
         const s = await api("/api/certificates");
         if ($("#certificate-content") !== content) return;
-        const rootName = certificateSubjectValue(s.root_subject, "CN") || "Cangling Local Root CA";
-        const rootOrganization = certificateSubjectValue(s.root_subject, "O") || "未设置";
-        const rootOrganizationUnit = certificateSubjectValue(s.root_subject, "OU") || "未设置";
+        const issuerSubject = s.issuer_subject || s.root_subject;
+        const issuerName = certificateSubjectValue(issuerSubject, "CN") || "Cangling Update Ca Root";
+        const rootName = certificateSubjectValue(s.root_subject, "CN") || "Cangling Root CA";
+        const rootOrganization = certificateSubjectValue(issuerSubject, "O") || "未设置";
+        const rootOrganizationUnit = certificateSubjectValue(issuerSubject, "OU") || "未设置";
         const rootAccessUrl = `https://${s.loadbalance_ip || s.suggested_ip}:7443/update/`;
         const loadbalanceName = certificateSubjectValue(s.loadbalance_subject, "CN") || "Load Balancer";
         content.innerHTML = `
@@ -6350,27 +6352,28 @@
               <p class="hint">签发 CA 私钥使用 AES-256 加密，签发密码不会由服务保存。客户端应信任下载的根证书；根 CA 私钥不包含在程序中。</p>
               ${s.root_initialized ? `
                 <div class="root-certificate-layout">
-                  <div class="root-certificate-card" role="group" aria-label="根证书 ${esc(rootName)}">
+                  <div class="root-certificate-card" role="group" aria-label="签发 CA ${esc(issuerName)}">
                     <div class="root-certificate-card-content">
-                      <div class="root-certificate-name">${esc(rootName)}</div>
+                      <div class="root-certificate-name">${esc(issuerName)}</div>
                       <div class="root-certificate-organization">组织：${esc(rootOrganization)}　·　组织单元：${esc(rootOrganizationUnit)}</div>
-                      <div class="root-certificate-validity">有效期至：${esc(fmtDateTime(s.root_expires))}</div>
+                      <div class="root-certificate-validity">有效期至：${esc(fmtDateTime(s.issuer_expires || s.root_expires))}</div>
                       <div class="root-certificate-verification">
                         <img class="root-certificate-qr" src="${esc(appPath("/api/certificates/loadbalance/access-qr.svg"))}" alt="负载均衡访问地址二维码" title="扫码访问 ${esc(rootAccessUrl)}" />
-                        <div class="root-certificate-fingerprint" title="${esc(s.root_fingerprint || "—")}">${esc(s.root_fingerprint || "—")}</div>
+                        <div class="root-certificate-fingerprint" title="${esc(s.issuer_fingerprint || s.root_fingerprint || "—")}">${esc(s.issuer_fingerprint || s.root_fingerprint || "—")}</div>
                       </div>
                     </div>
                   </div>
-                  <div class="root-certificate-side" role="complementary" aria-label="根证书信息与操作">
+                  <div class="root-certificate-side" role="complementary" aria-label="签发 CA 与根信任链信息">
                     <div class="field"><label>状态</label><div class="path"><span class="ok">已初始化</span></div></div>
-                    <div class="field"><label>根证书路径</label><div class="path">${esc(s.root_certificate_path)}</div></div>
+                    <div class="field"><label>签发 CA 证书链</label><div class="path">${esc(s.issuer_certificate_path || "/opt/cangling/loadbalance/certs/ca.crt.pem")}</div></div>
+                    <div class="field"><label>客户端信任的根 CA</label><div>${esc(rootName)}</div><div class="path">${esc(s.root_certificate_path)}</div><div class="hint">SHA-256：${esc(s.root_fingerprint || "—")}</div></div>
                     <div class="field"><label>访问地址</label><a class="root-certificate-access path" href="${esc(rootAccessUrl)}" target="_blank" rel="noopener">${esc(rootAccessUrl)}</a></div>
                     <div class="field">
                       <label>证书操作</label>
                       <div class="root-certificate-actions">
                         <button class="btn primary" id="ca-download" type="button">下载根证书</button>
                         <a class="btn" href="${esc(appPath("/help-cert/"))}" target="_blank" rel="noopener">证书帮助</a>
-                        <button class="btn danger" id="ca-reset" type="button">重置根证书</button>
+                        <button class="btn danger" id="ca-reset" type="button">重置签发 CA</button>
                       </div>
                     </div>
                     <p class="hint">证书中的二维码用于在手机或其他设备上直接打开上述 HTTPS 访问地址。</p>
@@ -6411,7 +6414,7 @@
                   <div class="field"><label>证书路径</label><div class="path">${esc(s.loadbalance_certificate_path)}</div></div>
                   <div class="field"><label for="lb-cert-ip">负载均衡 IP</label><input id="lb-cert-ip" type="text" value="${esc(s.loadbalance_ip || s.suggested_ip || "")}" /></div>
                   <div class="field"><label for="lb-cert-domains">域名（可选，多个用逗号分隔）</label><input id="lb-cert-domains" type="text" value="${esc((s.loadbalance_domains || []).join(", ") || "4np.tjj")}" placeholder="例如：4np.tjj" /></div>
-                  <div class="field"><label for="lb-ca-password">签发 CA 密码</label><input id="lb-ca-password" type="password" autocomplete="current-password" /></div>
+                  <div class="field"><label for="lb-ca-password">签发 CA 密码</label><input id="lb-ca-password" type="password" autocomplete="off" aria-describedby="lb-ca-password-hint" /><p class="hint" id="lb-ca-password-hint">输入为 Cangling Update CA 单独设置的密码，不是根 CA 私钥密码。</p></div>
                   <div class="row" style="align-items:center;flex-wrap:wrap">
                     <button class="btn primary" id="lb-cert-issue" type="button" ${s.root_initialized ? "" : "disabled"}>${s.loadbalance_issued ? "重新签发并应用" : "签发并应用"}</button>
                     <div class="flash err" id="lb-cert-error" style="margin:0;flex:1 1 260px" hidden></div>

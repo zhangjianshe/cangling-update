@@ -57,6 +57,9 @@ async fn help_page() -> Result<Html<String>, AppError> {
 struct CertificateStatus {
     root_initialized: bool,
     issuer_subject: String,
+    issuer_expires: String,
+    issuer_fingerprint: String,
+    issuer_certificate_path: &'static str,
     embedded_chain_active: bool,
     root_subject: String,
     root_expires: String,
@@ -113,7 +116,8 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect();
-    let (issuer_subject, _) = certificate_summary(CA_CERT);
+    let (issuer_subject, issuer_expires) = certificate_summary(CA_CERT);
+    let issuer_fingerprint = certificate_fingerprint(CA_CERT);
     let embedded_chain_active = embedded_chain_active();
     let (root_subject, root_expires) = certificate_summary(active_trust_root());
     let root_fingerprint = certificate_fingerprint(active_trust_root());
@@ -134,6 +138,9 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
     Ok(Json(CertificateStatus {
         root_initialized,
         issuer_subject,
+        issuer_expires,
+        issuer_fingerprint,
+        issuer_certificate_path: CA_CERT,
         embedded_chain_active,
         root_subject,
         root_expires,
@@ -550,10 +557,10 @@ fn parse_certificate_fingerprint(output: &str) -> String {
 
 fn validate_password(password: &str) -> Result<(), AppError> {
     if password.len() < 12 {
-        return Err(AppError::bad("根证书密码至少需要 12 个字符"));
+        return Err(AppError::bad("CA 私钥密码至少需要 12 个字符"));
     }
     if password.as_bytes().contains(&0) || password.contains('\n') || password.contains('\r') {
-        return Err(AppError::bad("根证书密码包含不允许的字符"));
+        return Err(AppError::bad("CA 私钥密码包含不允许的字符"));
     }
     Ok(())
 }
@@ -795,13 +802,21 @@ fn run_openssl(args: &[&str], password: Option<&str>) -> Result<(), AppError> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(command_error("OpenSSL 操作失败，请检查根证书密码", &output))
+        Err(command_error("OpenSSL 操作失败", &output))
     }
 }
 
 fn command_error(prefix: &str, output: &Output) -> AppError {
     let detail = String::from_utf8_lossy(&output.stderr);
-    AppError::bad(format!("{prefix}：{}", detail.trim()))
+    AppError::bad(openssl_error_message(prefix, &detail))
+}
+
+fn openssl_error_message(prefix: &str, detail: &str) -> String {
+    let normalized = detail.to_ascii_lowercase();
+    if normalized.contains("bad decrypt") || normalized.contains("maybe wrong password") {
+        return "签发 CA 私钥解密失败：请使用为 Cangling Update CA 单独设置的签发密码，不是 Cangling Root CA 的根私钥密码。若修改过签发密码，请确认已更新程序并重置签发 CA。".into();
+    }
+    format!("{prefix}：{}", detail.trim())
 }
 
 fn path_text(path: &Path) -> Result<&str, AppError> {
@@ -856,6 +871,21 @@ mod tests {
         assert!(chain.starts_with(std::str::from_utf8(leaf).unwrap()));
         assert_eq!(chain.matches("-----BEGIN CERTIFICATE-----").count(), 2);
         assert!(!chain.contains(std::str::from_utf8(EMBEDDED_TRUST_ROOT).unwrap().trim()));
+    }
+
+    #[test]
+    fn decryption_errors_explain_issuing_password_without_openssl_trace() {
+        let error = openssl_error_message(
+            "OpenSSL 操作失败",
+            "error: bad decrypt; PKCS12 maybe wrong password",
+        );
+        assert!(error.contains("单独设置的签发密码"));
+        assert!(error.contains("不是 Cangling Root CA"));
+        assert!(!error.contains("PKCS12"));
+        assert_eq!(
+            openssl_error_message("OpenSSL 操作失败", "other failure\n"),
+            "OpenSSL 操作失败：other failure"
+        );
     }
 
     #[test]
