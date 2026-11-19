@@ -684,11 +684,11 @@
     @media (max-width:760px) { .cluster-overview-header { grid-template-columns:1fr auto; } .cluster-access-links { grid-column:1 / -1; grid-row:2; justify-content:flex-start; } }
     @media (max-width:560px) { .cluster-overview-grid,.cluster-overview-detail { grid-template-columns:1fr; } }
     label { display: block; color: var(--muted); margin: 0 0 6px; }
-    input[type=text], input[type=password], input[type=number], textarea {
+    input[type=text], input[type=url], input[type=password], input[type=number], textarea {
       width: 100%; background: var(--bg-input); color: var(--text); border: 1px solid var(--line);
       padding: 9px 11px; outline: none;
     }
-    input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
+    input[type=text]:focus, input[type=url]:focus, input[type=password]:focus, input[type=number]:focus, textarea:focus { border-color: var(--accent-emphasis); box-shadow: 0 0 0 3px var(--bg-active); }
     textarea { min-height: 72px; resize: vertical; }
     .field { margin-bottom: 12px; }
     .dir-row { display: flex; gap: 8px; align-items: center; }
@@ -6199,6 +6199,22 @@
       }
     }
 
+    let certificateTab = "ca";
+    function activateCertificateTab() {
+      document.querySelectorAll('[data-certificate-tab]').forEach(button => {
+        const active = button.dataset.certificateTab === certificateTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+        button.tabIndex = active ? 0 : -1;
+      });
+      for (const name of ["ca", "website", "tunnel"]) {
+        const panel = document.getElementById("certificate-panel-" + name);
+        if (panel) panel.hidden = name !== certificateTab;
+      }
+      const content = document.getElementById("certificate-content");
+      if (content) content.hidden = certificateTab === "tunnel";
+    }
+
     async function renderCertificates() {
       state.current = null;
       renderList();
@@ -6206,11 +6222,30 @@
       $("#main").innerHTML = `
         <div id="flash" hidden></div>
         <div class="title-row">
-          <div><h2>证书管理</h2><div class="path">维护本地根证书，并为负载均衡签发 IP 证书</div></div>
+          <div><h2>证书管理</h2><div class="path">管理证书链、网站 HTTPS 证书及 WSS 隧道公钥</div></div>
           <button class="btn" id="cert-refresh" type="button">刷新</button>
         </div>
+        <div class="tabs" role="tablist" aria-label="证书管理">
+          <button type="button" class="tab" id="certificate-tab-ca" role="tab" aria-controls="certificate-panel-ca" data-certificate-tab="ca">证书颁发机构</button>
+          <button type="button" class="tab" id="certificate-tab-website" role="tab" aria-controls="certificate-panel-website" data-certificate-tab="website">网站证书</button>
+          <button type="button" class="tab" id="certificate-tab-tunnel" role="tab" aria-controls="certificate-panel-tunnel" data-certificate-tab="tunnel">WSS 隧道公钥</button>
+        </div>
         <div id="certificate-content"><div class="card"><div class="empty">正在读取证书状态…</div></div></div>
-        <div id="tunnel-key-content" class="card storage-form" style="margin-top:20px"><div class="empty">正在读取 WSS 隧道公钥…</div></div>`;
+        <div id="certificate-panel-tunnel" role="tabpanel" aria-labelledby="certificate-tab-tunnel" hidden><div id="tunnel-key-content" class="card storage-form"><div class="empty">正在读取 WSS 隧道公钥…</div></div></div>`;
+      document.querySelectorAll('[data-certificate-tab]').forEach(button => {
+        button.onclick = () => { certificateTab = button.dataset.certificateTab; activateCertificateTab(); };
+        button.onkeydown = event => {
+          const tabs = Array.from(document.querySelectorAll('[data-certificate-tab]'));
+          let index = tabs.indexOf(button);
+          if (event.key === 'ArrowRight') index = (index + 1) % tabs.length;
+          else if (event.key === 'ArrowLeft') index = (index + tabs.length - 1) % tabs.length;
+          else if (event.key === 'Home') index = 0;
+          else if (event.key === 'End') index = tabs.length - 1;
+          else return;
+          event.preventDefault(); tabs[index].click(); tabs[index].focus();
+        };
+      });
+      activateCertificateTab();
       $("#cert-refresh").onclick = () => { loadCertificates(); loadTunnelKeys(); };
       await Promise.all([loadCertificates(), loadTunnelKeys()]);
     }
@@ -6260,7 +6295,7 @@
       closeDialog();
       $("#dialog-modal").classList.add("form-modal");
       $("#dialog-title").textContent = "同步账号证书公钥";
-      $("#dialog-body").innerHTML = `<form id="tunnel-account-form" style="padding:20px"><p class="hint">使用 Keeper 登录的同一账号；仅调用公钥列表接口，读取后密码立即清空，不保存到本机配置。</p><div class="field"><label for="tunnel-account-url">账号服务器</label><input id="tunnel-account-url" type="url" value="https://soft.cangling.cn:22002" required></div><div class="field"><label for="tunnel-account-user">账号</label><input id="tunnel-account-user" autocomplete="username" required></div><div class="field"><label for="tunnel-account-password">密码</label><input id="tunnel-account-password" type="password" autocomplete="off" required></div><p id="tunnel-account-error" class="hint" role="status" aria-live="polite"></p></form>`;
+      $("#dialog-body").innerHTML = `<form id="tunnel-account-form" style="padding:20px"><p class="hint">使用 Keeper 登录的同一账号；仅调用公钥列表接口，读取后密码立即清空，不保存到本机配置。</p><div class="field"><label for="tunnel-account-url">账号服务器</label><input id="tunnel-account-url" type="url" value="https://soft.cangling.cn:22002" required></div><div class="field"><label for="tunnel-account-user">账号</label><input id="tunnel-account-user" type="text" autocomplete="username" required></div><div class="field"><label for="tunnel-account-password">密码</label><input id="tunnel-account-password" type="password" autocomplete="off" required></div><p id="tunnel-account-error" class="hint" role="status" aria-live="polite"></p></form>`;
       setDialogAction("登录并读取公钥", async () => {
         const form = $("#tunnel-account-form"); if (!form.reportValidity()) return;
         const password = $("#tunnel-account-password"); const action = $("#dialog-extra");
@@ -6301,6 +6336,7 @@
       if (!content) return;
       try {
         const s = await api("/api/certificates");
+        if ($("#certificate-content") !== content) return;
         const rootName = certificateSubjectValue(s.root_subject, "CN") || "Cangling Local Root CA";
         const rootOrganization = certificateSubjectValue(s.root_subject, "O") || "未设置";
         const rootOrganizationUnit = certificateSubjectValue(s.root_subject, "OU") || "未设置";
@@ -6308,9 +6344,10 @@
         const loadbalanceName = certificateSubjectValue(s.loadbalance_subject, "CN") || "Load Balancer";
         content.innerHTML = `
           <div class="certificate-sections">
-            <section class="card storage-form certificate-section" aria-labelledby="root-certificate-title">
-              <h3 class="certificate-section-title" id="root-certificate-title">根证书</h3>
-              <p class="hint">根证书私钥使用 AES-256 加密，密码不会写入磁盘，也不会由系统保存。请妥善保管密码；遗失后无法继续签发证书。</p>
+            <section class="card storage-form certificate-section" id="certificate-panel-ca" role="tabpanel" aria-labelledby="certificate-tab-ca">
+              <h3 class="certificate-section-title" id="root-certificate-title">证书颁发机构</h3>
+              <p class="hint">签发 CA：${esc(certificateSubjectValue(s.issuer_subject || s.root_subject, "CN"))} · ${s.embedded_chain_active ? "已使用新内嵌证书链" : "正在使用已有本地 CA；切换新证书链需重置 CA 并重新签发网站证书"}</p>
+              <p class="hint">签发 CA 私钥使用 AES-256 加密，签发密码不会由服务保存。客户端应信任下载的根证书；根 CA 私钥不包含在程序中。</p>
               ${s.root_initialized ? `
                 <div class="root-certificate-layout">
                   <div class="root-certificate-card" role="group" aria-label="根证书 ${esc(rootName)}">
@@ -6352,7 +6389,7 @@
                   <div class="field"><label>&nbsp;</label><button class="btn primary" id="ca-init" type="button">初始化根证书</button></div>
                 </div>`}
             </section>
-            <section class="card storage-form certificate-section" aria-labelledby="loadbalance-certificate-title">
+            <section class="card storage-form certificate-section" id="certificate-panel-website" role="tabpanel" aria-labelledby="certificate-tab-website" hidden>
               <h3 class="certificate-section-title" id="loadbalance-certificate-title">负载均衡证书</h3>
               <p class="hint">签发后自动更新 Load Balancer，并在保留 HTTP 7800 的同时启用 HTTPS 7443。</p>
               <div class="loadbalance-certificate-layout">
@@ -6374,7 +6411,7 @@
                   <div class="field"><label>证书路径</label><div class="path">${esc(s.loadbalance_certificate_path)}</div></div>
                   <div class="field"><label for="lb-cert-ip">负载均衡 IP</label><input id="lb-cert-ip" type="text" value="${esc(s.loadbalance_ip || s.suggested_ip || "")}" /></div>
                   <div class="field"><label for="lb-cert-domains">域名（可选，多个用逗号分隔）</label><input id="lb-cert-domains" type="text" value="${esc((s.loadbalance_domains || []).join(", ") || "4np.tjj")}" placeholder="例如：4np.tjj" /></div>
-                  <div class="field"><label for="lb-ca-password">根证书密码</label><input id="lb-ca-password" type="password" autocomplete="current-password" /></div>
+                  <div class="field"><label for="lb-ca-password">签发 CA 密码</label><input id="lb-ca-password" type="password" autocomplete="current-password" /></div>
                   <div class="row" style="align-items:center;flex-wrap:wrap">
                     <button class="btn primary" id="lb-cert-issue" type="button" ${s.root_initialized ? "" : "disabled"}>${s.loadbalance_issued ? "重新签发并应用" : "签发并应用"}</button>
                     <div class="flash err" id="lb-cert-error" style="margin:0;flex:1 1 260px" hidden></div>
@@ -6392,6 +6429,7 @@
         if (reset) reset.onclick = resetRootCertificate;
         const issue = $("#lb-cert-issue");
         if (issue) issue.onclick = issueLoadbalanceCertificate;
+        activateCertificateTab();
       } catch (error) {
         content.innerHTML = `<div class="card"><div class="empty bad">${esc(error.message)}</div></div>`;
       }
@@ -6421,7 +6459,7 @@
 
     async function resetRootCertificate() {
       const confirmed = await confirmDialog(
-        "确定用当前程序内嵌的根证书和加密私钥覆盖本机根证书吗？如果现有负载均衡证书不是由该根证书签发，重置后必须重新签发。",
+        "确定切换到当前程序内嵌的签发 CA 和根证书链吗？切换前会备份本机 CA 和网站证书。切换后客户端需导入新的根证书，并重新签发网站证书。",
         { danger: true, confirmText: "确认重置" },
       );
       if (!confirmed) return;

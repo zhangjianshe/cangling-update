@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 const CERT_DIR: &str = "/opt/cangling/loadbalance/certs";
 const CA_KEY: &str = "/opt/cangling/loadbalance/certs/ca.key.pem";
+const TRUST_ROOT: &str = "/opt/cangling/loadbalance/certs/trust-root.crt.pem";
 const CA_CERT: &str = "/opt/cangling/loadbalance/certs/ca.crt.pem";
 const SERVER_KEY: &str = "/opt/cangling/loadbalance/certs/loadbalance.key.pem";
 const SERVER_CERT: &str = "/opt/cangling/loadbalance/certs/loadbalance.crt.pem";
@@ -27,6 +28,7 @@ const HELP_PAGE: &str = "/opt/cangling/loadbalance/help-cert/index.html";
 const HELP_CA_CERT: &str = "/opt/cangling/loadbalance/help-cert/cangling-root-ca.crt";
 const EMBEDDED_CA_KEY: &[u8] = include_bytes!("assets/cangling-root-ca.key.pem");
 const EMBEDDED_CA_CERT: &[u8] = include_bytes!("assets/cangling-root-ca.crt.pem");
+const EMBEDDED_TRUST_ROOT: &[u8] = include_bytes!("assets/cangling-trust-root.crt.pem");
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -54,6 +56,8 @@ async fn help_page() -> Result<Html<String>, AppError> {
 #[derive(Debug, Serialize)]
 struct CertificateStatus {
     root_initialized: bool,
+    issuer_subject: String,
+    embedded_chain_active: bool,
     root_subject: String,
     root_expires: String,
     root_fingerprint: String,
@@ -109,8 +113,10 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect();
-    let (root_subject, root_expires) = certificate_summary(CA_CERT);
-    let root_fingerprint = certificate_fingerprint(CA_CERT);
+    let (issuer_subject, _) = certificate_summary(CA_CERT);
+    let embedded_chain_active = embedded_chain_active();
+    let (root_subject, root_expires) = certificate_summary(active_trust_root());
+    let root_fingerprint = certificate_fingerprint(active_trust_root());
     let (loadbalance_subject, loadbalance_expires) = certificate_summary(SERVER_CERT);
     let loadbalance_fingerprint = certificate_fingerprint(SERVER_CERT);
     let https_url = loadbalance_issued.then(|| {
@@ -127,6 +133,8 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
     });
     Ok(Json(CertificateStatus {
         root_initialized,
+        issuer_subject,
+        embedded_chain_active,
         root_subject,
         root_expires,
         root_fingerprint,
@@ -137,7 +145,7 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
         loadbalance_expires,
         loadbalance_fingerprint,
         suggested_ip,
-        root_certificate_path: CA_CERT,
+        root_certificate_path: active_trust_root(),
         loadbalance_certificate_path: SERVER_CERT,
         https_url,
     }))
@@ -145,7 +153,7 @@ async fn status() -> Result<Json<CertificateStatus>, AppError> {
 
 async fn download_root() -> Result<impl IntoResponse, AppError> {
     ensure_embedded_root()?;
-    let certificate = std::fs::read(CA_CERT)
+    let certificate = std::fs::read(active_trust_root())
         .map_err(|error| AppError::internal(format!("读取根证书失败：{error}")))?;
     Ok((
         [
@@ -160,7 +168,25 @@ async fn download_root() -> Result<impl IntoResponse, AppError> {
 }
 
 async fn reset_root() -> Result<Json<ActionResult>, AppError> {
-    prepare_cert_dir()?;
+    ensure_embedded_root()?;
+    let backup = PathBuf::from(CERT_DIR).join(format!("backup-{}", Uuid::new_v4()));
+    std::fs::create_dir(&backup)?;
+    set_mode(&backup, 0o700)?;
+    for source in [
+        CA_KEY,
+        CA_CERT,
+        TRUST_ROOT,
+        SERVER_KEY,
+        SERVER_CERT,
+        SERVER_IP,
+        SERVER_DOMAINS,
+    ] {
+        if Path::new(source).is_file() {
+            let target = backup.join(Path::new(source).file_name().unwrap());
+            std::fs::copy(source, &target)?;
+            set_mode(&target, 0o600)?;
+        }
+    }
     let nonce = Uuid::new_v4();
     let temp_key = PathBuf::from(CERT_DIR).join(format!(".reset-ca-{nonce}.key"));
     let temp_cert = PathBuf::from(CERT_DIR).join(format!(".reset-ca-{nonce}.crt"));
@@ -180,9 +206,10 @@ async fn reset_root() -> Result<Json<ActionResult>, AppError> {
     Ok(Json(ActionResult {
         ok: true,
         message: if needs_reissue {
-            "已用程序内嵌证书重置根证书；现有负载均衡证书与新根证书不匹配，请重新签发".to_string()
+            "已切换内嵌签发 CA 和根证书链，旧证书已备份；请导入新根证书，并重新签发网站证书"
+                .to_string()
         } else {
-            "已用程序内嵌证书重置根证书".to_string()
+            "已切换内嵌签发 CA 和根证书链，旧证书已备份".to_string()
         },
     }))
 }
@@ -385,9 +412,8 @@ async fn issue_loadbalance(
                 CA_KEY,
                 "-passin",
                 "env:CANGLING_CA_PASSWORD",
-                "-CAserial",
-                "/opt/cangling/loadbalance/certs/ca.srl",
-                "-CAcreateserial",
+                "-set_serial",
+                &format!("0x{}", Uuid::new_v4().simple()),
                 "-extfile",
                 path_text(&temp_ext)?,
                 "-out",
@@ -395,6 +421,9 @@ async fn issue_loadbalance(
             ],
             Some(&body.password),
         )?;
+        let leaf = std::fs::read(&temp_cert)?;
+        let issuer = std::fs::read(CA_CERT)?;
+        std::fs::write(&temp_cert, website_certificate_chain(&leaf, &issuer))?;
         set_mode(&temp_key, 0o600)?;
         set_mode(&temp_cert, 0o644)?;
         std::fs::rename(&temp_key, SERVER_KEY)?;
@@ -468,6 +497,32 @@ fn certificate_fingerprint(path: &str) -> String {
         return String::new();
     };
     parse_certificate_fingerprint(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn embedded_chain_active() -> bool {
+    std::fs::read(CA_CERT).is_ok_and(|cert| cert == EMBEDDED_CA_CERT)
+}
+
+fn active_trust_root() -> &'static str {
+    if embedded_chain_active() {
+        TRUST_ROOT
+    } else {
+        CA_CERT
+    }
+}
+
+fn website_certificate_chain(leaf: &[u8], issuer_bundle: &[u8]) -> Vec<u8> {
+    let mut chain = leaf.to_vec();
+    if !chain.ends_with(b"\n") {
+        chain.push(b'\n');
+    }
+    // Only send the immediate issuer; clients already have the self-signed root.
+    let issuer = String::from_utf8_lossy(issuer_bundle);
+    if let Some(end) = issuer.find("-----END CERTIFICATE-----") {
+        chain.extend_from_slice(&issuer.as_bytes()[..end + "-----END CERTIFICATE-----".len()]);
+        chain.push(b'\n');
+    }
+    chain
 }
 
 fn certificate_verifies(certificate: &str, ca_certificate: &str) -> bool {
@@ -550,6 +605,10 @@ fn prepare_cert_dir() -> Result<(), AppError> {
 /// Installs the encrypted, deployment-wide CA only when no CA exists locally.
 /// Existing certificate material is never replaced, including partial pairs.
 pub(crate) fn ensure_embedded_root() -> Result<bool, AppError> {
+    prepare_cert_dir()?;
+    if !Path::new(TRUST_ROOT).exists() {
+        write_new(Path::new(TRUST_ROOT), EMBEDDED_TRUST_ROOT, 0o644)?;
+    }
     let key_exists = Path::new(CA_KEY).exists();
     let cert_exists = Path::new(CA_CERT).exists();
     if key_exists && cert_exists {
@@ -587,7 +646,7 @@ pub(crate) fn ensure_help_page() -> Result<(), AppError> {
     }
     std::fs::create_dir_all(HELP_DIR)?;
     set_mode(Path::new(HELP_DIR), 0o755)?;
-    std::fs::copy(CA_CERT, HELP_CA_CERT)?;
+    std::fs::copy(active_trust_root(), HELP_CA_CERT)?;
     set_mode(Path::new(HELP_CA_CERT), 0o644)?;
 
     let primary_ip = hostinfo::primary_ip();
@@ -598,7 +657,7 @@ pub(crate) fn ensure_help_page() -> Result<(), AppError> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let fingerprint = certificate_fingerprint(CA_CERT);
+    let fingerprint = certificate_fingerprint(active_trust_root());
     std::fs::write(
         HELP_PAGE,
         build_help_page(&primary_ip, &domains, &fingerprint),
@@ -762,6 +821,42 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_issuing_ca_chains_to_separate_trust_root() {
+        assert!(EMBEDDED_CA_KEY.starts_with(b"-----BEGIN ENCRYPTED PRIVATE KEY-----"));
+        assert_ne!(EMBEDDED_CA_CERT, EMBEDDED_TRUST_ROOT);
+        let dir = std::env::temp_dir().join(format!("cangling-ca-chain-{}", Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let root = dir.join("root.pem");
+        let issuer = dir.join("issuer.pem");
+        std::fs::write(&root, EMBEDDED_TRUST_ROOT).unwrap();
+        std::fs::write(&issuer, EMBEDDED_CA_CERT).unwrap();
+        assert!(certificate_verifies(
+            issuer.to_str().unwrap(),
+            root.to_str().unwrap()
+        ));
+        let (subject, _) = certificate_summary(issuer.to_str().unwrap());
+        assert!(subject.contains("Cangling Update Ca Root"));
+        assert_eq!(
+            std::str::from_utf8(EMBEDDED_TRUST_ROOT)
+                .unwrap()
+                .matches("-----BEGIN CERTIFICATE-----")
+                .count(),
+            1
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn website_chain_contains_leaf_then_issuer_without_trust_root() {
+        let leaf = b"-----BEGIN CERTIFICATE-----\nleaf\n-----END CERTIFICATE-----";
+        let chain = website_certificate_chain(leaf, EMBEDDED_CA_CERT);
+        let chain = String::from_utf8(chain).unwrap();
+        assert!(chain.starts_with(std::str::from_utf8(leaf).unwrap()));
+        assert_eq!(chain.matches("-----BEGIN CERTIFICATE-----").count(), 2);
+        assert!(!chain.contains(std::str::from_utf8(EMBEDDED_TRUST_ROOT).unwrap().trim()));
+    }
 
     #[test]
     fn validates_certificate_inputs() {
