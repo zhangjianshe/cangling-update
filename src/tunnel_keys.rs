@@ -43,6 +43,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/tunnel/keys", get(list).post(grant).delete(revoke))
         .route("/api/tunnel/keys/account", post(account_keys))
+        .route("/api/tunnel/keys/sync-ssh", post(sync_ssh))
 }
 fn key_info(key: &PublicKey) -> Result<KeyInfo, AppError> {
     Ok(KeyInfo {
@@ -71,11 +72,24 @@ fn read_keys(dir: &Path) -> Result<Vec<PublicKey>, AppError> {
         })
         .collect()
 }
-fn write_keys(dir: &Path, keys: &[PublicKey]) -> Result<(), AppError> {
-    fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".tunnel-keys-{}", uuid::Uuid::new_v4()));
-    let result = (|| {
-        use std::io::Write;
+fn reject_symlink(path: &Path) -> Result<(), AppError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(AppError::bad("授权路径不能是符号链接"))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn stage_keys(path: &Path, bytes: &[u8]) -> Result<std::path::PathBuf, AppError> {
+    use std::io::Write;
+    let temp = path
+        .parent()
+        .unwrap()
+        .join(format!(".tunnel-keys-{}", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<(), AppError> {
         let mut options = fs::OpenOptions::new();
         options.create_new(true).write(true);
         #[cfg(unix)]
@@ -83,25 +97,163 @@ fn write_keys(dir: &Path, keys: &[PublicKey]) -> Result<(), AppError> {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options.open(&tmp)?;
-        for key in keys {
-            writeln!(
-                file,
-                "{}",
-                key.to_openssh().map_err(|e| AppError::bad(e.to_string()))?
-            )?;
-        }
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
-        drop(file);
-        fs::rename(&tmp, dir.join(FILE))?;
         Ok(())
     })();
-    if tmp.exists() {
-        let _ = fs::remove_file(tmp);
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(temp)
+}
+
+fn ssh_line_fingerprint(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    // Ignore whitespace and fake key types inside quoted authorized_keys options.
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut start = None;
+    for (offset, ch) in line
+        .char_indices()
+        .chain(std::iter::once((line.len(), ' ')))
+    {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quoted {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            quoted = !quoted;
+        }
+        if ch.is_whitespace() && !quoted {
+            if let Some(begin) = start.take() {
+                if &line[begin..offset] == "ssh-ed25519" {
+                    let key: PublicKey = line[begin..].parse().ok()?;
+                    return Some(key.fingerprint(HashAlg::Sha256).to_string());
+                }
+            }
+        } else if start.is_none() {
+            start = Some(offset);
+        }
+    }
+    None
+}
+
+fn merged_ssh_keys(
+    existing: &str,
+    keys: &[PublicKey],
+    revoked: Option<&str>,
+) -> Result<String, AppError> {
+    let mut result = String::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in existing.split_inclusive('\n') {
+        if let Some(fingerprint) = ssh_line_fingerprint(line) {
+            if revoked == Some(fingerprint.as_str()) {
+                continue;
+            }
+            seen.insert(fingerprint);
+        }
+        result.push_str(line);
+    }
+    for key in keys {
+        if seen.insert(key.fingerprint(HashAlg::Sha256).to_string()) {
+            if !result.is_empty() && !result.ends_with('\n') {
+                result.push('\n');
+            }
+            result.push_str(&key.to_openssh().map_err(|e| AppError::bad(e.to_string()))?);
+            result.push('\n');
+        }
+    }
+    Ok(result)
+}
+
+fn write_authorizations(
+    dir: &Path,
+    home: &Path,
+    keys: &[PublicKey],
+    revoked: Option<&str>,
+) -> Result<(), AppError> {
+    use fs2::FileExt;
+    let ssh_dir = home.join(".ssh");
+    reject_symlink(&ssh_dir)?;
+    fs::create_dir_all(&ssh_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&ssh_dir, fs::Permissions::from_mode(0o700))?;
+    }
+    let ssh = ssh_dir.join("authorized_keys");
+    let tunnel = dir.join(FILE);
+    let lock_path = ssh_dir.join(".cangling-authorized-keys.lock");
+    reject_symlink(&lock_path)?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let lock = options.open(lock_path)?;
+    lock.lock_exclusive()?;
+    reject_symlink(&ssh)?;
+    reject_symlink(&tunnel)?;
+    let previous = match fs::read_to_string(&ssh) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let ssh_text = merged_ssh_keys(previous.as_deref().unwrap_or(""), keys, revoked)?;
+    let mut tunnel_text = String::new();
+    for key in keys {
+        tunnel_text.push_str(&key.to_openssh().map_err(|e| AppError::bad(e.to_string()))?);
+        tunnel_text.push('\n');
+    }
+    fs::create_dir_all(dir)?;
+    // Prepare both replacements and rollback material before changing either file.
+    let mut temps = Vec::new();
+    let result = (|| -> Result<(), AppError> {
+        let ssh_temp = stage_keys(&ssh, ssh_text.as_bytes())?;
+        temps.push(ssh_temp.clone());
+        let tunnel_temp = stage_keys(&tunnel, tunnel_text.as_bytes())?;
+        temps.push(tunnel_temp.clone());
+        let rollback = if let Some(text) = &previous {
+            let path = stage_keys(&ssh, text.as_bytes())?;
+            temps.push(path.clone());
+            Some(path)
+        } else {
+            None
+        };
+        fs::rename(&ssh_temp, &ssh)?;
+        if let Err(error) = fs::rename(&tunnel_temp, &tunnel) {
+            let restored = if let Some(path) = rollback {
+                fs::rename(path, &ssh)
+            } else {
+                fs::remove_file(&ssh)
+            };
+            if let Err(restore) = restored {
+                return Err(AppError::internal(format!(
+                    "隧道授权保存失败：{error}；SSH 授权回滚失败：{restore}"
+                )));
+            }
+            return Err(error.into());
+        }
+        Ok(())
+    })();
+    for temp in temps {
+        let _ = fs::remove_file(temp);
     }
     result
 }
-fn add_key(dir: &Path, body: Grant) -> Result<KeyInfo, AppError> {
+
+fn add_key_at(dir: &Path, home: &Path, body: Grant) -> Result<KeyInfo, AppError> {
     let _guard = KEYS_LOCK
         .lock()
         .map_err(|_| AppError::internal("公钥文件锁错误"))?;
@@ -134,10 +286,10 @@ fn add_key(dir: &Path, body: Grant) -> Result<KeyInfo, AppError> {
     keys.retain(|existing| existing.fingerprint(HashAlg::Sha256) != fingerprint);
     let info = key_info(&key)?;
     keys.push(key);
-    write_keys(dir, &keys)?;
+    write_authorizations(dir, home, &keys, None)?;
     Ok(info)
 }
-fn remove_key(dir: &Path, fingerprint: &str) -> Result<(), AppError> {
+fn remove_key_at(dir: &Path, home: &Path, fingerprint: &str) -> Result<(), AppError> {
     if !fingerprint.starts_with("SHA256:") || fingerprint.len() > 128 {
         return Err(AppError::bad("无效的公钥指纹"));
     }
@@ -146,7 +298,7 @@ fn remove_key(dir: &Path, fingerprint: &str) -> Result<(), AppError> {
         .map_err(|_| AppError::internal("公钥文件锁错误"))?;
     let mut keys = read_keys(dir)?;
     keys.retain(|key| key.fingerprint(HashAlg::Sha256).to_string() != fingerprint);
-    write_keys(dir, &keys)
+    write_authorizations(dir, home, &keys, Some(fingerprint))
 }
 async fn list(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let _guard = KEYS_LOCK
@@ -160,14 +312,34 @@ async fn list(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false);
     Ok(Json(
-        json!({"keys":keys,"path":state.paths.config_dir.join(FILE),"enabled":enabled}),
+        json!({"keys":keys,"path":state.paths.config_dir.join(FILE),"sshPath":crate::service::root_home_dir().join(".ssh/authorized_keys"),"enabled":enabled}),
     ))
 }
+async fn sync_ssh(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
+    let _guard = KEYS_LOCK
+        .lock()
+        .map_err(|_| AppError::internal("公钥文件锁错误"))?;
+    let keys = read_keys(&state.paths.config_dir)?;
+    write_authorizations(
+        &state.paths.config_dir,
+        &crate::service::root_home_dir(),
+        &keys,
+        None,
+    )?;
+    Ok(Json(
+        json!({"message":format!("已将 {} 个 WSS 公钥同步到主机 root SSH 授权", keys.len())}),
+    ))
+}
+
 async fn grant(
     State(state): State<AppState>,
     Json(body): Json<Grant>,
 ) -> Result<Json<KeyInfo>, AppError> {
-    let key = add_key(&state.paths.config_dir, body)?;
+    let key = add_key_at(
+        &state.paths.config_dir,
+        &crate::service::root_home_dir(),
+        body,
+    )?;
     tracing::info!(fingerprint=%key.fingerprint,"WSS tunnel key authorized");
     Ok(Json(key))
 }
@@ -175,10 +347,14 @@ async fn revoke(
     State(state): State<AppState>,
     Json(body): Json<Revoke>,
 ) -> Result<Json<Value>, AppError> {
-    remove_key(&state.paths.config_dir, &body.fingerprint)?;
+    remove_key_at(
+        &state.paths.config_dir,
+        &crate::service::root_home_dir(),
+        &body.fingerprint,
+    )?;
     tracing::info!(fingerprint=%body.fingerprint,"WSS tunnel key revoked");
     Ok(Json(
-        json!({"message":"已撤销公钥授权；后续新连接将被拒绝，现有连接不会被中断"}),
+        json!({"message":"已同步撤销 WSS 隧道和主机 root SSH 公钥授权；现有连接不会被中断"}),
     ))
 }
 fn server_url(text: &str) -> Result<String, AppError> {
@@ -304,6 +480,13 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    fn add_key(dir: &Path, body: Grant) -> Result<KeyInfo, AppError> {
+        add_key_at(dir, &dir.join("test-home"), body)
+    }
+    fn remove_key(dir: &Path, fingerprint: &str) -> Result<(), AppError> {
+        remove_key_at(dir, &dir.join("test-home"), fingerprint)
+    }
+
     fn public() -> String {
         PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519)
             .unwrap()
@@ -359,7 +542,120 @@ mod tests {
             remaining[0].fingerprint(HashAlg::Sha256).to_string(),
             b.fingerprint
         );
-        assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 1);
+        assert!(fs::read_dir(&dir.0).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".tunnel-keys-")));
+    }
+
+    #[test]
+    fn page_authorization_updates_both_files_and_preserves_restricted_ssh_keys() {
+        let dir = Directory::new();
+        let home = dir.0.join("test-home");
+        let ssh = home.join(".ssh/authorized_keys");
+        fs::create_dir_all(ssh.parent().unwrap()).unwrap();
+        let first = public();
+        let other = public();
+        let restricted = format!("# preserve this comment\ncommand=\"echo ssh-ed25519 fake\",no-port-forwarding {first}\n{other}\n");
+        fs::write(&ssh, &restricted).unwrap();
+        let info = add_key(
+            &dir.0,
+            Grant {
+                public_key: first,
+                name: "Keeper".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&ssh).unwrap(), restricted);
+        assert_eq!(read_keys(&dir.0).unwrap().len(), 1);
+        remove_key(&dir.0, &info.fingerprint).unwrap();
+        assert_eq!(
+            fs::read_to_string(&ssh).unwrap(),
+            format!("# preserve this comment\n{other}\n")
+        );
+        assert!(read_keys(&dir.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn existing_wss_keys_can_be_synchronized_to_ssh_without_duplicates() {
+        let dir = Directory::new();
+        let home = dir.0.join("home");
+        let key: PublicKey = public().parse().unwrap();
+        let keys = vec![key];
+        write_authorizations(&dir.0, &home, &keys, None).unwrap();
+        write_authorizations(&dir.0, &home, &keys, None).unwrap();
+        let ssh = home.join(".ssh/authorized_keys");
+        assert_eq!(
+            fs::read_to_string(&ssh).unwrap(),
+            fs::read_to_string(dir.0.join(FILE)).unwrap()
+        );
+        assert_eq!(fs::read_to_string(&ssh).unwrap().lines().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&ssh).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(home.join(".ssh"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+        }
+    }
+
+    #[test]
+    fn tunnel_commit_failure_rolls_back_ssh_contents() {
+        let dir = Directory::new();
+        let home = dir.0.join("home");
+        let ssh = home.join(".ssh/authorized_keys");
+        fs::create_dir_all(ssh.parent().unwrap()).unwrap();
+        let original = format!("# unmanaged\n{}\n", public());
+        fs::write(&ssh, &original).unwrap();
+        // A directory at the target forces the second rename to fail after SSH commits.
+        fs::create_dir(dir.0.join(FILE)).unwrap();
+        let keys = vec![public().parse().unwrap()];
+        assert!(write_authorizations(&dir.0, &home, &keys, None).is_err());
+        assert_eq!(fs::read_to_string(&ssh).unwrap(), original);
+        assert!(dir.0.join(FILE).is_dir());
+        for parent in [&dir.0, ssh.parent().unwrap()] {
+            assert!(fs::read_dir(parent).unwrap().all(|v| !v
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".tunnel-keys-")));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ssh_symlink_is_rejected_without_changing_tunnel_authorization() {
+        use std::os::unix::fs::symlink;
+        let dir = Directory::new();
+        let home = dir.0.join("home");
+        fs::create_dir_all(home.join(".ssh")).unwrap();
+        let outside = dir.0.join("outside");
+        fs::write(&outside, "untouched").unwrap();
+        symlink(&outside, home.join(".ssh/authorized_keys")).unwrap();
+        let key = public();
+        fs::write(dir.0.join(FILE), format!("{key}\n")).unwrap();
+        let before = fs::read(dir.0.join(FILE)).unwrap();
+        assert!(add_key_at(
+            &dir.0,
+            &home,
+            Grant {
+                public_key: key,
+                name: "Keeper".into()
+            }
+        )
+        .is_err());
+        assert_eq!(fs::read(dir.0.join(FILE)).unwrap(), before);
+        assert_eq!(fs::read_to_string(outside).unwrap(), "untouched");
     }
 
     #[test]
@@ -402,6 +698,7 @@ mod tests {
         for path in [
             "/api/tunnel/keys",
             "/api/tunnel/keys/account",
+            "/api/tunnel/keys/sync-ssh",
             "/update/api/tunnel/keys",
         ] {
             for method in [

@@ -33,6 +33,7 @@ const context = vm.createContext({
     calls.push({url,method:options.method || 'GET',body:options.body && JSON.parse(options.body)});
     if (fail) throw new Error('test network error');
     if (url.endsWith('/account')) return {keys:[key]};
+    if (url.endsWith('/sync-ssh')) return {message:'SSH 公钥授权已同步'};
     if (options.method === 'POST') { authorized = [key]; return key; }
     if (options.method === 'DELETE') { authorized=[]; return {message:'已撤销公钥授权'}; }
     return {keys:authorized,enabled:true,path:'/config/tunnel_authorized_keys'};
@@ -42,6 +43,13 @@ vm.runInContext(source,context);
 (async () => {
   await context.loadTunnelKeys();
   assert.match(nodes.get('#tunnel-key-content').innerHTML,/尚未授权公钥/);
+  assert.match(nodes.get('#tunnel-key-content').innerHTML,/主机 root SSH 授权文件/);
+  assert.match(nodes.get('#tunnel-key-content').innerHTML,/添加和撤销会同步维护/);
+  await nodes.get('#tunnel-sync-ssh').onclick();
+  assert.equal(calls.at(-2).url,'/api/tunnel/keys/sync-ssh');
+  assert.equal(calls.at(-2).method,'POST');
+  assert.equal(authorized.length,0);
+  assert.match(nodes.get('#tunnel-key-content').innerHTML,/SSH 公钥授权已同步/);
   nodes.get('#tunnel-account-open').onclick();
   nodes.get('#tunnel-account-url').value = 'https://account.example';
   nodes.get('#tunnel-account-user').value = 'test';
@@ -76,5 +84,5 @@ vm.runInContext(source,context);
   assert.equal(failedPassword.value,'');
   assert.equal(nodes.get('#tunnel-account-error').textContent,'test network error');
   assert.equal(nodes.get('#dialog-extra').disabled,false);
-  console.log('Tunnel key UI checks passed: account selection, grant, duplicate state, revoke confirmation, inline errors, password clearing; all inline scripts parse.');
+  console.log('Tunnel key UI checks passed: account selection, grant, duplicate state, SSH synchronization, revoke confirmation, inline errors, password clearing; all inline scripts parse.');
 })().catch(error => {console.error(error);process.exitCode=1;});
