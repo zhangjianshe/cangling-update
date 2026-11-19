@@ -6262,20 +6262,12 @@
         const allowed = new Set(tunnelKeyState.authorized.map(k => k.fingerprint));
         content.innerHTML = `
           <div class="cangling-section-head"><div><h3 class="certificate-section-title">WSS 隧道公钥</h3><p class="hint">授权 Keeper 使用对应私钥连接本机 SSH 隧道；仅管理公钥，不传输或保存账号证书私钥。</p></div>
-          <div class="row"><button type="button" class="btn" id="tunnel-sync-ssh">同步 SSH 授权</button><button type="button" class="btn" id="tunnel-account-open">同步账号公钥</button><button type="button" class="btn primary" id="tunnel-key-add">添加公钥</button></div></div>
+          <div class="row"><button type="button" class="btn" id="tunnel-account-open">同步账号公钥</button><button type="button" class="btn primary" id="tunnel-key-add">添加公钥</button></div></div>
           <p class="hint">隧道服务：<strong>${result.enabled ? "已启用" : "未启用（授权后仍需启用服务端隧道）"}</strong> · 已授权 ${tunnelKeyState.authorized.length} 个公钥<br>WSS 授权文件：<span class="path">${esc(result.path || "")}</span><br>主机 root SSH 授权文件：<span class="path">${esc(result.sshPath || "~root/.ssh/authorized_keys")}</span></p>
           <div id="tunnel-key-feedback" role="status" aria-live="polite" class="hint">${esc(message)}</div>
           <div style="overflow:auto"><table><thead><tr><th>名称</th><th>算法</th><th>公钥指纹</th><th style="text-align:right">操作</th></tr></thead><tbody>${tunnelKeyState.authorized.map((key,index) => `<tr><td>${esc(key.name || "未命名公钥")}</td><td>${esc(key.algorithm)}</td><td class="path">${esc(key.fingerprint)}</td><td style="text-align:right"><button type="button" class="btn danger" data-tunnel-revoke="${index}">撤销授权</button></td></tr>`).join("") || '<tr><td colspan="4" class="empty">尚未授权公钥</td></tr>'}</tbody></table></div>
           ${tunnelKeyState.account.length ? `<h3 style="margin-top:22px">账号证书公钥</h3><div style="overflow:auto"><table><thead><tr><th>名称</th><th>公钥指纹</th><th style="text-align:right">操作</th></tr></thead><tbody>${tunnelKeyState.account.map((key,index) => `<tr><td>${esc(key.name || "未命名证书")}</td><td class="path">${esc(key.fingerprint)}</td><td style="text-align:right"><button type="button" class="btn ${allowed.has(key.fingerprint) ? "" : "primary"}" data-tunnel-grant="${index}" ${allowed.has(key.fingerprint) ? "disabled" : ""}>${allowed.has(key.fingerprint) ? "已授权" : "授权访问"}</button></td></tr>`).join("")}</tbody></table></div>` : ""}
-          <p class="hint">添加和撤销会同步维护 WSS 与主机 root SSH 公钥授权，对后续新连接立即生效，现有连接不会被中断。已有 SSH 公钥的限制选项保持不变。旧版 WSS 公钥可点击“同步 SSH 授权”补齐。</p>`;
-        $("#tunnel-sync-ssh").onclick = async () => {
-          const button = $("#tunnel-sync-ssh"); button.disabled = true;
-          try {
-            const result = await api("/api/tunnel/keys/sync-ssh", {method:"POST"});
-            await loadTunnelKeys(result.message || "SSH 公钥授权已同步");
-          } catch (error) { $("#tunnel-key-feedback").textContent = error.message; }
-          finally { button.disabled = false; }
-        };
+          <p class="hint">添加和撤销会同步维护 WSS 与主机 root SSH 公钥授权，对后续新连接立即生效，现有连接不会被中断。已有 SSH 公钥的限制选项保持不变。</p>`;
         $("#tunnel-account-open").onclick = openTunnelAccount;
         $("#tunnel-key-add").onclick = openTunnelKeyForm;
         content.querySelectorAll("[data-tunnel-revoke]").forEach(button => button.onclick = async () => {

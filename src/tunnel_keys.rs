@@ -43,7 +43,6 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/tunnel/keys", get(list).post(grant).delete(revoke))
         .route("/api/tunnel/keys/account", post(account_keys))
-        .route("/api/tunnel/keys/sync-ssh", post(sync_ssh))
 }
 fn key_info(key: &PublicKey) -> Result<KeyInfo, AppError> {
     Ok(KeyInfo {
@@ -180,6 +179,7 @@ fn write_authorizations(
     home: &Path,
     keys: &[PublicKey],
     revoked: Option<&str>,
+    added: Option<&PublicKey>,
 ) -> Result<(), AppError> {
     use fs2::FileExt;
     let ssh_dir = home.join(".ssh");
@@ -210,7 +210,11 @@ fn write_authorizations(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let ssh_text = merged_ssh_keys(previous.as_deref().unwrap_or(""), keys, revoked)?;
+    let ssh_text = merged_ssh_keys(
+        previous.as_deref().unwrap_or(""),
+        added.map(std::slice::from_ref).unwrap_or(&[]),
+        revoked,
+    )?;
     let mut tunnel_text = String::new();
     for key in keys {
         tunnel_text.push_str(&key.to_openssh().map_err(|e| AppError::bad(e.to_string()))?);
@@ -285,8 +289,8 @@ fn add_key_at(dir: &Path, home: &Path, body: Grant) -> Result<KeyInfo, AppError>
     let mut keys = read_keys(dir)?;
     keys.retain(|existing| existing.fingerprint(HashAlg::Sha256) != fingerprint);
     let info = key_info(&key)?;
-    keys.push(key);
-    write_authorizations(dir, home, &keys, None)?;
+    keys.push(key.clone());
+    write_authorizations(dir, home, &keys, None, Some(&key))?;
     Ok(info)
 }
 fn remove_key_at(dir: &Path, home: &Path, fingerprint: &str) -> Result<(), AppError> {
@@ -298,7 +302,7 @@ fn remove_key_at(dir: &Path, home: &Path, fingerprint: &str) -> Result<(), AppEr
         .map_err(|_| AppError::internal("公钥文件锁错误"))?;
     let mut keys = read_keys(dir)?;
     keys.retain(|key| key.fingerprint(HashAlg::Sha256).to_string() != fingerprint);
-    write_authorizations(dir, home, &keys, Some(fingerprint))
+    write_authorizations(dir, home, &keys, Some(fingerprint), None)
 }
 async fn list(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
     let _guard = KEYS_LOCK
@@ -315,22 +319,6 @@ async fn list(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
         json!({"keys":keys,"path":state.paths.config_dir.join(FILE),"sshPath":crate::service::root_home_dir().join(".ssh/authorized_keys"),"enabled":enabled}),
     ))
 }
-async fn sync_ssh(State(state): State<AppState>) -> Result<Json<Value>, AppError> {
-    let _guard = KEYS_LOCK
-        .lock()
-        .map_err(|_| AppError::internal("公钥文件锁错误"))?;
-    let keys = read_keys(&state.paths.config_dir)?;
-    write_authorizations(
-        &state.paths.config_dir,
-        &crate::service::root_home_dir(),
-        &keys,
-        None,
-    )?;
-    Ok(Json(
-        json!({"message":format!("已将 {} 个 WSS 公钥同步到主机 root SSH 授权", keys.len())}),
-    ))
-}
-
 async fn grant(
     State(state): State<AppState>,
     Json(body): Json<Grant>,
@@ -578,13 +566,13 @@ mod tests {
     }
 
     #[test]
-    fn existing_wss_keys_can_be_synchronized_to_ssh_without_duplicates() {
+    fn granting_same_key_updates_both_files_without_duplicates() {
         let dir = Directory::new();
         let home = dir.0.join("home");
         let key: PublicKey = public().parse().unwrap();
         let keys = vec![key];
-        write_authorizations(&dir.0, &home, &keys, None).unwrap();
-        write_authorizations(&dir.0, &home, &keys, None).unwrap();
+        write_authorizations(&dir.0, &home, &keys, None, Some(&keys[0])).unwrap();
+        write_authorizations(&dir.0, &home, &keys, None, Some(&keys[0])).unwrap();
         let ssh = home.join(".ssh/authorized_keys");
         assert_eq!(
             fs::read_to_string(&ssh).unwrap(),
@@ -610,6 +598,29 @@ mod tests {
     }
 
     #[test]
+    fn mutations_only_change_the_corresponding_ssh_key() {
+        let dir = Directory::new();
+        let old = public();
+        fs::write(dir.0.join(FILE), format!("{old}\n")).unwrap();
+        let new = public();
+        let info = add_key(
+            &dir.0,
+            Grant {
+                public_key: new.clone(),
+                name: "new".into(),
+            },
+        )
+        .unwrap();
+        let ssh = dir.0.join("test-home/.ssh/authorized_keys");
+        let text = fs::read_to_string(&ssh).unwrap();
+        assert!(!text.contains(old.split_whitespace().nth(1).unwrap()));
+        assert!(text.contains(new.split_whitespace().nth(1).unwrap()));
+        remove_key(&dir.0, &info.fingerprint).unwrap();
+        assert!(fs::read_to_string(ssh).unwrap().is_empty());
+        assert_eq!(read_keys(&dir.0).unwrap().len(), 1);
+    }
+
+    #[test]
     fn tunnel_commit_failure_rolls_back_ssh_contents() {
         let dir = Directory::new();
         let home = dir.0.join("home");
@@ -620,7 +631,7 @@ mod tests {
         // A directory at the target forces the second rename to fail after SSH commits.
         fs::create_dir(dir.0.join(FILE)).unwrap();
         let keys = vec![public().parse().unwrap()];
-        assert!(write_authorizations(&dir.0, &home, &keys, None).is_err());
+        assert!(write_authorizations(&dir.0, &home, &keys, None, Some(&keys[0])).is_err());
         assert_eq!(fs::read_to_string(&ssh).unwrap(), original);
         assert!(dir.0.join(FILE).is_dir());
         for parent in [&dir.0, ssh.parent().unwrap()] {
@@ -698,7 +709,6 @@ mod tests {
         for path in [
             "/api/tunnel/keys",
             "/api/tunnel/keys/account",
-            "/api/tunnel/keys/sync-ssh",
             "/update/api/tunnel/keys",
         ] {
             for method in [
