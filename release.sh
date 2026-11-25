@@ -120,8 +120,8 @@ if git diff --cached --quiet; then
   exit 1
 fi
 
-git commit -m "release: ${tag}"
-git tag -a "$tag" -m "release ${tag}"
+git commit -m "发布 ${tag}"
+git tag -a "$tag" -m "发布 ${tag}"
 git push origin HEAD
 git push origin "$tag"
 
