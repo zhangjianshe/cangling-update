@@ -5539,13 +5539,13 @@ mod tests {
         assert!(html.contains("setCanglingJarProgressPhase(\"error\")"));
         assert!(html.contains("const wrap = $(\"#cangling-jar-prog\")"));
         assert!(html.contains("class=\"certificate-sections\""));
-        assert!(html.contains("id=\"root-certificate-title\">根证书"));
+        assert!(html.contains("id=\"root-certificate-title\">证书颁发机构"));
         assert!(html.contains("id=\"loadbalance-certificate-title\">负载均衡证书"));
         assert!(html.contains("font-size: 18px; font-weight: 650"));
         assert!(html.contains("class=\"root-certificate-card\""));
         assert!(html.contains("aspect-ratio: 800 / 487; margin: 4px 0 18px"));
         assert!(html.contains("cert.png?v="));
-        assert!(html.contains("certificateSubjectValue(s.root_subject, \"OU\")"));
+        assert!(html.contains("certificateSubjectValue(issuerSubject, \"OU\")"));
         assert!(html.contains("white-space: nowrap"));
         assert!(!html.contains("<strong>SHA-256 指纹</strong>"));
         assert!(html.contains("class=\"root-certificate-qr\""));
@@ -5555,7 +5555,7 @@ mod tests {
         assert!(html.contains("/api/certificates/loadbalance/access-qr.svg"));
         assert!(html.contains("`https://${s.loadbalance_ip || s.suggested_ip}:7443/update/`"));
         assert!(html.contains("id=\"ca-download\" type=\"button\">下载根证书"));
-        assert!(html.contains("id=\"ca-reset\" type=\"button\">重置根证书"));
+        assert!(html.contains("id=\"ca-reset\" type=\"button\">重置签发 CA"));
         assert!(html.contains("/api/certificates/root/reset"));
         assert!(html.contains("confirmText: \"确认重置\""));
         assert!(!html.contains("class=\"root-certificate-help-link\""));
