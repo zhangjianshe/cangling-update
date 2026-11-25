@@ -403,6 +403,15 @@ data:
         }
         location ^~ /tilecache/ { proxy_pass http://cangling_tile/; }
         location /np4-images/ { root /var/www; }
+        # Model SSE: allow reasoning gaps; CIS sends keep-alive comments every 15s.
+        # No trailing slash: preserve /models without an automatic redirect.
+        location ^~ /ib/api/v1/keeper/models {
+          proxy_pass http://cis_server/api/v1/keeper/models;
+          proxy_request_buffering off;
+          proxy_buffering off;
+          proxy_read_timeout 300s;
+          proxy_send_timeout 300s;
+        }
         location ^~ /ib/ { proxy_pass http://cis_server/; proxy_request_buffering off; proxy_buffering off; }
         location / {
           proxy_pass http://cis_base/;
